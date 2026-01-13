@@ -1,3 +1,8 @@
+# =============================================================================
+#  This is DevCtrl, A version control tool made for the development of silis
+# =============================================================================
+
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox, simpledialog
 import subprocess
