@@ -17,6 +17,7 @@ silis will be available under the **MIT License** and silis is meant to be used,
 ## [Click Here](https://github.com/JeromeAntonyRobin/silis/tree/main/experimental/promoted/by_JeromeAntonyRobin) to use the latest stable version
 
 **Current status**: Early development, experimental features only 
+
 **Latest stable**: Nothing stable yet, check `experimental/by_JeromeAntonyRobin` for latest work
 
 ## What works right now
