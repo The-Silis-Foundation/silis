@@ -16,7 +16,8 @@ sudo apt install python3
 sudo apt install iverilog gtkwave yosys graphviz
 
 # Optional (for better schematics)
-npm install -g netlistsvg
+sudo apt install nodejs npm
+sudo npm install -g netlistsvg
 sudo apt install librsvg2-bin
 
 # Python dependencies
