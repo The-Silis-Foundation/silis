@@ -159,6 +159,11 @@ your_module_project/
 - Toggle mode with `` ` `` + **S**
 - Make sure you're in [SHELL] mode for commands
 
+
+---
+
+### Managed by **DevCtrl**, Version Control Environment for silis development
+
 ---
 
 **Version**: POC V17 (Stable)  
@@ -166,3 +171,4 @@ your_module_project/
 **Status**: Experimental - breaking changes expected in future POCs  
 
 For the latest unstable features, [check experimentals](https://github.com/JeromeAntonyRobin/silis/tree/main/experimental)
+
