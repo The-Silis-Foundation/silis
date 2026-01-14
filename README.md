@@ -4,7 +4,7 @@
     <a href="https://github.com/JeromeAntonyRobin/silis"><img src="https://img.shields.io/badge/Status-Experimental-orange.svg" alt="Status: Experimental"/></a>
 </p>
 
-it is an **integrated development environment (IDE)** for RTL to GDSII flow based and built upon on several open-source softwares including **Icarus Verilog, yosys, OpenRoad, Netgen, klayout viewer** and other custom scripts that make the silicon design flow **easier for beginners and faster for experts** due to its **keyboard first, UX first approach**.
+silis is an **integrated development environment (IDE)** for RTL to GDSII flow based and built upon on several open-source softwares including **Icarus Verilog, yosys, OpenRoad, Netgen, klayout viewer** and other custom scripts that make the silicon design flow **easier for beginners and faster for experts** due to its **keyboard first, UX first approach**.
 
 silis aims to perform all ASIC design steps from ASIC design to GDSII generation
 
