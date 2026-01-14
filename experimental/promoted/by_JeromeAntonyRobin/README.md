@@ -10,7 +10,7 @@ sudo apt-get update
 
 # Python installation
 sudo apt install python3
-sudo apt install python3-tk
+
 
 # Core EDA tools
 sudo apt install iverilog gtkwave yosys graphviz
@@ -20,6 +20,8 @@ npm install -g netlistsvg
 sudo apt install librsvg2-bin
 
 # Python dependencies
+sudo apt-get install python3-pil.imagetk
+sudo apt install python3-tk
 pip install pillow
 ````
 # Running POC V17
