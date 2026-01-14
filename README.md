@@ -1,4 +1,4 @@
-<h1 align="center"><b>silis</b> - silicon scaffold</h1>
+<h1 align="center"><b>SILIS - Silicon Scaffold</b></h1>
 <p align="center">
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"/></a>
     <a href="https://github.com/JeromeAntonyRobin/silis"><img src="https://img.shields.io/badge/Status-Experimental-orange.svg" alt="Status: Experimental"/></a>
