@@ -73,11 +73,15 @@ Run the script by
 ---
 
 ### 5. Synthesize (F4) 
+- Add .lib file path to your settings
 - **F4** runs full synthesis flow using Yosys
   
 - <img width="966" height="607" alt="settings" src="https://github.com/user-attachments/assets/cbc90f4d-7129-495f-a407-2f7b225439ef" />
 
-- Opens Constraint Wizard for timing/area targets
+- Opens Constraint Wizard for timing/area targets (optional)
+  
+- <img width="962" height="603" alt="cwiz" src="https://github.com/user-attachments/assets/18d6eaab-e184-491c-b62d-0292914ad27b" />
+
 - Requires PDK .lib file (set in Settings ⚙)
 - Generates netlist in `netlist/` folder
 
