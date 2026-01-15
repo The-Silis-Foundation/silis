@@ -23,6 +23,7 @@ sudo apt install librsvg2-bin
 # Python dependencies
 sudo apt-get install python3-pil.imagetk
 sudo apt install python3-tk
+sudo apt install pip
 pip install pillow
 ````
 # Running POC V17
