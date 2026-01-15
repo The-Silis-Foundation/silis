@@ -36,4 +36,4 @@ silis will be available under the **MIT License** and silis is meant to be used,
 We're not ready for external contributions yet. Feel free to fork and experiment.
 
 ## License
-MIT License - use it. fork it. modify it. - Its meant to be used
+MIT License - use it. fork it. modify it. - Its meant to be used.
