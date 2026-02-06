@@ -1,0 +1,1900 @@
+/----------------------------------------------------------------------------\
+|                                                                            |
+|  yosys -- Yosys Open SYnthesis Suite                                       |
+|                                                                            |
+|  Copyright (C) 2012 - 2020  Claire Xenia Wolf <claire@yosyshq.com>         |
+|                                                                            |
+|  Permission to use, copy, modify, and/or distribute this software for any  |
+|  purpose with or without fee is hereby granted, provided that the above    |
+|  copyright notice and this permission notice appear in all copies.         |
+|                                                                            |
+|  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES  |
+|  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF          |
+|  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR   |
+|  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES    |
+|  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN     |
+|  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF   |
+|  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.            |
+|                                                                            |
+\----------------------------------------------------------------------------/
+Yosys 0.33 (git sha1 2584903a060)
+-- Executing script file `synth.ys' --
+1. Executing Liberty frontend: /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+Imported 428 cell types from liberty file.
+2. Executing Verilog-2005 frontend: /home/ubuju/testprojects/riscv_core_project/source/riscv_core.v
+Parsing Verilog input from `/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v' to AST representation.
+Generating RTLIL representation for module `\riscv_core'.
+Warning: Replacing memory \registers with list of registers. See /home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:445
+Successfully finished Verilog frontend.
+3. Executing Verilog-2005 frontend: /home/ubuju/testprojects/riscv_core_project/source/riscv_soc.v
+Parsing Verilog input from `/home/ubuju/testprojects/riscv_core_project/source/riscv_soc.v' to AST representation.
+Generating RTLIL representation for module `\riscv_soc'.
+Generating RTLIL representation for module `\uart_controller'.
+Generating RTLIL representation for module `\spi_master'.
+Successfully finished Verilog frontend.
+4. Executing SYNTH pass.
+4.1. Executing HIERARCHY pass (managing design hierarchy).
+4.1.1. Analyzing design hierarchy..
+Top module:  \riscv_core
+4.1.2. Analyzing design hierarchy..
+Top module:  \riscv_core
+Removing unused module `\spi_master'.
+Removing unused module `\uart_controller'.
+Removing unused module `\riscv_soc'.
+Removed 3 unused modules.
+4.2. Executing PROC pass (convert processes to netlists).
+4.2.1. Executing PROC_CLEAN pass (remove empty switches from decision trees).
+Cleaned up 0 empty switches.
+4.2.2. Executing PROC_RMDEAD pass (remove dead branches from decision trees).
+Marked 8 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106 in module riscv_core.
+Marked 4 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101 in module riscv_core.
+Marked 1 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100 in module riscv_core.
+Removed 2 dead cases from process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77 in module riscv_core.
+Marked 5 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77 in module riscv_core.
+Marked 2 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73 in module riscv_core.
+Marked 6 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54 in module riscv_core.
+Marked 2 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46 in module riscv_core.
+Marked 4 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32 in module riscv_core.
+Removed 1 dead cases from process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10 in module riscv_core.
+Marked 5 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10 in module riscv_core.
+Marked 1 switch rules as full_case in process $proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9 in module riscv_core.
+Removed a total of 3 dead cases.
+4.2.3. Executing PROC_PRUNE pass (remove redundant assignments in processes).
+Removed 17 redundant assignments.
+Promoted 59 assignments to connections.
+4.2.4. Executing PROC_INIT pass (extract init attributes).
+4.2.5. Executing PROC_ARST pass (detect async resets in processes).
+Found async reset \rst in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+Found async reset \rst in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+Found async reset \rst in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+Found async reset \rst in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+Found async reset \rst in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+4.2.6. Executing PROC_ROM pass (convert switches to ROMs).
+Converted 0 switches.
+<suppressed ~34 debug messages>
+4.2.7. Executing PROC_MUX pass (convert decision trees to multiplexers).
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:478$150'.
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+1/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_ADDR[4:0]$139
+2/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_DATA[31:0]$140
+3/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_DATA[31:0]$148
+4/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_ADDR[4:0]$147
+5/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_DATA[31:0]$146
+6/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_ADDR[4:0]$145
+7/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_DATA[31:0]$144
+8/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_ADDR[4:0]$143
+9/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_DATA[31:0]$142
+10/64: $3$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_ADDR[4:0]$141
+11/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_DATA[31:0]$138
+12/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_ADDR[4:0]$137
+13/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_DATA[31:0]$136
+14/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_ADDR[4:0]$135
+15/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_DATA[31:0]$134
+16/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_ADDR[4:0]$133
+17/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_DATA[31:0]$132
+18/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_ADDR[4:0]$131
+19/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_DATA[31:0]$130
+20/64: $2$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_ADDR[4:0]$129
+21/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_DATA[31:0]$126
+22/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_ADDR[4:0]$125
+23/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_DATA[31:0]$124
+24/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_ADDR[4:0]$123
+25/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_DATA[31:0]$122
+26/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_ADDR[4:0]$121
+27/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_DATA[31:0]$120
+28/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_ADDR[4:0]$119
+29/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_DATA[31:0]$118
+30/64: $1$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_ADDR[4:0]$117
+31/64: $0\reg_write[0:0]
+32/64: $1\i[31:0]
+33/64: $0\registers[31][31:0]
+34/64: $0\registers[30][31:0]
+35/64: $0\registers[29][31:0]
+36/64: $0\registers[28][31:0]
+37/64: $0\registers[27][31:0]
+38/64: $0\registers[26][31:0]
+39/64: $0\registers[25][31:0]
+40/64: $0\registers[24][31:0]
+41/64: $0\registers[23][31:0]
+42/64: $0\registers[22][31:0]
+43/64: $0\registers[21][31:0]
+44/64: $0\registers[20][31:0]
+45/64: $0\registers[19][31:0]
+46/64: $0\registers[18][31:0]
+47/64: $0\registers[17][31:0]
+48/64: $0\registers[16][31:0]
+49/64: $0\registers[15][31:0]
+50/64: $0\registers[14][31:0]
+51/64: $0\registers[13][31:0]
+52/64: $0\registers[12][31:0]
+53/64: $0\registers[11][31:0]
+54/64: $0\registers[10][31:0]
+55/64: $0\registers[9][31:0]
+56/64: $0\registers[8][31:0]
+57/64: $0\registers[7][31:0]
+58/64: $0\registers[6][31:0]
+59/64: $0\registers[5][31:0]
+60/64: $0\registers[4][31:0]
+61/64: $0\registers[3][31:0]
+62/64: $0\registers[2][31:0]
+63/64: $0\registers[1][31:0]
+64/64: $0\registers[0][31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+1/9: $0\dmem_we[3:0]
+2/9: $0\dmem_valid[0:0]
+3/9: $0\mem_wb_valid[0:0]
+4/9: $0\mem_wb_opcode[6:0]
+5/9: $0\mem_wb_rd[4:0]
+6/9: $0\mem_wb_mem_data[31:0]
+7/9: $0\mem_wb_alu_result[31:0]
+8/9: $0\dmem_wdata[31:0]
+9/9: $0\dmem_addr[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+1/8: $0\ex_mem_branch_target[31:0]
+2/8: $0\ex_mem_branch_taken[0:0]
+3/8: $0\ex_mem_valid[0:0]
+4/8: $0\ex_mem_funct3[2:0]
+5/8: $0\ex_mem_opcode[6:0]
+6/8: $0\ex_mem_rd[4:0]
+7/8: $0\ex_mem_rs2_data[31:0]
+8/8: $0\ex_mem_alu_result[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+1/25: $4$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_DATA[31:0]$97
+2/25: $4$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_DATA[31:0]$94
+3/25: $3$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_DATA[31:0]$93
+4/25: $3$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_ADDR[4:0]$92
+5/25: $3$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_DATA[31:0]$91
+6/25: $3$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_ADDR[4:0]$90
+7/25: $0\id_ex_valid[0:0]
+8/25: $2$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_DATA[31:0]$89
+9/25: $2$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_ADDR[4:0]$88
+10/25: $2$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_DATA[31:0]$87
+11/25: $2$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_ADDR[4:0]$86
+12/25: $1$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_DATA[31:0]$85
+13/25: $1$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_ADDR[4:0]$84
+14/25: $1$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_DATA[31:0]$83
+15/25: $1$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_ADDR[4:0]$82
+16/25: $0\id_ex_funct7[6:0]
+17/25: $0\id_ex_funct3[2:0]
+18/25: $0\id_ex_opcode[6:0]
+19/25: $0\id_ex_rs2[4:0]
+20/25: $0\id_ex_rs1[4:0]
+21/25: $0\id_ex_rd[4:0]
+22/25: $0\id_ex_imm[31:0]
+23/25: $0\id_ex_rs2_data[31:0]
+24/25: $0\id_ex_rs1_data[31:0]
+25/25: $0\id_ex_pc[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:340$75'.
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+1/6: $0\if_id_valid[0:0]
+2/6: $0\if_id_instruction[31:0]
+3/6: $0\if_id_pc[31:0]
+4/6: $0\pc[31:0]
+5/6: $0\imem_valid[0:0]
+6/6: $0\imem_addr[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+1/6: $1\rs2_data_fwd[31:0]
+2/6: $1\rs1_data_fwd[31:0]
+3/6: $2\forward_b[1:0]
+4/6: $1\forward_b[1:0]
+5/6: $2\forward_a[1:0]
+6/6: $1\forward_a[1:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46'.
+1/2: $2\stall[0:0]
+2/2: $1\stall[0:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+1/7: $3\branch_target[31:0]
+2/7: $4\branch_taken[0:0]
+3/7: $2\branch_target[31:0]
+4/7: $3\branch_taken[0:0]
+5/7: $2\branch_taken[0:0]
+6/7: $1\branch_taken[0:0]
+7/7: $1\branch_target[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+1/5: $1\alu_result[31:0]
+2/5: $3\alu_op[3:0]
+3/5: $2\alu_op[3:0]
+4/5: $1\alu_op[3:0]
+5/5: $1\alu_b[31:0]
+Creating decoders for process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+1/1: $1\imm[31:0]
+4.2.8. Executing PROC_DLATCH pass (convert process syncs to latches).
+No latch inferred for signal `\riscv_core.\pc_out' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:478$150'.
+No latch inferred for signal `\riscv_core.\rd_addr' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:478$150'.
+No latch inferred for signal `\riscv_core.\rd_data' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:478$150'.
+No latch inferred for signal `\riscv_core.\pc_next' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:340$75'.
+No latch inferred for signal `\riscv_core.\forward_a' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\forward_b' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\rs1_data_fwd' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\rs2_data_fwd' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\fwd_ex_mem' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\fwd_mem_wb' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+No latch inferred for signal `\riscv_core.\stall' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46'.
+No latch inferred for signal `\riscv_core.\flush' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46'.
+No latch inferred for signal `\riscv_core.\branch_taken' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\branch_target' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\beq' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\bne' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\blt' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\bge' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\bltu' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\bgeu' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\rs1_signed' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\rs2_signed' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+No latch inferred for signal `\riscv_core.\alu_a' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_b' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_result' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_op' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_add' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_sub' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_sll' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_slt' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_sltu' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_xor' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_srl' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_sra' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_or' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_and' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_a_signed' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\alu_b_signed' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+No latch inferred for signal `\riscv_core.\imm' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+No latch inferred for signal `\riscv_core.\imm_i' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+No latch inferred for signal `\riscv_core.\imm_s' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+No latch inferred for signal `\riscv_core.\imm_b' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+No latch inferred for signal `\riscv_core.\imm_u' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+No latch inferred for signal `\riscv_core.\imm_j' from process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+4.2.9. Executing PROC_DFF pass (convert process syncs to FFs).
+Creating register for signal `\riscv_core.\reg_write' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16155' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\i' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16156' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[0]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16157' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[1]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16158' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[2]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16159' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[3]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16160' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[4]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16161' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[5]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16162' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[6]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16163' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[7]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16164' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[8]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16165' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[9]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16166' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[10]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16167' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[11]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16168' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[12]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16169' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[13]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16170' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[14]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16171' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[15]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16172' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[16]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16173' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[17]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16174' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[18]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16175' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[19]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16176' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[20]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16177' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[21]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16178' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[22]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16179' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[23]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16180' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[24]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16181' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[25]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16182' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[26]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16183' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[27]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16184' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[28]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16185' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[29]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16186' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[30]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16187' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\registers[31]' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16188' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16189' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:453$4_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16190' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16191' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:457$5_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16192' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16193' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:461$6_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16194' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16195' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:465$7_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16196' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16197' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_wr$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$8_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+created $adff cell `$procdff$16198' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\dmem_addr' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $dff cell `$procdff$16201' with positive edge clock.
+Creating register for signal `\riscv_core.\dmem_wdata' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $dff cell `$procdff$16204' with positive edge clock.
+Creating register for signal `\riscv_core.\dmem_we' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16205' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\dmem_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16206' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\mem_wb_alu_result' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16207' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\mem_wb_mem_data' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16208' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\mem_wb_rd' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16209' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\mem_wb_opcode' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16210' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\mem_wb_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+created $adff cell `$procdff$16211' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_alu_result' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16212' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_rs2_data' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16213' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_rd' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16214' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_opcode' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16215' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_funct3' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16216' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16217' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_branch_taken' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16218' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\ex_mem_branch_target' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+created $adff cell `$procdff$16219' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_pc' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16220' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_rs1_data' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16221' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_rs2_data' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16222' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_imm' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16223' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_rd' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16224' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_rs1' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16225' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_rs2' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16226' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_opcode' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16227' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_funct3' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16228' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_funct7' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16229' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\id_ex_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16230' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16231' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$2_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16232' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_ADDR' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16233' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.$mem2reg_rd$\registers$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$3_DATA' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+created $adff cell `$procdff$16234' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\imem_addr' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $dff cell `$procdff$16237' with positive edge clock.
+Creating register for signal `\riscv_core.\imem_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $adff cell `$procdff$16238' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\pc' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $adff cell `$procdff$16239' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\if_id_pc' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $adff cell `$procdff$16240' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\if_id_instruction' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $adff cell `$procdff$16241' with positive edge clock and positive level reset.
+Creating register for signal `\riscv_core.\if_id_valid' using process `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+created $adff cell `$procdff$16242' with positive edge clock and positive level reset.
+4.2.10. Executing PROC_MEMWR pass (convert process memory writes to cells).
+4.2.11. Executing PROC_CLEAN pass (remove empty switches from decision trees).
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:478$150'.
+Found and cleaned up 7 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:442$106'.
+Found and cleaned up 3 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:403$101'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:380$100'.
+Found and cleaned up 4 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:345$77'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:340$75'.
+Found and cleaned up 2 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:316$73'.
+Found and cleaned up 6 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:273$54'.
+Found and cleaned up 2 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:256$46'.
+Found and cleaned up 4 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:219$32'.
+Found and cleaned up 5 empty switches in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:146$10'.
+Found and cleaned up 1 empty switch in `\riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+Removing empty process `riscv_core.$proc$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:97$9'.
+Cleaned up 34 empty switches.
+4.2.12. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~27 debug messages>
+4.3. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.4. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 95 unused cells and 446 unused wires.
+<suppressed ~102 debug messages>
+4.5. Executing CHECK pass (checking for obvious problems).
+Checking module riscv_core...
+Found and reported 0 problems.
+4.6. Executing OPT pass (performing simple optimizations).
+4.6.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.6.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~1299 debug messages>
+Removed a total of 433 cells.
+4.6.3. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+dead port 32/33 on $pmux $procmux$15819.
+dead port 1/2 on $mux $procmux$15853.
+dead port 1/2 on $mux $procmux$15856.
+dead port 32/33 on $pmux $procmux$15858.
+dead port 1/2 on $mux $procmux$15892.
+dead port 1/2 on $mux $procmux$15895.
+dead port 1/2 on $mux $procmux$16035.
+dead port 2/2 on $mux $procmux$16053.
+dead port 1/2 on $mux $procmux$16062.
+dead port 1/2 on $mux $procmux$16065.
+dead port 1/2 on $mux $procmux$16071.
+dead port 1/2 on $mux $procmux$16074.
+dead port 1/2 on $mux $procmux$16080.
+dead port 1/2 on $mux $procmux$16086.
+dead port 2/2 on $mux $procmux$16097.
+dead port 2/2 on $mux $procmux$16122.
+dead port 2/2 on $mux $procmux$16134.
+Removed 17 multiplexer ports.
+<suppressed ~61 debug messages>
+4.6.4. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+New ctrl vector for $pmux cell $procmux$12666: $auto$opt_reduce.cc:134:opt_pmux$16244
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16243: { $procmux$12667_CMP $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y }
+Optimizing cells in module \riscv_core.
+Performed a total of 2 changes.
+4.6.5. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~195 debug messages>
+Removed a total of 65 cells.
+4.6.6. Executing OPT_DFF pass (perform DFF optimizations).
+4.6.7. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 7 unused cells and 455 unused wires.
+<suppressed ~9 debug messages>
+4.6.8. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.6.9. Rerunning OPT passes. (Maybe there is more to do..)
+4.6.10. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~60 debug messages>
+4.6.11. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+New ctrl vector for $pmux cell $procmux$12678: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16246 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12699: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16248 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12725: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16250 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12756: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16252 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12792: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16254 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12833: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16256 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12879: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16258 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12930: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16260 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$12986: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16262 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13047: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16264 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13113: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16266 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13184: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16268 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13260: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16270 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13341: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16272 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13427: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16274 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13518: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16276 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13614: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16278 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13715: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16280 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13821: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16282 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$13932: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16284 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14048: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16286 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14169: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16288 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14295: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16290 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14426: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16292 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14562: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16294 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14703: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16296 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$14849: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16298 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$15000: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16300 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$15156: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16302 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$15317: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16304 $procmux$12667_CTRL }
+New ctrl vector for $pmux cell $procmux$15483: { $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55_Y $auto$opt_reduce.cc:134:opt_pmux$16306 $procmux$12667_CTRL }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16245: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16247: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16249: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16251: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16253: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16255: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16257: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16259: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16261: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16263: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16265: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16267: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16269: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16271: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16273: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16275: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16277: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16279: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16281: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16283: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16285: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16287: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16289: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16291: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16293: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16295: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16297: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16299: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16301: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16303: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+New input vector for $reduce_or cell $auto$opt_reduce.cc:128:opt_pmux$16305: { $procmux$12668_CMP $procmux$12669_CMP $procmux$12671_CMP }
+Optimizing cells in module \riscv_core.
+Performed a total of 62 changes.
+4.6.12. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~90 debug messages>
+Removed a total of 30 cells.
+4.6.13. Executing OPT_DFF pass (perform DFF optimizations).
+4.6.14. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 1 unused cells and 31 unused wires.
+<suppressed ~2 debug messages>
+4.6.15. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.6.16. Rerunning OPT passes. (Maybe there is more to do..)
+4.6.17. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~60 debug messages>
+4.6.18. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.6.19. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.6.20. Executing OPT_DFF pass (perform DFF optimizations).
+4.6.21. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.6.22. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.6.23. Finished OPT passes. (There is nothing left to do.)
+4.7. Executing FSM pass (extract and optimize FSM).
+4.7.1. Executing FSM_DETECT pass (finding FSMs in design).
+Not marking riscv_core.dmem_we as FSM state register:
+Register is connected to module port.
+Users of register don't seem to benefit from recoding.
+4.7.2. Executing FSM_EXTRACT pass (extracting FSM from design).
+4.7.3. Executing FSM_OPT pass (simple optimizations of FSMs).
+4.7.4. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.7.5. Executing FSM_OPT pass (simple optimizations of FSMs).
+4.7.6. Executing FSM_RECODE pass (re-assigning FSM state encoding).
+4.7.7. Executing FSM_INFO pass (dumping all available information on FSM cells).
+4.7.8. Executing FSM_MAP pass (mapping FSMs to basic logic).
+4.8. Executing OPT pass (performing simple optimizations).
+4.8.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.8.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.8.3. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~60 debug messages>
+4.8.4. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.8.5. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.8.6. Executing OPT_DFF pass (perform DFF optimizations).
+Adding EN signal on $procdff$16242 ($adff) from module riscv_core (D = $procmux$16000_Y, Q = \if_id_valid).
+Adding EN signal on $procdff$16241 ($adff) from module riscv_core (D = \imem_data, Q = \if_id_instruction).
+Adding EN signal on $procdff$16240 ($adff) from module riscv_core (D = \pc, Q = \if_id_pc).
+Adding EN signal on $procdff$16239 ($adff) from module riscv_core (D = $procmux$16015_Y, Q = \pc).
+Adding EN signal on $procdff$16238 ($adff) from module riscv_core (D = 1'1, Q = \imem_valid).
+Adding EN signal on $procdff$16237 ($dff) from module riscv_core (D = \pc, Q = \imem_addr).
+Adding EN signal on $procdff$16229 ($adff) from module riscv_core (D = \if_id_instruction [31:25], Q = \id_ex_funct7).
+Adding EN signal on $procdff$16228 ($adff) from module riscv_core (D = \if_id_instruction [14:12], Q = \id_ex_funct3).
+Adding EN signal on $procdff$16227 ($adff) from module riscv_core (D = \if_id_instruction [6:0], Q = \id_ex_opcode).
+Adding EN signal on $procdff$16226 ($adff) from module riscv_core (D = \if_id_instruction [24:20], Q = \id_ex_rs2).
+Adding EN signal on $procdff$16224 ($adff) from module riscv_core (D = \if_id_instruction [11:7], Q = \id_ex_rd).
+Adding EN signal on $procdff$16223 ($adff) from module riscv_core (D = \imm, Q = \id_ex_imm).
+Adding EN signal on $procdff$16222 ($adff) from module riscv_core (D = $ternary$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:366$99_Y, Q = \id_ex_rs2_data).
+Adding EN signal on $procdff$16221 ($adff) from module riscv_core (D = $ternary$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:365$96_Y, Q = \id_ex_rs1_data).
+Adding EN signal on $procdff$16220 ($adff) from module riscv_core (D = \if_id_pc, Q = \id_ex_pc).
+Adding EN signal on $procdff$16204 ($dff) from module riscv_core (D = \ex_mem_rs2_data, Q = \dmem_wdata).
+Adding EN signal on $procdff$16201 ($dff) from module riscv_core (D = $0\dmem_addr[31:0], Q = \dmem_addr).
+Adding EN signal on $procdff$16188 ($adff) from module riscv_core (D = $procmux$12678_Y, Q = \registers[31]).
+Adding EN signal on $procdff$16187 ($adff) from module riscv_core (D = $procmux$12699_Y, Q = \registers[30]).
+Adding EN signal on $procdff$16186 ($adff) from module riscv_core (D = $procmux$12725_Y, Q = \registers[29]).
+Adding EN signal on $procdff$16185 ($adff) from module riscv_core (D = $procmux$12756_Y, Q = \registers[28]).
+Adding EN signal on $procdff$16184 ($adff) from module riscv_core (D = $procmux$12792_Y, Q = \registers[27]).
+Adding EN signal on $procdff$16183 ($adff) from module riscv_core (D = $procmux$12833_Y, Q = \registers[26]).
+Adding EN signal on $procdff$16182 ($adff) from module riscv_core (D = $procmux$12879_Y, Q = \registers[25]).
+Adding EN signal on $procdff$16181 ($adff) from module riscv_core (D = $procmux$12930_Y, Q = \registers[24]).
+Adding EN signal on $procdff$16180 ($adff) from module riscv_core (D = $procmux$12986_Y, Q = \registers[23]).
+Adding EN signal on $procdff$16179 ($adff) from module riscv_core (D = $procmux$13047_Y, Q = \registers[22]).
+Adding EN signal on $procdff$16178 ($adff) from module riscv_core (D = $procmux$13113_Y, Q = \registers[21]).
+Adding EN signal on $procdff$16177 ($adff) from module riscv_core (D = $procmux$13184_Y, Q = \registers[20]).
+Adding EN signal on $procdff$16176 ($adff) from module riscv_core (D = $procmux$13260_Y, Q = \registers[19]).
+Adding EN signal on $procdff$16175 ($adff) from module riscv_core (D = $procmux$13341_Y, Q = \registers[18]).
+Adding EN signal on $procdff$16174 ($adff) from module riscv_core (D = $procmux$13427_Y, Q = \registers[17]).
+Adding EN signal on $procdff$16173 ($adff) from module riscv_core (D = $procmux$13518_Y, Q = \registers[16]).
+Adding EN signal on $procdff$16172 ($adff) from module riscv_core (D = $procmux$13614_Y, Q = \registers[15]).
+Adding EN signal on $procdff$16171 ($adff) from module riscv_core (D = $procmux$13715_Y, Q = \registers[14]).
+Adding EN signal on $procdff$16170 ($adff) from module riscv_core (D = $procmux$13821_Y, Q = \registers[13]).
+Adding EN signal on $procdff$16169 ($adff) from module riscv_core (D = $procmux$13932_Y, Q = \registers[12]).
+Adding EN signal on $procdff$16168 ($adff) from module riscv_core (D = $procmux$14048_Y, Q = \registers[11]).
+Adding EN signal on $procdff$16167 ($adff) from module riscv_core (D = $procmux$14169_Y, Q = \registers[10]).
+Adding EN signal on $procdff$16166 ($adff) from module riscv_core (D = $procmux$14295_Y, Q = \registers[9]).
+Adding EN signal on $procdff$16165 ($adff) from module riscv_core (D = $procmux$14426_Y, Q = \registers[8]).
+Adding EN signal on $procdff$16164 ($adff) from module riscv_core (D = $procmux$14562_Y, Q = \registers[7]).
+Adding EN signal on $procdff$16163 ($adff) from module riscv_core (D = $procmux$14703_Y, Q = \registers[6]).
+Adding EN signal on $procdff$16162 ($adff) from module riscv_core (D = $procmux$14849_Y, Q = \registers[5]).
+Adding EN signal on $procdff$16161 ($adff) from module riscv_core (D = $procmux$15000_Y, Q = \registers[4]).
+Adding EN signal on $procdff$16160 ($adff) from module riscv_core (D = $procmux$15156_Y, Q = \registers[3]).
+Adding EN signal on $procdff$16159 ($adff) from module riscv_core (D = $procmux$15317_Y, Q = \registers[2]).
+Adding EN signal on $procdff$16158 ($adff) from module riscv_core (D = $procmux$15483_Y, Q = \registers[1]).
+4.8.7. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 61 unused cells and 61 unused wires.
+<suppressed ~62 debug messages>
+4.8.8. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~32 debug messages>
+4.8.9. Rerunning OPT passes. (Maybe there is more to do..)
+4.8.10. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~49 debug messages>
+4.8.11. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.8.12. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~189 debug messages>
+Removed a total of 63 cells.
+4.8.13. Executing OPT_DFF pass (perform DFF optimizations).
+4.8.14. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 0 unused cells and 63 unused wires.
+<suppressed ~1 debug messages>
+4.8.15. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.8.16. Rerunning OPT passes. (Maybe there is more to do..)
+4.8.17. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~49 debug messages>
+4.8.18. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.8.19. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.8.20. Executing OPT_DFF pass (perform DFF optimizations).
+4.8.21. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.8.22. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.8.23. Finished OPT passes. (There is nothing left to do.)
+4.9. Executing WREDUCE pass (reducing word size of cells).
+Removed top 2 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:149$11 ($eq).
+Removed top 5 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:149$12 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:150$14 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:159$18 ($eq).
+Removed top 31 bits (of 32) from mux cell riscv_core.$ternary$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:188$24 ($mux).
+Removed top 31 bits (of 32) from mux cell riscv_core.$ternary$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:189$26 ($mux).
+Removed top 5 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:276$55 ($eq).
+Removed top 29 bits (of 32) from port B of cell riscv_core.$add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:341$76 ($add).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:420$102 ($eq).
+Removed top 5 bits (of 7) from port B of cell riscv_core.$eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:430$104 ($eq).
+Removed top 29 bits (of 32) from port B of cell riscv_core.$add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$149 ($add).
+Removed top 1 bits (of 7) from FF cell riscv_core.$auto$ff.cc:266:slice$16331 ($adffe).
+Removed top 5 bits (of 7) from port B of cell riscv_core.$procmux$16154_CMP1 ($eq).
+Removed top 2 bits (of 7) from port B of cell riscv_core.$procmux$16154_CMP0 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$procmux$16153_CMP0 ($eq).
+Removed top 2 bits (of 7) from port B of cell riscv_core.$procmux$16151_CMP1 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$procmux$16151_CMP0 ($eq).
+Removed top 1 bits (of 3) from port B of cell riscv_core.$procmux$16142_CMP0 ($eq).
+Removed top 1 bits (of 3) from port B of cell riscv_core.$procmux$16141_CMP0 ($eq).
+Removed top 3 bits (of 4) from mux cell riscv_core.$procmux$16132 ($mux).
+Removed top 3 bits (of 4) from mux cell riscv_core.$procmux$16120 ($mux).
+Removed top 3 bits (of 4) from port B of cell riscv_core.$procmux$16115_CMP0 ($eq).
+Removed top 2 bits (of 4) from port B of cell riscv_core.$procmux$16114_CMP0 ($eq).
+Removed top 2 bits (of 4) from port B of cell riscv_core.$procmux$16113_CMP0 ($eq).
+Removed top 1 bits (of 4) from port B of cell riscv_core.$procmux$16112_CMP0 ($eq).
+Removed top 1 bits (of 4) from port B of cell riscv_core.$procmux$16111_CMP0 ($eq).
+Removed top 1 bits (of 4) from port B of cell riscv_core.$procmux$16110_CMP0 ($eq).
+Removed top 1 bits (of 4) from port B of cell riscv_core.$procmux$16109_CMP0 ($eq).
+Removed top 2 bits (of 3) from port B of cell riscv_core.$procmux$16095_CMP0 ($eq).
+Removed top 1 bits (of 2) from mux cell riscv_core.$procmux$16032 ($mux).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$procmux$16026_CMP0 ($eq).
+Removed top 4 bits (of 5) from port B of cell riscv_core.$procmux$15889_CMP0 ($eq).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15888_CMP0 ($eq).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15887_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15886_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15885_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15884_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15883_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15882_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15881_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15880_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15879_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15878_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15877_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15876_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15875_CMP0 ($eq).
+Removed top 4 bits (of 5) from port B of cell riscv_core.$procmux$15850_CMP0 ($eq).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15849_CMP0 ($eq).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15848_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15847_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15846_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15845_CMP0 ($eq).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$15844_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15843_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15842_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15841_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15840_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15839_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15838_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15837_CMP0 ($eq).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$15836_CMP0 ($eq).
+Removed top 2 bits (of 3) from port B of cell riscv_core.$procmux$15800_CMP0 ($eq).
+Removed top 1 bits (of 3) from port B of cell riscv_core.$procmux$15799_CMP0 ($eq).
+Removed top 4 bits (of 5) from port B of cell riscv_core.$procmux$15482_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16742 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16740 ($ne).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15316_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16731 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16729 ($ne).
+Removed top 3 bits (of 5) from port B of cell riscv_core.$procmux$15155_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16720 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16718 ($ne).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$14999_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16709 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16707 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16698 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16696 ($ne).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$14848_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16687 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16685 ($ne).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$14702_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16676 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16674 ($ne).
+Removed top 2 bits (of 5) from port B of cell riscv_core.$procmux$14561_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16665 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16663 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16654 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$14425_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16652 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16643 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16641 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$14294_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16632 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16630 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$14168_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16621 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16619 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16610 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$14047_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16608 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16599 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16597 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$13931_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16588 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16586 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$13820_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16577 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16575 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$13714_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16566 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16564 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16555 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16553 ($ne).
+Removed top 1 bits (of 5) from port B of cell riscv_core.$procmux$13613_CMP0 ($eq).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16544 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16542 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16533 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16531 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16522 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16520 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16511 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16509 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16500 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16498 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16489 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16487 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16478 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16476 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16467 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16465 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16456 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16454 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16445 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16443 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16434 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16432 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16423 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16421 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16412 ($ne).
+Removed top 1 bits (of 2) from port B of cell riscv_core.$auto$opt_dff.cc:195:make_patterns_logic$16410 ($ne).
+Removed top 2 bits (of 7) from port B of cell riscv_core.$procmux$12671_CMP1 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$procmux$12671_CMP0 ($eq).
+Removed top 1 bits (of 7) from port B of cell riscv_core.$procmux$12669_CMP0 ($eq).
+Removed top 2 bits (of 7) from port B of cell riscv_core.$procmux$12668_CMP0 ($eq).
+Removed top 3 bits (of 4) from wire riscv_core.$2\alu_op[3:0].
+Removed top 1 bits (of 2) from wire riscv_core.$2\forward_b[1:0].
+Removed top 31 bits (of 32) from wire riscv_core.alu_slt.
+Removed top 1 bits (of 7) from wire riscv_core.id_ex_funct7.
+4.10. Executing PEEPOPT pass (run peephole optimizers).
+4.11. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 0 unused cells and 4 unused wires.
+<suppressed ~1 debug messages>
+4.12. Executing ALUMACC pass (create $alu and $macc cells).
+Extracting $alu and $macc cells in module riscv_core:
+creating $macc model for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:182$20 ($add).
+creating $macc model for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:231$39 ($add).
+creating $macc model for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:248$44 ($add).
+creating $macc model for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:341$76 ($add).
+creating $macc model for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$149 ($add).
+creating $macc model for $sub$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:183$21 ($sub).
+creating $alu model for $macc $sub$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:183$21.
+creating $alu model for $macc $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$149.
+creating $alu model for $macc $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:341$76.
+creating $alu model for $macc $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:248$44.
+creating $alu model for $macc $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:231$39.
+creating $alu model for $macc $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:182$20.
+creating $alu model for $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:226$36 ($ge): new $alu
+creating $alu model for $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:228$38 ($ge): new $alu
+creating $alu model for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:188$23 ($lt): new $alu
+creating $alu model for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:189$25 ($lt): new $alu
+creating $alu model for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:225$35 ($lt): merged with $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:226$36.
+creating $alu model for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:227$37 ($lt): merged with $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:228$38.
+creating $alu model for $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:223$33 ($eq): merged with $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:228$38.
+creating $alu model for $ne$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:224$34 ($ne): merged with $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:228$38.
+creating $alu cell for $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:228$38, $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:227$37, $eq$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:223$33, $ne$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:224$34: $auto$alumacc.cc:485:replace_alu$16755
+creating $alu cell for $ge$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:226$36, $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:225$35: $auto$alumacc.cc:485:replace_alu$16770
+creating $alu cell for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:189$25: $auto$alumacc.cc:485:replace_alu$16785
+creating $alu cell for $lt$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:188$23: $auto$alumacc.cc:485:replace_alu$16796
+creating $alu cell for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:182$20: $auto$alumacc.cc:485:replace_alu$16809
+creating $alu cell for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:231$39: $auto$alumacc.cc:485:replace_alu$16812
+creating $alu cell for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:248$44: $auto$alumacc.cc:485:replace_alu$16815
+creating $alu cell for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:341$76: $auto$alumacc.cc:485:replace_alu$16818
+creating $alu cell for $add$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:469$149: $auto$alumacc.cc:485:replace_alu$16821
+creating $alu cell for $sub$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:183$21: $auto$alumacc.cc:485:replace_alu$16824
+created 10 $alu and 0 $macc cells.
+4.13. Executing SHARE pass (SAT-based resource sharing).
+Found 3 cells in module riscv_core that may be considered for resource sharing.
+Analyzing resource sharing options for $sshr$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:193$29 ($sshr):
+Found 1 activation_patterns using ctrl signal $procmux$16109_CMP.
+No candidates found.
+Analyzing resource sharing options for $shr$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:192$28 ($shr):
+Found 1 activation_patterns using ctrl signal $procmux$16110_CMP.
+No candidates found.
+Analyzing resource sharing options for $shl$/home/ubuju/testprojects/riscv_core_project/source/riscv_core.v:184$22 ($shl):
+Found 1 activation_patterns using ctrl signal $procmux$16114_CMP.
+No candidates found.
+4.14. Executing OPT pass (performing simple optimizations).
+4.14.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~2 debug messages>
+4.14.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.14.3. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~49 debug messages>
+4.14.4. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.14.5. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.14.6. Executing OPT_DFF pass (perform DFF optimizations).
+4.14.7. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 2 unused cells and 10 unused wires.
+<suppressed ~3 debug messages>
+4.14.8. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.14.9. Rerunning OPT passes. (Maybe there is more to do..)
+4.14.10. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~49 debug messages>
+4.14.11. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.14.12. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.14.13. Executing OPT_DFF pass (perform DFF optimizations).
+4.14.14. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.14.15. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.14.16. Finished OPT passes. (There is nothing left to do.)
+4.15. Executing MEMORY pass.
+4.15.1. Executing OPT_MEM pass (optimize memories).
+Performed a total of 0 transformations.
+4.15.2. Executing OPT_MEM_PRIORITY pass (removing unnecessary memory write priority relations).
+Performed a total of 0 transformations.
+4.15.3. Executing OPT_MEM_FEEDBACK pass (finding memory read-to-write feedback paths).
+4.15.4. Executing MEMORY_BMUX2ROM pass (converting muxes to ROMs).
+4.15.5. Executing MEMORY_DFF pass (merging $dff cells to $memrd).
+4.15.6. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.15.7. Executing MEMORY_SHARE pass (consolidating $memrd/$memwr cells).
+4.15.8. Executing OPT_MEM_WIDEN pass (optimize memories where all ports are wide).
+Performed a total of 0 transformations.
+4.15.9. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.15.10. Executing MEMORY_COLLECT pass (generating $mem cells).
+4.16. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.17. Executing OPT pass (performing simple optimizations).
+4.17.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~145 debug messages>
+4.17.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~93 debug messages>
+Removed a total of 31 cells.
+4.17.3. Executing OPT_DFF pass (perform DFF optimizations).
+Adding EN signal on $auto$ff.cc:266:slice$16322 ($adffe) from module riscv_core (D = $procmux$16015_Y [1:0], Q = \pc [1:0]).
+4.17.4. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 2 unused cells and 135 unused wires.
+<suppressed ~3 debug messages>
+4.17.5. Rerunning OPT passes. (Removed registers in this run.)
+4.17.6. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~1 debug messages>
+4.17.7. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~3 debug messages>
+Removed a total of 1 cells.
+4.17.8. Executing OPT_DFF pass (perform DFF optimizations).
+4.17.9. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 0 unused cells and 2 unused wires.
+<suppressed ~1 debug messages>
+4.17.10. Finished fast OPT passes.
+4.18. Executing MEMORY_MAP pass (converting memories to logic and flip-flops).
+4.19. Executing OPT pass (performing simple optimizations).
+4.19.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.19.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.19.3. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~14 debug messages>
+4.19.4. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Consolidated identical input bits for $pmux cell $procmux$15798:
+Old ports: A=4'0000, B=12'000100111111, Y=$procmux$15798_Y
+New ports: A=3'000, B=9'001011111, Y=$procmux$15798_Y [2:0]
+New connections: $procmux$15798_Y [3] = $procmux$15798_Y [2]
+Optimizing cells in module \riscv_core.
+Consolidated identical input bits for $mux cell $procmux$15802:
+Old ports: A=4'0000, B=$procmux$15798_Y, Y=$0\dmem_we[3:0]
+New ports: A=3'000, B=$procmux$15798_Y [2:0], Y=$0\dmem_we[3:0] [2:0]
+New connections: $0\dmem_we[3:0] [3] = $0\dmem_we[3:0] [2]
+Optimizing cells in module \riscv_core.
+Performed a total of 2 changes.
+4.19.5. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.19.6. Executing OPT_SHARE pass.
+Found cells that share an operand and can be merged by moving the $pmux $procmux$16106 in front of them:
+$auto$alumacc.cc:485:replace_alu$16824
+$auto$alumacc.cc:485:replace_alu$16809
+4.19.7. Executing OPT_DFF pass (perform DFF optimizations).
+4.19.8. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 0 unused cells and 6 unused wires.
+<suppressed ~3 debug messages>
+4.19.9. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~1 debug messages>
+4.19.10. Rerunning OPT passes. (Maybe there is more to do..)
+4.19.11. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~15 debug messages>
+4.19.12. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+New ctrl vector for $pmux cell $procmux$16106: { $auto$opt_reduce.cc:134:opt_pmux$16843 $procmux$16114_CMP $procmux$16113_CMP $procmux$16112_CMP $procmux$16111_CMP $procmux$16110_CMP $procmux$16109_CMP $procmux$16108_CMP $procmux$16107_CMP }
+Optimizing cells in module \riscv_core.
+Performed a total of 1 changes.
+4.19.13. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.19.14. Executing OPT_SHARE pass.
+4.19.15. Executing OPT_DFF pass (perform DFF optimizations).
+4.19.16. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.19.17. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.19.18. Rerunning OPT passes. (Maybe there is more to do..)
+4.19.19. Executing OPT_MUXTREE pass (detect dead branches in mux trees).
+Running muxtree optimizer on module \riscv_core..
+Creating internal representation of mux trees.
+Evaluating internal representation of mux trees.
+Analyzing evaluation results.
+Removed 0 multiplexer ports.
+<suppressed ~15 debug messages>
+4.19.20. Executing OPT_REDUCE pass (consolidate $*mux and $reduce_* inputs).
+Optimizing cells in module \riscv_core.
+Performed a total of 0 changes.
+4.19.21. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+Removed a total of 0 cells.
+4.19.22. Executing OPT_SHARE pass.
+4.19.23. Executing OPT_DFF pass (perform DFF optimizations).
+4.19.24. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+4.19.25. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+4.19.26. Finished OPT passes. (There is nothing left to do.)
+4.20. Executing TECHMAP pass (map to technology primitives).
+4.20.1. Executing Verilog-2005 frontend: /usr/bin/../share/yosys/techmap.v
+Parsing Verilog input from `/usr/bin/../share/yosys/techmap.v' to AST representation.
+Generating RTLIL representation for module `\_90_simplemap_bool_ops'.
+Generating RTLIL representation for module `\_90_simplemap_reduce_ops'.
+Generating RTLIL representation for module `\_90_simplemap_logic_ops'.
+Generating RTLIL representation for module `\_90_simplemap_compare_ops'.
+Generating RTLIL representation for module `\_90_simplemap_various'.
+Generating RTLIL representation for module `\_90_simplemap_registers'.
+Generating RTLIL representation for module `\_90_shift_ops_shr_shl_sshl_sshr'.
+Generating RTLIL representation for module `\_90_shift_shiftx'.
+Generating RTLIL representation for module `\_90_fa'.
+Generating RTLIL representation for module `\_90_lcu'.
+Generating RTLIL representation for module `\_90_alu'.
+Generating RTLIL representation for module `\_90_macc'.
+Generating RTLIL representation for module `\_90_alumacc'.
+Generating RTLIL representation for module `\$__div_mod_u'.
+Generating RTLIL representation for module `\$__div_mod_trunc'.
+Generating RTLIL representation for module `\_90_div'.
+Generating RTLIL representation for module `\_90_mod'.
+Generating RTLIL representation for module `\$__div_mod_floor'.
+Generating RTLIL representation for module `\_90_divfloor'.
+Generating RTLIL representation for module `\_90_modfloor'.
+Generating RTLIL representation for module `\_90_pow'.
+Generating RTLIL representation for module `\_90_pmux'.
+Generating RTLIL representation for module `\_90_demux'.
+Generating RTLIL representation for module `\_90_lut'.
+Successfully finished Verilog frontend.
+4.20.2. Continuing TECHMAP pass.
+Using extmapper simplemap for cells of type $eq.
+Using extmapper simplemap for cells of type $logic_or.
+Using extmapper simplemap for cells of type $logic_and.
+Using template $paramod$fbc7873bff55778c0b3173955b7e4bce1d9d6834\_90_alu for cells of type $alu.
+Using template $paramod$constmap:4621fcf06a436d1e2a4080e2ed9866a7d07a6e07$paramod$335cfd09f1afa8139c4aafcbbe5f361887b79c5e\_90_shift_ops_shr_shl_sshl_sshr for cells of type $shl.
+Using extmapper simplemap for cells of type $not.
+Using template $paramod$2653f68ddb8eab7b1907b4a20767b72a824a7a36\_90_alu for cells of type $alu.
+Using extmapper simplemap for cells of type $xor.
+Using template $paramod$constmap:4621fcf06a436d1e2a4080e2ed9866a7d07a6e07$paramod$feecc7a0dbd012970970f2858f15e786e251f677\_90_shift_ops_shr_shl_sshl_sshr for cells of type $shr.
+Using template $paramod$constmap:4621fcf06a436d1e2a4080e2ed9866a7d07a6e07$paramod$e765c459d3029c22a22a27989e94858fd9ebfa9c\_90_shift_ops_shr_shl_sshl_sshr for cells of type $sshr.
+Using extmapper simplemap for cells of type $or.
+Using extmapper simplemap for cells of type $and.
+Using template $paramod$44a13d10af618e7fbe7b9aad2f6151ffcee1e2fa\_90_alu for cells of type $alu.
+Using extmapper simplemap for cells of type $reduce_bool.
+Using extmapper simplemap for cells of type $logic_not.
+Using extmapper simplemap for cells of type $reduce_and.
+Using extmapper simplemap for cells of type $adffe.
+Using extmapper simplemap for cells of type $dffe.
+Using extmapper simplemap for cells of type $adff.
+Using extmapper simplemap for cells of type $reduce_or.
+Using template $paramod$59b03ae2620a41577de8da5f5c97b2919e82362b\_90_pmux for cells of type $pmux.
+Using template $paramod$33afdd83bf3811dac2de7a968d39eea5718691bc\_90_pmux for cells of type $pmux.
+Using template $paramod$80834bdd89ff0e27a02312429a7cc3a2e63489a8\_90_pmux for cells of type $pmux.
+Using template $paramod$eaeb96106163dbf82031649d189817109fe07c69\_90_pmux for cells of type $pmux.
+Using template $paramod$8fabc56b80a569262acfc42757a02ca0b8e91278\_90_pmux for cells of type $pmux.
+Using template $paramod$b1b84ea6577090e4343ab204585f770b9ac9f33b\_90_pmux for cells of type $pmux.
+Using template $paramod$85df5dc01c7df96a7d8e5f1fdf76ce9ac452af63\_90_pmux for cells of type $pmux.
+Running "alumacc" on wrapper $extern:wrap:$neg:A_SIGNED=0:A_WIDTH=32:Y_WIDTH=32:394426c56d1a028ba8fdd5469b163e04011def47.
+Using template $extern:wrap:$neg:A_SIGNED=0:A_WIDTH=32:Y_WIDTH=32:394426c56d1a028ba8fdd5469b163e04011def47 for cells of type $extern:wrap:$neg:A_SIGNED=0:A_WIDTH=32:Y_WIDTH=32:394426c56d1a028ba8fdd5469b163e04011def47.
+Using extmapper simplemap for cells of type $ne.
+Using template $paramod\_90_lcu\WIDTH=32'00000000000000000000000000100000 for cells of type $lcu.
+Using extmapper simplemap for cells of type $pos.
+Using template $paramod$c6baa65225090ac0a120feab1b920965244aa496\_90_alu for cells of type $alu.
+Using template $paramod\_90_lcu\WIDTH=32'00000000000000000000000000011110 for cells of type $lcu.
+No more expansions possible.
+<suppressed ~3952 debug messages>
+4.21. Executing OPT pass (performing simple optimizations).
+4.21.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~2106 debug messages>
+4.21.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~4662 debug messages>
+Removed a total of 1554 cells.
+4.21.3. Executing OPT_DFF pass (perform DFF optimizations).
+4.21.4. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 303 unused cells and 2786 unused wires.
+<suppressed ~304 debug messages>
+4.21.5. Finished fast OPT passes.
+4.22. Executing ABC pass (technology mapping using ABC).
+4.22.1. Extracting gate netlist of module `\riscv_core' to `<abc-temp-dir>/input.blif'..
+Extracted 7777 gates and 9110 wires to a netlist network with 1331 inputs and 300 outputs.
+4.22.1.1. Executing ABC.
+Running ABC command: "<yosys-exe-dir>/yosys-abc" -s -f <abc-temp-dir>/abc.script 2>&1
+ABC: ABC command line: "source <abc-temp-dir>/abc.script".
+ABC:
+ABC: + read_blif <abc-temp-dir>/input.blif
+ABC: + read_library <abc-temp-dir>/stdcells.genlib
+ABC: Entered genlib library with 13 gates from file "<abc-temp-dir>/stdcells.genlib".
+ABC: + strash
+ABC: + dretime
+ABC: + map
+ABC: + write_blif <abc-temp-dir>/output.blif
+4.22.1.2. Re-integrating ABC results.
+ABC RESULTS:             ORNOT cells:      110
+ABC RESULTS:              XNOR cells:       94
+ABC RESULTS:               AND cells:       74
+ABC RESULTS:              NAND cells:      203
+ABC RESULTS:               NOT cells:      182
+ABC RESULTS:               XOR cells:      268
+ABC RESULTS:               MUX cells:      662
+ABC RESULTS:                OR cells:     2346
+ABC RESULTS:            ANDNOT cells:     3508
+ABC RESULTS:               NOR cells:      146
+ABC RESULTS:        internal signals:     7479
+ABC RESULTS:           input signals:     1331
+ABC RESULTS:          output signals:      300
+Removing temp directory.
+4.23. Executing OPT pass (performing simple optimizations).
+4.23.1. Executing OPT_EXPR pass (perform const folding).
+Optimizing module riscv_core.
+<suppressed ~70 debug messages>
+4.23.2. Executing OPT_MERGE pass (detect identical cells).
+Finding identical cells in module `\riscv_core'.
+<suppressed ~3 debug messages>
+Removed a total of 1 cells.
+4.23.3. Executing OPT_DFF pass (perform DFF optimizations).
+4.23.4. Executing OPT_CLEAN pass (remove unused cells and wires).
+Finding unused cells or wires in module \riscv_core..
+Removed 1 unused cells and 3133 unused wires.
+<suppressed ~20 debug messages>
+4.23.5. Finished fast OPT passes.
+4.24. Executing HIERARCHY pass (managing design hierarchy).
+4.24.1. Analyzing design hierarchy..
+Top module:  \riscv_core
+4.24.2. Analyzing design hierarchy..
+Top module:  \riscv_core
+Removed 0 unused modules.
+4.25. Printing statistics.
+=== riscv_core ===
+Number of wires:               7524
+Number of wire bits:           9711
+Number of public wires:          95
+Number of public wire bits:    2248
+Number of memories:               0
+Number of memory bits:            0
+Number of processes:              0
+Number of cells:               9089
+$_ANDNOT_                    3508
+$_AND_                         74
+$_DFFE_PP0N_                   32
+$_DFFE_PP0P_                 1207
+$_DFFE_PP_                     96
+$_DFF_PP0_                    163
+$_MUX_                        662
+$_NAND_                       203
+$_NOR_                        146
+$_NOT_                        181
+$_ORNOT_                      109
+$_OR_                        2346
+$_XNOR_                        94
+$_XOR_                        268
+4.26. Executing CHECK pass (checking for obvious problems).
+Checking module riscv_core...
+Found and reported 0 problems.
+5. Executing DFFLIBMAP pass (mapping DFF cells to sequential cells from liberty file).
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+cell sky130_fd_sc_hd__dfxtp_1 (noninv, pins=3, area=20.02) is a direct match for cell type $_DFF_P_.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+cell sky130_fd_sc_hd__dfrtn_1 (noninv, pins=4, area=25.02) is a direct match for cell type $_DFF_NN0_.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+cell sky130_fd_sc_hd__dfrtp_1 (noninv, pins=4, area=25.02) is a direct match for cell type $_DFF_PN0_.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+cell sky130_fd_sc_hd__dfstp_2 (noninv, pins=4, area=26.28) is a direct match for cell type $_DFF_PN1_.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+cell sky130_fd_sc_hd__dfbbn_1 (noninv, pins=6, area=32.53) is a direct match for cell type $_DFFSR_NNN_.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbn_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtn_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+cell sky130_fd_sc_hd__dfbbp_1 (noninv, pins=6, area=32.53) is a direct match for cell type $_DFFSR_PNN_.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE|IQ&!DE' in pin attribute of cell 'sky130_fd_sc_hd__edfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfbbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfrtp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfsbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfstp_4' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sdfxtp_4' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxbp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_1' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_2' - skipping.
+Warning: Found unsupported expression 'D&DE&!SCE|IQ&!DE&!SCE|SCD&SCE' in pin attribute of cell 'sky130_fd_sc_hd__sedfxtp_4' - skipping.
+final dff cell mappings:
+unmapped dff cell: $_DFF_N_
+\sky130_fd_sc_hd__dfxtp_1 _DFF_P_ (.CLK( C), .D( D), .Q( Q));
+\sky130_fd_sc_hd__dfrtn_1 _DFF_NN0_ (.CLK_N( C), .D( D), .Q( Q), .RESET_B( R));
+unmapped dff cell: $_DFF_NN1_
+unmapped dff cell: $_DFF_NP0_
+unmapped dff cell: $_DFF_NP1_
+\sky130_fd_sc_hd__dfrtp_1 _DFF_PN0_ (.CLK( C), .D( D), .Q( Q), .RESET_B( R));
+\sky130_fd_sc_hd__dfstp_2 _DFF_PN1_ (.CLK( C), .D( D), .Q( Q), .SET_B( R));
+unmapped dff cell: $_DFF_PP0_
+unmapped dff cell: $_DFF_PP1_
+\sky130_fd_sc_hd__dfbbn_1 _DFFSR_NNN_ (.CLK_N( C), .D( D), .Q( Q), .Q_N(~Q), .RESET_B( R), .SET_B( S));
+unmapped dff cell: $_DFFSR_NNP_
+unmapped dff cell: $_DFFSR_NPN_
+unmapped dff cell: $_DFFSR_NPP_
+\sky130_fd_sc_hd__dfbbp_1 _DFFSR_PNN_ (.CLK( C), .D( D), .Q( Q), .Q_N(~Q), .RESET_B( R), .SET_B( S));
+unmapped dff cell: $_DFFSR_PNP_
+unmapped dff cell: $_DFFSR_PPN_
+unmapped dff cell: $_DFFSR_PPP_
+5.1. Executing DFFLEGALIZE pass (convert FFs to types supported by the target).
+Mapping DFF cells in module `\riscv_core':
+mapped 1402 $_DFF_PN0_ cells to \sky130_fd_sc_hd__dfrtp_1 cells.
+mapped 96 $_DFF_P_ cells to \sky130_fd_sc_hd__dfxtp_1 cells.
+6. Executing ABC pass (technology mapping using ABC).
+6.1. Extracting gate netlist of module `\riscv_core' to `<abc-temp-dir>/input.blif'..
+Extracted 10328 gates and 11855 wires to a netlist network with 1526 inputs and 2839 outputs.
+6.1.1. Executing ABC.
+Running ABC command: "<yosys-exe-dir>/yosys-abc" -s -f <abc-temp-dir>/abc.script 2>&1
+ABC: ABC command line: "source <abc-temp-dir>/abc.script".
+ABC:
+ABC: + read_blif <abc-temp-dir>/input.blif
+ABC: + read_lib -w /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+ABC: Parsing finished successfully.  Parsing time =     0.09 sec
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__decap_12" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__decap_3" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__decap_4" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__decap_6" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__decap_8" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfbbn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfbbn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfbbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrtn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfrtp_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfsbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfsbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfstp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfstp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfstp_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfxbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfxbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfxtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfxtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dfxtp_4".
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__diode_2" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__dlclkp_1" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__dlclkp_2" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__dlclkp_4" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrbn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrbn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtn_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlrtp_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxbn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxbn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxtn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxtn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxtn_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__dlxtp_1".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__ebufn_1".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__ebufn_2".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__ebufn_4".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__ebufn_8".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__edfxbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__edfxtp_1".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvn_0".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvn_1".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvn_2".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvn_4".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvn_8".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvp_1".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvp_2".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvp_4".
+ABC: Scl_LibertyReadGenlib() skipped three-state cell "sky130_fd_sc_hd__einvp_8".
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_bleeder_1" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_decapkapwr_12" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_decapkapwr_3" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_decapkapwr_4" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_decapkapwr_6" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__lpflow_decapkapwr_8" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__lpflow_inputisolatch_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfbbn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfbbn_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfbbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrtn_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfrtp_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfsbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfsbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfstp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfstp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfstp_4".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfxbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfxbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfxtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfxtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sdfxtp_4".
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__sdlclkp_1" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__sdlclkp_2" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped cell "sky130_fd_sc_hd__sdlclkp_4" without logic function.
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sedfxbp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sedfxbp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sedfxtp_1".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sedfxtp_2".
+ABC: Scl_LibertyReadGenlib() skipped sequential cell "sky130_fd_sc_hd__sedfxtp_4".
+ABC: Library "sky130_fd_sc_hd__tt_025C_1v80" from "/home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib" has 334 cells (94 skipped: 63 seq; 13 tri-state; 18 no func; 0 dont_use).  Time =     0.15 sec
+ABC: Memory =   19.85 MB. Time =     0.15 sec
+ABC: Warning: Detected 9 multi-output gates (for example, "sky130_fd_sc_hd__fa_1").
+ABC: + strash
+ABC: + &get -n
+ABC: + &fraig -x
+ABC: + &put
+ABC: + scorr
+ABC: Warning: The network is combinational (run "fraig" or "fraig_sweep").
+ABC: + dc2
+ABC: + dretime
+ABC: + strash
+ABC: + &get -n
+ABC: + &dch -f
+ABC: + &nf
+ABC: + &put
+ABC: + write_blif <abc-temp-dir>/output.blif
+6.1.2. Re-integrating ABC results.
+ABC RESULTS:   sky130_fd_sc_hd__and3b_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__nand4b_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__nor4bb_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o22a_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__a2bb2oi_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__nor2b_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__a32oi_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__a222oi_1 cells:      199
+ABC RESULTS:   sky130_fd_sc_hd__nor4b_1 cells:        5
+ABC RESULTS:   sky130_fd_sc_hd__o32a_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__and4b_1 cells:        3
+ABC RESULTS:   sky130_fd_sc_hd__o211a_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__and4_1 cells:        4
+ABC RESULTS:   sky130_fd_sc_hd__o221ai_1 cells:       69
+ABC RESULTS:   sky130_fd_sc_hd__a22o_1 cells:      162
+ABC RESULTS:   sky130_fd_sc_hd__a32o_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o31a_1 cells:        3
+ABC RESULTS:   sky130_fd_sc_hd__or4_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__a311o_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__nand2b_1 cells:       22
+ABC RESULTS:   sky130_fd_sc_hd__a31o_1 cells:        4
+ABC RESULTS:   sky130_fd_sc_hd__a211oi_1 cells:        9
+ABC RESULTS:   sky130_fd_sc_hd__maj3_1 cells:       81
+ABC RESULTS:   sky130_fd_sc_hd__o21a_1 cells:        6
+ABC RESULTS:   sky130_fd_sc_hd__a311oi_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__o211ai_1 cells:       16
+ABC RESULTS:   sky130_fd_sc_hd__nand3b_1 cells:        9
+ABC RESULTS:   sky130_fd_sc_hd__a41o_1 cells:        1
+ABC RESULTS:   sky130_fd_sc_hd__o21bai_1 cells:        4
+ABC RESULTS:   sky130_fd_sc_hd__mux2i_1 cells:       47
+ABC RESULTS:   sky130_fd_sc_hd__o31ai_1 cells:        9
+ABC RESULTS:   sky130_fd_sc_hd__nor3b_1 cells:       14
+ABC RESULTS:   sky130_fd_sc_hd__o22ai_1 cells:       14
+ABC RESULTS:   sky130_fd_sc_hd__or3_1 cells:       23
+ABC RESULTS:   sky130_fd_sc_hd__a221oi_1 cells:      350
+ABC RESULTS:   sky130_fd_sc_hd__a21boi_0 cells:        4
+ABC RESULTS:   sky130_fd_sc_hd__lpflow_isobufsrc_1 cells:       29
+ABC RESULTS:   sky130_fd_sc_hd__a2111oi_0 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__o2111ai_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__o2bb2ai_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__a211o_1 cells:        2
+ABC RESULTS:   sky130_fd_sc_hd__a31oi_1 cells:       20
+ABC RESULTS:   sky130_fd_sc_hd__lpflow_inputiso1p_1 cells:       28
+ABC RESULTS:   sky130_fd_sc_hd__xnor2_1 cells:      170
+ABC RESULTS:   sky130_fd_sc_hd__a22oi_1 cells:      134
+ABC RESULTS:   sky130_fd_sc_hd__a21o_1 cells:       16
+ABC RESULTS:   sky130_fd_sc_hd__nor4_1 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__nand4_1 cells:      156
+ABC RESULTS:   sky130_fd_sc_hd__xor2_1 cells:       78
+ABC RESULTS:   sky130_fd_sc_hd__and3_1 cells:       50
+ABC RESULTS:   sky130_fd_sc_hd__o32ai_1 cells:       11
+ABC RESULTS:   sky130_fd_sc_hd__nand2_1 cells:     1775
+ABC RESULTS:   sky130_fd_sc_hd__o21ai_0 cells:     1337
+ABC RESULTS:   sky130_fd_sc_hd__a21oi_1 cells:      271
+ABC RESULTS:   sky130_fd_sc_hd__a221o_1 cells:       77
+ABC RESULTS:   sky130_fd_sc_hd__nor3_1 cells:      101
+ABC RESULTS:   sky130_fd_sc_hd__o311ai_0 cells:        8
+ABC RESULTS:   sky130_fd_sc_hd__nor2_1 cells:      282
+ABC RESULTS:   sky130_fd_sc_hd__nand3_1 cells:       69
+ABC RESULTS:   sky130_fd_sc_hd__and2_0 cells:       44
+ABC RESULTS:   sky130_fd_sc_hd__mux2_1 cells:      134
+ABC RESULTS:   sky130_fd_sc_hd__clkinv_1 cells:     1465
+ABC RESULTS:        internal signals:     7490
+ABC RESULTS:           input signals:     1526
+ABC RESULTS:          output signals:     2839
+Removing temp directory.
+{
+"creator": "Yosys 0.33 (git sha1 2584903a060)",
+"invocation": "stat -liberty /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib -json ",
+"modules": {
+"\\riscv_core": {
+"num_wires":         19143,
+"num_wire_bits":     21330,
+"num_pub_wires":     95,
+"num_pub_wire_bits": 2248,
+"num_memories":      0,
+"num_memory_bits":   0,
+"num_processes":     0,
+"num_cells":         8854,
+"area":              76711.072000,
+"num_cells_by_type": {
+"sky130_fd_sc_hd__a2111oi_0": 11,
+"sky130_fd_sc_hd__a211o_1": 2,
+"sky130_fd_sc_hd__a211oi_1": 9,
+"sky130_fd_sc_hd__a21boi_0": 4,
+"sky130_fd_sc_hd__a21o_1": 16,
+"sky130_fd_sc_hd__a21oi_1": 271,
+"sky130_fd_sc_hd__a221o_1": 77,
+"sky130_fd_sc_hd__a221oi_1": 350,
+"sky130_fd_sc_hd__a222oi_1": 199,
+"sky130_fd_sc_hd__a22o_1": 162,
+"sky130_fd_sc_hd__a22oi_1": 134,
+"sky130_fd_sc_hd__a2bb2oi_1": 1,
+"sky130_fd_sc_hd__a311o_1": 2,
+"sky130_fd_sc_hd__a311oi_1": 2,
+"sky130_fd_sc_hd__a31o_1": 4,
+"sky130_fd_sc_hd__a31oi_1": 20,
+"sky130_fd_sc_hd__a32o_1": 1,
+"sky130_fd_sc_hd__a32oi_1": 1,
+"sky130_fd_sc_hd__a41o_1": 1,
+"sky130_fd_sc_hd__and2_0": 44,
+"sky130_fd_sc_hd__and3_1": 50,
+"sky130_fd_sc_hd__and3b_1": 1,
+"sky130_fd_sc_hd__and4_1": 4,
+"sky130_fd_sc_hd__and4b_1": 3,
+"sky130_fd_sc_hd__clkinv_1": 1465,
+"sky130_fd_sc_hd__dfrtp_1": 1402,
+"sky130_fd_sc_hd__dfxtp_1": 96,
+"sky130_fd_sc_hd__lpflow_inputiso1p_1": 28,
+"sky130_fd_sc_hd__lpflow_isobufsrc_1": 29,
+"sky130_fd_sc_hd__maj3_1": 81,
+"sky130_fd_sc_hd__mux2_1": 134,
+"sky130_fd_sc_hd__mux2i_1": 47,
+"sky130_fd_sc_hd__nand2_1": 1775,
+"sky130_fd_sc_hd__nand2b_1": 22,
+"sky130_fd_sc_hd__nand3_1": 69,
+"sky130_fd_sc_hd__nand3b_1": 9,
+"sky130_fd_sc_hd__nand4_1": 156,
+"sky130_fd_sc_hd__nand4b_1": 1,
+"sky130_fd_sc_hd__nor2_1": 282,
+"sky130_fd_sc_hd__nor2b_1": 1,
+"sky130_fd_sc_hd__nor3_1": 101,
+"sky130_fd_sc_hd__nor3b_1": 14,
+"sky130_fd_sc_hd__nor4_1": 11,
+"sky130_fd_sc_hd__nor4b_1": 5,
+"sky130_fd_sc_hd__nor4bb_1": 1,
+"sky130_fd_sc_hd__o2111ai_1": 2,
+"sky130_fd_sc_hd__o211a_1": 1,
+"sky130_fd_sc_hd__o211ai_1": 16,
+"sky130_fd_sc_hd__o21a_1": 6,
+"sky130_fd_sc_hd__o21ai_0": 1337,
+"sky130_fd_sc_hd__o21bai_1": 4,
+"sky130_fd_sc_hd__o221ai_1": 69,
+"sky130_fd_sc_hd__o22a_1": 1,
+"sky130_fd_sc_hd__o22ai_1": 14,
+"sky130_fd_sc_hd__o2bb2ai_1": 2,
+"sky130_fd_sc_hd__o311ai_0": 8,
+"sky130_fd_sc_hd__o31a_1": 3,
+"sky130_fd_sc_hd__o31ai_1": 9,
+"sky130_fd_sc_hd__o32a_1": 1,
+"sky130_fd_sc_hd__o32ai_1": 11,
+"sky130_fd_sc_hd__or3_1": 23,
+"sky130_fd_sc_hd__or4_1": 1,
+"sky130_fd_sc_hd__xnor2_1": 170,
+"sky130_fd_sc_hd__xor2_1": 78
+}
+}
+},
+"design": {
+"num_wires":         19143,
+"num_wire_bits":     21330,
+"num_pub_wires":     95,
+"num_pub_wire_bits": 2248,
+"num_memories":      0,
+"num_memory_bits":   0,
+"num_processes":     0,
+"num_cells":         8854,
+"area":              76711.072000,
+"num_cells_by_type": {
+"sky130_fd_sc_hd__a2111oi_0": 11,
+"sky130_fd_sc_hd__a211o_1": 2,
+"sky130_fd_sc_hd__a211oi_1": 9,
+"sky130_fd_sc_hd__a21boi_0": 4,
+"sky130_fd_sc_hd__a21o_1": 16,
+"sky130_fd_sc_hd__a21oi_1": 271,
+"sky130_fd_sc_hd__a221o_1": 77,
+"sky130_fd_sc_hd__a221oi_1": 350,
+"sky130_fd_sc_hd__a222oi_1": 199,
+"sky130_fd_sc_hd__a22o_1": 162,
+"sky130_fd_sc_hd__a22oi_1": 134,
+"sky130_fd_sc_hd__a2bb2oi_1": 1,
+"sky130_fd_sc_hd__a311o_1": 2,
+"sky130_fd_sc_hd__a311oi_1": 2,
+"sky130_fd_sc_hd__a31o_1": 4,
+"sky130_fd_sc_hd__a31oi_1": 20,
+"sky130_fd_sc_hd__a32o_1": 1,
+"sky130_fd_sc_hd__a32oi_1": 1,
+"sky130_fd_sc_hd__a41o_1": 1,
+"sky130_fd_sc_hd__and2_0": 44,
+"sky130_fd_sc_hd__and3_1": 50,
+"sky130_fd_sc_hd__and3b_1": 1,
+"sky130_fd_sc_hd__and4_1": 4,
+"sky130_fd_sc_hd__and4b_1": 3,
+"sky130_fd_sc_hd__clkinv_1": 1465,
+"sky130_fd_sc_hd__dfrtp_1": 1402,
+"sky130_fd_sc_hd__dfxtp_1": 96,
+"sky130_fd_sc_hd__lpflow_inputiso1p_1": 28,
+"sky130_fd_sc_hd__lpflow_isobufsrc_1": 29,
+"sky130_fd_sc_hd__maj3_1": 81,
+"sky130_fd_sc_hd__mux2_1": 134,
+"sky130_fd_sc_hd__mux2i_1": 47,
+"sky130_fd_sc_hd__nand2_1": 1775,
+"sky130_fd_sc_hd__nand2b_1": 22,
+"sky130_fd_sc_hd__nand3_1": 69,
+"sky130_fd_sc_hd__nand3b_1": 9,
+"sky130_fd_sc_hd__nand4_1": 156,
+"sky130_fd_sc_hd__nand4b_1": 1,
+"sky130_fd_sc_hd__nor2_1": 282,
+"sky130_fd_sc_hd__nor2b_1": 1,
+"sky130_fd_sc_hd__nor3_1": 101,
+"sky130_fd_sc_hd__nor3b_1": 14,
+"sky130_fd_sc_hd__nor4_1": 11,
+"sky130_fd_sc_hd__nor4b_1": 5,
+"sky130_fd_sc_hd__nor4bb_1": 1,
+"sky130_fd_sc_hd__o2111ai_1": 2,
+"sky130_fd_sc_hd__o211a_1": 1,
+"sky130_fd_sc_hd__o211ai_1": 16,
+"sky130_fd_sc_hd__o21a_1": 6,
+"sky130_fd_sc_hd__o21ai_0": 1337,
+"sky130_fd_sc_hd__o21bai_1": 4,
+"sky130_fd_sc_hd__o221ai_1": 69,
+"sky130_fd_sc_hd__o22a_1": 1,
+"sky130_fd_sc_hd__o22ai_1": 14,
+"sky130_fd_sc_hd__o2bb2ai_1": 2,
+"sky130_fd_sc_hd__o311ai_0": 8,
+"sky130_fd_sc_hd__o31a_1": 3,
+"sky130_fd_sc_hd__o31ai_1": 9,
+"sky130_fd_sc_hd__o32a_1": 1,
+"sky130_fd_sc_hd__o32ai_1": 11,
+"sky130_fd_sc_hd__or3_1": 23,
+"sky130_fd_sc_hd__or4_1": 1,
+"sky130_fd_sc_hd__xnor2_1": 170,
+"sky130_fd_sc_hd__xor2_1": 78
+}
+}
+}
+7. Executing Verilog backend.
+7.1. Executing BMUXMAP pass.
+7.2. Executing DEMUXMAP pass.
+Dumping module `\riscv_core'.
+Warnings: 27 unique messages, 235 total
+End of script. Logfile hash: ff4ad41e27, CPU: user 9.54s system 0.17s, MEM: 105.93 MB peak
+Yosys 0.33 (git sha1 2584903a060)
+Time spent: 30% 4x read_verilog (3 sec), 26% 2x abc (3 sec), ...
