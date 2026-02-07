@@ -14,7 +14,7 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 
 # Still In Development!
 
-## [Click Here](https://github.com/JeromeAntonyRobin/silis/tree/main/experimental/promoted/by_JeromeAntonyRobin) to use the latest stable version
+## [Click Here](https://github.com/The-Silis-Foundation/silis/blob/main/experimental/POCPNRV17) to use the latest stable version
 
 **Current status**: Early development, experimental features only.
 
