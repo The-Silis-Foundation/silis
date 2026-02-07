@@ -1,9 +1,0 @@
-
-        read_liberty -lib /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
-        read_verilog /home/ubuju/testprojects/riscv_core_project/source/riscv_core.v /home/ubuju/testprojects/riscv_core_project/source/riscv_soc.v
-        synth -top riscv_core
-        dfflibmap -liberty /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
-        abc -liberty /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
-        tee -o reports/area.rpt stat -liberty /home/ubuju/pdk/lib/sky130_fd_sc_hd__tt_025C_1v80.lib -json
-        write_verilog -noattr netlist/riscv_core_netlist.v
-        
