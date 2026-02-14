@@ -3096,8 +3096,19 @@ class SchematicWorker(QThread):
 
 
 if __name__ == "__main__":
+    # 1. Allow high-res icon loading
     QImageReader.setAllocationLimit(0)
+    
     app = QApplication(sys.argv)
+    
+    # === THE FIX: ESTABLISH IDENTITY ===
+    # This string MUST match the name of your .desktop file (silis.desktop)
+    app.setDesktopFileName("silis.desktop") 
+    
+    # This string MUST match the 'StartupWMClass' we will add to the installer
+    app.setApplicationName("silis") 
+    # ===================================
+
     w = SilisIDE()
     w.show()
     sys.exit(app.exec())
