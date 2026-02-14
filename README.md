@@ -39,6 +39,8 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 ## For contributors
 We're not ready for external contributions yet.
 
+## Created by [Jerome Antony Robin](https://github.com/JeromeAntonyRobin)
+
 ## License
 **GNU Affero General Public License v3.0 (AGPL v3)**
 
