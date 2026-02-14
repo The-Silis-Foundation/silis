@@ -2585,6 +2585,8 @@ class SilisIDE(QMainWindow):
         super().__init__()
         self.setWindowTitle("Silis — Silicon Scaffold v2.1")
         self.resize(1400, 900)
+        if os.path.exists("/usr/share/pixmaps/silis.png"):
+            self.setWindowIcon(QIcon("/usr/share/pixmaps/silis.png"))
         self.cwd = os.getcwd(); self.current_file = None; self.pdk_path = ""
         self.schem_engine = "Auto"; self.term_mode = "SHELL"; self.queue = queue.Queue()
         
