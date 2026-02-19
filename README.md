@@ -21,14 +21,17 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 **Latest stable**: Check `experimental/by_JeromeAntonyRobin` for the latest "Reference Build".
 
 ## What works right now
-- [x] **Dual-World IDE:** Separate Frontend (Code/Waves) and Backend (Floorplan/Route) modes.
-- [x] **Project Explorer:** Integrated file management and editor.
-- [x] **Icarus Verilog Integration:** Seamless compilation and simulation.
-- [x] **Waveform Viewer:** Built-in VCD viewer (`SignalPeeker`) with zoom/pan.
-- [x] **Yosys Synthesis Pipeline:** Automated `.ys` script generation and execution.
-- [x] **PAT Reporting Engine:** Professional Power-Area-Timing reports with ASCII tables.
-- [x] **OpenROAD Integration:** Basic Floorplan, PDN, and Placement via TCL bridge.
-- [ ] Full GDSII final export (in progress).
+- [x] **Verilog Compilation**: complie codes with f1 using icarus verilog
+- [x] **Waveform Viewer**: in-built wavefrom viewer called signal peeker that automatically detects .vcd files (if given dump vcd in test bench)
+- [x] **schematic Generation and viewer**: using graphviz as schematic engine
+- [x] **PDK Manager**: in built PDK manager with volare integration and customizable pdk corner selection and custom config
+- [x] **Synthesis**: Using Yosys and abc
+- [x] **Post-synthesis report generation**: report generation with power-area-timing informations, cell utilisations and more.
+- [x] **Placement and Routing**: works.
+- [x] **DEF file visualizer**: in-built DEF file visualizer called silisconpeeker, a lightwieght visualisation tool for abstract view of the chip structure, has layers and overlay features like heatmap (cell density)
+- [x] **GDS Generation**: using Magic
+- [x] **inbuilt GDS viewer**: its slow. but works
+- [ ] **RAM Black-boxing and placement**: using OenRAM, i guess..
 
 ## Project structure
 - `prime/` - Production-ready code (when we have it)
