@@ -1,2 +1,0 @@
-undo redo in explorer doesnt work
-super key and key gets registered in input-able fields
