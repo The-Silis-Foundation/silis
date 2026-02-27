@@ -22,6 +22,7 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 
 ## What works right now
 - [x] **Verilog Compilation**: complie codes with f1 using icarus verilog
+- [x] **Psuedo-Terminal**: Works flawlessly, ghost autofill suggestions and command suggestions (front-end only, backend coming soon!)
 - [x] **Waveform Viewer**: in-built wavefrom viewer called signal peeker that automatically detects .vcd files (if given dump vcd in test bench)
 - [x] **schematic Generation and viewer**: using graphviz as schematic engine
 - [x] **PDK Manager**: in built PDK manager with volare integration and customizable pdk corner selection and custom config
@@ -31,6 +32,7 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 - [x] **DEF file visualizer**: in-built DEF file visualizer called silisconpeeker, a lightwieght visualisation tool for abstract view of the chip structure, has layers and overlay features like heatmap (cell density)
 - [x] **GDS Generation**: using Magic
 - [x] **inbuilt GDS viewer**: its slow. but works
+- [x] **GDS3D Integration**: spawns a GDS3D window over silis IDE window thats resized along with the silis IDE window ( buggy with wayland, usable tho ;) )
 - [ ] **RAM Black-boxing and placement**: using OenRAM, i guess..
 
 ## Project structure
