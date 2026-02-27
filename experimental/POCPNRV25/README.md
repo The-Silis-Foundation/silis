@@ -21,9 +21,12 @@ sudo npm install -g netlistsvg
 sudo apt install librsvg2-bin
 
 ```
-## Running POC V17
+### NOTE: OpenROAD has to be installed locally!
 
-Run the script by `python3 pocv17.py`
+## Running POC PnR V25
+
+
+Run the script by `python3 pocpnrv25.py`
 
 # Workflow tutorial
 
