@@ -30,7 +30,7 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 - [x] **Post-synthesis report generation**: report generation with power-area-timing informations, cell utilisations and more.
 - [x] **Placement and Routing**: works.
 - [x] **DEF file visualizer**: in-built DEF file visualizer called silisconpeeker, a lightwieght visualisation tool for abstract view of the chip structure, has layers and overlay features like heatmap (cell density)
-- [x] **GDS Generation**: using Magic
+- [x] **GDS Generation**: using Magic.
 - [x] **inbuilt GDS viewer**: its slow. but works
 - [x] **GDS3D Integration**: spawns a GDS3D window over silis IDE window thats resized along with the silis IDE window ( buggy with wayland, usable tho ;) )
 - [ ] **RAM Black-boxing and placement**: using OenRAM, i guess..
