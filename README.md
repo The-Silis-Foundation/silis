@@ -21,7 +21,7 @@ silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)*
 **Latest stable**: Check `experimental/by_JeromeAntonyRobin` for the latest "Reference Build".
 
 ## What works right now
-- [x] **Verilog Compilation**: complie codes with f1 using icarus verilog
+- [x] **Verilog Compilation**: complie codes with f1 using icarus verilog.
 - [x] **Psuedo-Terminal**: Works flawlessly, ghost autofill suggestions and command suggestions (front-end only, backend coming soon!)
 - [x] **Waveform Viewer**: in-built wavefrom viewer called signal peeker that automatically detects .vcd files (if given dump vcd in test bench)
 - [x] **schematic Generation and viewer**: using graphviz as schematic engine
