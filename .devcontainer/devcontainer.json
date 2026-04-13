@@ -1,9 +1,6 @@
 {
-  "name": "Silis EDA - OpenROAD Environment",
-  "build": {
-    "dockerfile": "../Dockerfile",
-    "context": ".."
-  },
+  "name": "Silis EDA",
+  "image": "ubuntu:22.04",
   "forwardPorts": [6080],
   "portsAttributes": {
     "6080": {
@@ -11,6 +8,6 @@
       "onAutoForward": "openBrowser"
     }
   },
-  "postStartCommand": "chmod +x /workspace/start.sh && bash /workspace/start.sh",
+  "postStartCommand": "bash /workspaces/silis/start.sh",
   "remoteUser": "root"
 }
