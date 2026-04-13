@@ -5,10 +5,6 @@ ENV DISPLAY=:99
 
 RUN apt-get update && apt-get install -y \
     wget \
-    libboost-all-dev \
-    tcl-dev \
-    libgomp1 \
-    libpython3.10 \
     xvfb \
     x11vnc \
     novnc \
@@ -25,11 +21,5 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
-
-# Install OpenROAD
-RUN wget https://github.com/The-OpenROAD-Project/OpenROAD/releases/download/v2.0-18118/openroad_Ubuntu22.04_amd64.tar.gz \
-    -O /tmp/openroad.tar.gz \
-    && tar -xzf /tmp/openroad.tar.gz -C /usr/local --strip-components=1 \
-    && rm /tmp/openroad.tar.gz
 
 WORKDIR /workspace
