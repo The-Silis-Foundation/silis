@@ -1,13 +1,6 @@
 {
-  "name": "Silis EDA",
-  "image": "ubuntu:22.04",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
   "forwardPorts": [6080],
-  "portsAttributes": {
-    "6080": {
-      "label": "Silis EDA GUI",
-      "onAutoForward": "openBrowser"
-    }
-  },
   "postStartCommand": "bash /workspaces/silis/start.sh",
   "remoteUser": "root"
 }
