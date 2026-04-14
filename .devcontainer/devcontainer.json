@@ -1,3 +1,12 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu"
+  "image": "openroad/flow-ubuntu22.04-builder:latest",
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "Silis GUI",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "postStartCommand": "pip install PyQt6 gdstk numpy && Xvfb :99 -screen 0 1600x900x24 & export DISPLAY=:99 && x11vnc -display :99 -nopw -forever & websockify --web /usr/share/novnc 6080 localhost:5900 & python3 /workspaces/silis/dev_eatheswar/pocpnrv37.py",
+  "remoteUser": "root"
 }
