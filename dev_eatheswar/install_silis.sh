@@ -52,20 +52,25 @@ if [ "$EUID" -ne 0 ]; then
     sudo -v
 fi
 
-# =============================================
-#   STEP 1 — SYSTEM UPDATE
-# =============================================
-echo ""
-echo -e "${BOLD}[STEP 1/7] Updating system packages...${NC}"
-sudo apt-get update -qq
-echo -e "${GREEN}✅ System updated${NC}"
+INSTALL_DIR="$HOME/silis-eda"
+VENV_DIR="$INSTALL_DIR/venv"
 
 # =============================================
-#   STEP 2 — PYTHON & PIP
+#   STEP 1 — SYSTEM UPDATE & CORE TOOLS
 # =============================================
 echo ""
-echo -e "${BOLD}[STEP 2/7] Installing Python3 and pip...${NC}"
-sudo apt-get install -y python3 python3-pip python3-venv > /dev/null 2>&1
+echo -e "${BOLD}[STEP 1/7] Updating system and installing core tools...${NC}"
+sudo apt-get update -qq
+# Fixed: Added git and wget which are required later
+sudo apt-get install -y git wget curl > /dev/null 2>&1 || { echo -e "${RED}❌ Core tools installation failed.${NC}"; exit 1; }
+echo -e "${GREEN}✅ System updated and core tools installed${NC}"
+
+# =============================================
+#   STEP 2 — PYTHON & VENV
+# =============================================
+echo ""
+echo -e "${BOLD}[STEP 2/7] Installing Python3 and venv...${NC}"
+sudo apt-get install -y python3 python3-pip python3-venv > /dev/null 2>&1 || { echo -e "${RED}❌ Python3 installation failed.${NC}"; exit 1; }
 echo -e "${GREEN}✅ Python3 ready: $(python3 --version)${NC}"
 
 # =============================================
@@ -88,17 +93,32 @@ sudo apt-get install -y \
     libdbus-1-3 \
     libfontconfig1 \
     libfreetype6 \
-    > /dev/null 2>&1
+    > /dev/null 2>&1 || { echo -e "${RED}❌ Qt6 dependencies failed.${NC}"; exit 1; }
 echo -e "${GREEN}✅ Qt6 display libraries installed${NC}"
 
 # =============================================
-#   STEP 4 — PYTHON PACKAGES
+#   STEP 4 — CLONE REPO & VIRTUAL ENV SETUP
 # =============================================
 echo ""
-echo -e "${BOLD}[STEP 4/7] Installing Python packages (PyQt6, gdstk, numpy)...${NC}"
-pip3 install --upgrade pip > /dev/null 2>&1
-pip3 install PyQt6 PyQt6-Qt6 PyQt6-sip gdstk numpy > /dev/null 2>&1
-echo -e "${GREEN}✅ Python packages installed${NC}"
+echo -e "${BOLD}[STEP 4/7] Setting up Silis EDA Environment...${NC}"
+
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo -ne "  ⏳ Cloning Silis repo...           "
+    git clone https://github.com/The-Silis-Foundation/silis.git "$INSTALL_DIR" > /dev/null 2>&1
+    echo -e "${GREEN}✅ Cloned to $INSTALL_DIR${NC}"
+else
+    echo -e "${CYAN}  ℹ️  Silis directory already exists at $INSTALL_DIR${NC}"
+fi
+
+echo -ne "  ⏳ Creating Python Virtual Environment... "
+python3 -m venv "$VENV_DIR"
+echo -e "${GREEN}✅ Venv created${NC}"
+
+echo -ne "  ⏳ Installing Python packages...          "
+# Fixed: Using isolated venv pip to avoid Ubuntu 24.04 global pip block
+"$VENV_DIR/bin/pip" install --upgrade pip > /dev/null 2>&1
+"$VENV_DIR/bin/pip" install PyQt6 PyQt6-Qt6 PyQt6-sip gdstk numpy > /dev/null 2>&1
+echo -e "${GREEN}✅ Packages installed in venv${NC}"
 
 # =============================================
 #   STEP 5 — EDA TOOLS
@@ -110,7 +130,7 @@ echo -e "${BOLD}[STEP 5/7] Installing EDA tools...${NC}"
 echo -ne "  ⏳ Installing Icarus Verilog...    "
 sudo apt-get install -y iverilog > /dev/null 2>&1
 if command -v iverilog &> /dev/null; then
-    echo -e "${GREEN}✅ iverilog $(iverilog -V 2>&1 | head -1)${NC}"
+    echo -e "${GREEN}✅ iverilog $(iverilog -V 2>&1 | head -1 | awk '{print $4}')${NC}"
 else
     echo -e "${RED}❌ Icarus Verilog failed${NC}"
 fi
@@ -119,12 +139,12 @@ fi
 echo -ne "  ⏳ Installing Yosys...             "
 sudo apt-get install -y yosys > /dev/null 2>&1
 if command -v yosys &> /dev/null; then
-    echo -e "${GREEN}✅ $(yosys --version 2>&1 | head -1)${NC}"
+    echo -e "${GREEN}✅ $(yosys --version 2>&1 | head -1 | awk '{print $1, $2}')${NC}"
 else
     echo -e "${RED}❌ Yosys failed${NC}"
 fi
 
-# --- Graphviz (for schematic generation) ---
+# --- Graphviz ---
 echo -ne "  ⏳ Installing Graphviz...          "
 sudo apt-get install -y graphviz > /dev/null 2>&1
 if command -v dot &> /dev/null; then
@@ -153,12 +173,15 @@ fi
 
 # --- OpenROAD ---
 echo ""
-echo -ne "  ⏳ Installing OpenROAD (this takes a few minutes)... "
-OPENROAD_URL="https://github.com/The-OpenROAD-Project/OpenROAD/releases/download/v2.0-18118/openroad_Ubuntu22.04_amd64.tar.gz"
+echo -ne "  ⏳ Installing OpenROAD (Downloading binary)... "
+# Fixed: OpenROAD logic for 24.04 and explicit error handling
+OPENROAD_VER="v2.0-18118"
+OPENROAD_URL="https://github.com/The-OpenROAD-Project/OpenROAD/releases/download/${OPENROAD_VER}/openroad_Ubuntu22.04_amd64.tar.gz"
 
-# Check Ubuntu version for correct binary
 if [[ "$VER" == "20.04" ]]; then
-    OPENROAD_URL="https://github.com/The-OpenROAD-Project/OpenROAD/releases/download/v2.0-18118/openroad_Ubuntu20.04_amd64.tar.gz"
+    OPENROAD_URL="https://github.com/The-OpenROAD-Project/OpenROAD/releases/download/${OPENROAD_VER}/openroad_Ubuntu20.04_amd64.tar.gz"
+elif [[ "$VER" == "24.04" ]]; then
+    echo -ne "${YELLOW}(Using 22.04 binary for 24.04)... ${NC}"
 fi
 
 wget -q "$OPENROAD_URL" -O /tmp/openroad.tar.gz
@@ -168,14 +191,14 @@ if [ $? -eq 0 ]; then
     if command -v openroad &> /dev/null; then
         echo -e "${GREEN}✅ OpenROAD installed${NC}"
     else
-        echo -e "${RED}❌ OpenROAD binary not found after install${NC}"
+        echo -e "${RED}❌ OpenROAD binary unpacked but not found in PATH${NC}"
     fi
 else
-    echo -e "${RED}❌ OpenROAD download failed. Check your internet connection.${NC}"
+    echo -e "${RED}❌ Download failed. Link may be dead or network is down.${NC}"
 fi
 
 # =============================================
-#   STEP 6 — OPENSTA (for timing analysis)
+#   STEP 6 — OPENSTA
 # =============================================
 echo ""
 echo -ne "  ⏳ Installing OpenSTA...           "
@@ -187,35 +210,20 @@ else
 fi
 
 # =============================================
-#   STEP 7 — CLONE REPO & SETUP
+#   STEP 7 — CREATE LAUNCHER
 # =============================================
 echo ""
-echo -e "${BOLD}[STEP 6/7] Setting up Silis EDA...${NC}"
-
-INSTALL_DIR="$HOME/silis-eda"
-
-if [ ! -d "$INSTALL_DIR" ]; then
-    echo -ne "  ⏳ Cloning Silis repo...           "
-    git clone https://github.com/The-Silis-Foundation/silis.git "$INSTALL_DIR" > /dev/null 2>&1
-    echo -e "${GREEN}✅ Cloned to $INSTALL_DIR${NC}"
-else
-    echo -e "${CYAN}  ℹ️  Silis directory already exists at $INSTALL_DIR${NC}"
-fi
-
-# =============================================
-#   CREATE LAUNCHER
-# =============================================
-echo ""
-echo -e "${BOLD}[STEP 7/7] Creating launcher...${NC}"
+echo -e "${BOLD}[STEP 7/7] Creating launchers...${NC}"
 
 # Desktop launcher
+# Fixed: Pointing to the venv python executable
 cat > "$HOME/Desktop/Silis-EDA.desktop" << EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Silis EDA
 Comment=Silicon Scaffold EDA Tool
-Exec=python3 $INSTALL_DIR/dev_eatheswar/pocpnrv37.py
+Exec=$VENV_DIR/bin/python $INSTALL_DIR/dev_eatheswar/pocpnrv37.py
 Icon=utilities-terminal
 Terminal=false
 Categories=Science;Engineering;
@@ -223,13 +231,14 @@ EOF
 chmod +x "$HOME/Desktop/Silis-EDA.desktop" 2>/dev/null
 
 # Terminal launcher command
+# Fixed: Pointing to the venv python executable and passing arguments "$@"
 sudo bash -c "cat > /usr/local/bin/silis << 'EOF'
 #!/bin/bash
-python3 $INSTALL_DIR/dev_eatheswar/pocpnrv37.py
+$VENV_DIR/bin/python $INSTALL_DIR/dev_eatheswar/pocpnrv37.py \"\$@\"
 EOF"
 sudo chmod +x /usr/local/bin/silis
 
-echo -e "${GREEN}✅ Launcher created${NC}"
+echo -e "${GREEN}✅ Launchers created natively and for terminal${NC}"
 
 # =============================================
 #   SUMMARY
@@ -251,10 +260,10 @@ echo ""
 echo -e "${BOLD}How to launch Silis EDA:${NC}"
 echo -e "  ${CYAN}Option 1:${NC} Type 'silis' in terminal"
 echo -e "  ${CYAN}Option 2:${NC} Double-click 'Silis-EDA' on Desktop"
-echo -e "  ${CYAN}Option 3:${NC} python3 $INSTALL_DIR/dev_eatheswar/pocpnrv37.py"
+echo -e "  ${CYAN}Option 3:${NC} $VENV_DIR/bin/python $INSTALL_DIR/dev_eatheswar/pocpnrv37.py"
 echo ""
-echo -e "${BOLD}Launch now? (y/n):${NC} "
+echo -ne "${BOLD}Launch now? (y/n):${NC} "
 read -r LAUNCH
 if [[ "$LAUNCH" == "y" || "$LAUNCH" == "Y" ]]; then
-    python3 "$INSTALL_DIR/dev_eatheswar/pocpnrv37.py"
+    "$VENV_DIR/bin/python" "$INSTALL_DIR/dev_eatheswar/pocpnrv37.py"
 fi
