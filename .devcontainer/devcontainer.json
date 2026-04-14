@@ -7,6 +7,6 @@
       "onAutoForward": "openBrowser"
     }
   },
-  "postStartCommand": "pip install PyQt6 gdstk numpy && Xvfb :99 -screen 0 1600x900x24 & export DISPLAY=:99 && x11vnc -display :99 -nopw -forever & websockify --web /usr/share/novnc 6080 localhost:5900 & python3 /workspaces/silis/dev_eatheswar/pocpnrv37.py",
+  "postStartCommand": "bash /workspaces/silis/start.sh",
   "remoteUser": "root"
 }
