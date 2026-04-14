@@ -1,6 +1,3 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
-  "forwardPorts": [6080],
-  "postStartCommand": "bash /workspaces/silis/start.sh",
-  "remoteUser": "root"
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu"
 }
