@@ -338,6 +338,77 @@ class MacroManager:
         self.macros = [m for m in self.macros if m['name'] != name]
         self.save_cache()
 
+import glob
+import re
+
+class MacroScannerWorker(QThread):
+    finished = pyqtSignal(int)
+    log = pyqtSignal(str)
+
+    def __init__(self, libs_ref_path, macro_mgr):
+        super().__init__()
+        self.libs_ref_path = libs_ref_path
+        self.macro_mgr = macro_mgr
+
+    def run(self):
+        self.log.emit(f"[Scanner] Indexing {self.libs_ref_path} for macros...")
+        found_count = 0
+        try:
+            for folder_name in os.listdir(self.libs_ref_path):
+                folder_path = os.path.join(self.libs_ref_path, folder_name)
+                if not os.path.isdir(folder_path): continue
+                
+                lef_dir = os.path.join(folder_path, "lef")
+                lib_dir = os.path.join(folder_path, "lib")
+                v_dir = os.path.join(folder_path, "verilog")
+                gds_dir = os.path.join(folder_path, "gds")
+                
+                if not os.path.exists(lef_dir): continue
+                
+                for lef_file in glob.glob(os.path.join(lef_dir, "*.lef")):
+                    macro_name = os.path.splitext(os.path.basename(lef_file))[0]
+                    
+                    lib_files = glob.glob(os.path.join(lib_dir, f"{macro_name}*.lib"))
+                    v_files = glob.glob(os.path.join(v_dir, f"{macro_name}*.v"))
+                    gds_files = glob.glob(os.path.join(gds_dir, f"{macro_name}*.gds"))
+                    
+                    lib_path = lib_files[0] if lib_files else ""
+                    v_path = v_files[0] if v_files else ""
+                    gds_path = gds_files[0] if gds_files else ""
+                    
+                    width, height = 0.0, 0.0
+                    ports = []
+                    try:
+                        with open(lef_file, 'r') as f:
+                            content = f.read()
+                            size_match = re.search(r'SIZE\s+([\d.]+)\s+BY\s+([\d.]+)\s+;', content)
+                            if size_match:
+                                width = float(size_match.group(1))
+                                height = float(size_match.group(2))
+                            pin_blocks = re.findall(r'PIN\s+(\S+)[\s\S]*?DIRECTION\s+(\S+)\s+;', content)
+                            for pin_name, direction in pin_blocks:
+                                ports.append({'name': pin_name, 'direction': direction})
+                    except Exception as e:
+                        self.log.emit(f"[Scanner] Error parsing LEF {lef_file}: {e}")
+                    
+                    macro_data = {
+                        'name': macro_name,
+                        'lef': lef_file.replace('\\', '/'),
+                        'lib': lib_path.replace('\\', '/'),
+                        'v': v_path.replace('\\', '/'),
+                        'gds': gds_path.replace('\\', '/'),
+                        'width': width,
+                        'height': height,
+                        'ports': ports
+                    }
+                    self.macro_mgr.update_macro(macro_data)
+                    found_count += 1
+            
+            self.finished.emit(found_count)
+        except Exception as e:
+            self.log.emit(f"[Scanner] Crashed: {e}")
+            self.finished.emit(-1)
+
 class ManualPDKDialog(QDialog):
     def __init__(self, parent=None, config=None):
         super().__init__(parent)
@@ -547,6 +618,9 @@ class SiliconConfigHub(QDialog):
         r = self.pdk_table.currentRow()
         if r >= 0: self.ide.active_pdk = self.pdk_table.item(r, 0).data(Qt.ItemDataRole.UserRole)
         elif self.pdk_table.rowCount() > 0: self.ide.active_pdk = self.pdk_table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+        else:
+            QMessageBox.warning(self, "Error", "Please select a valid PDK configuration first.")
+            return
             
         checked_macros = []
         for row in range(self.mac_table.rowCount()):
@@ -1769,6 +1843,16 @@ class EditorTabWidget(QTabWidget):
         w = self.get_current_editor_widget()
         if not w: return None
         return w.editor
+
+    def toPlainText(self) -> str:
+        """Shim so callers that treat EditorTabWidget as a plain editor still work."""
+        e = self.get_current_editor()
+        return e.toPlainText() if e else ""
+
+    def setPlainText(self, text: str):
+        """Shim so callers can set text on the active tab."""
+        e = self.get_current_editor()
+        if e: e.setPlainText(text)
 
     def new_untitled_tab(self):
         w = EditorWidget(self)
@@ -3052,9 +3136,7 @@ class BackendWidget(QWidget):
             return
 
         if step_name == "STA":
-            if not self.ide.active_pdk: 
-                QMessageBox.critical(self, "Error", "PDK not active.")
-                return
+            if not self.ide.ensure_pdk_active(): return
             self.term_log.append("\n[SIGNOFF] Running Signoff Timing Analysis...")
             lib_cmd = f"read_liberty \"{self.ide.active_pdk['lib']}\""
             cmd = f"{lib_cmd}\nreport_checks -path_delay max -format full_clock_expanded -fields {{slew cap input_pins fanout}} -digits 4\nreport_worst_slack -max\nreport_tns\nreport_wns"
@@ -3080,9 +3162,7 @@ class BackendWidget(QWidget):
                     self.load_checkpoint()
                     return
                 
-            if not self.ide.active_pdk: 
-                 QMessageBox.warning(self, "Error", "Declare PDK in Synthesis tab first!")
-                 return
+            if not self.ide.ensure_pdk_active(): return
             
             ctx = self.ide.get_context()[0] or "top"
             netlist_path = os.path.join(proj_root, "netlist", f"{ctx}_netlist.v")
@@ -4520,7 +4600,7 @@ class BackendWidget(QWidget):
             return
 
         if step_name == "STA":
-            if not self.ide.active_pdk: QMessageBox.critical(self, "Error", "PDK not active."); return
+            if not self.ide.ensure_pdk_active(): return
             self.term_log.append("\n[SIGNOFF] Running Signoff Timing Analysis...")
             lib_cmd = f"read_liberty \"{self.ide.active_pdk['lib']}\""
             cmd = f"{lib_cmd}\nreport_checks -path_delay max -format full_clock_expanded -fields {{slew cap input_pins fanout}} -digits 4\nreport_worst_slack -max\nreport_tns\nreport_wns"
@@ -4540,8 +4620,7 @@ class BackendWidget(QWidget):
                 reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if reply == QMessageBox.StandardButton.Yes: self.load_checkpoint(); return
             
-            if not self.ide.active_pdk: 
-                 QMessageBox.warning(self, "Error", "Declare PDK in Synthesis tab first!"); return
+            if not self.ide.ensure_pdk_active(): return
             
             ctx = self.ide.get_context()[0] or "top"
             netlist_path = os.path.join(proj_root, "netlist", f"{ctx}_netlist.v")
@@ -5203,86 +5282,47 @@ class SilisIDE(QMainWindow):
         self.tab_schem.view.load_schematic(path)
 
     def run_synthesis_flow(self):
-        if not self.active_pdk: 
-            QMessageBox.warning(self, "Err", "Select PDK!"); return
+        if not self.ensure_pdk_active(): return
         _, base = self.get_context()
-        if not base: return
+        if not base:
+            QMessageBox.warning(self, "No Design", "Open a Verilog file first — no module found in the editor.")
+            return
         root = self.prep_workspace(base)
-        self.pdk_path = self.active_pdk['lib']
         self.run_synthesis_thread(root, base)
 
     def run_synthesis_thread(self, root, base):
-        # Clear the unified log before starting
         self.tab_synth.log_main.clear()
+        self.tab_synth.log_main.document().setMaximumBlockCount(10000)  # Prevent unbounded document growth
         self.tab_synth.card_status.setText("RUNNING...")
-        self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
+        self.tab_synth.card_status.setStyleSheet(
+            "background:#eaeef2; color:#57606a; font-weight:bold; "
+            "padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
-        v_net = f"netlist/{base}_netlist.v"
         src_v = glob.glob(os.path.join(root, "source", "*.v"))
         src_v = [s for s in src_v if "tb_" not in s]
-        read_cmd = f"read_verilog {' '.join(src_v)}" if src_v else ""
-        
-        # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
-        # Note the 'tee -o reports/area.rpt' to save area stats to a file
-        ys = f"""
-        read_liberty -lib {self.pdk_path}
-        {read_cmd}
-        synth -top {base}
-        dfflibmap -liberty {self.pdk_path}
-        abc -liberty {self.pdk_path}
-        tee -o reports/area.rpt stat -liberty {self.pdk_path} -json
-        write_verilog -noattr {v_net}
-        """
-        with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
-        
-        # --- 2. STA SCRIPT (With Explicit File Dumps) ---
-        # Redirects output (>) to timing.rpt and power.rpt
-        tcl = f"""
-        read_liberty {self.pdk_path}
-        read_verilog {v_net}
-        link_design {base}
-        read_sdc netlist/{base}.sdc
-        report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
-        report_power > reports/power.rpt
-        exit
-        """
-        with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
 
-        def task():
-            self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
-            
-            # --- STEP 1: YOSYS ---
-            try:
-                # We pipe output to a file AND the GUI queue
-                log_path = os.path.join(root, "reports/synthesis.log")
-                with open(log_path, "w") as log_file:
-                    p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                    
-                    for line in iter(p1.stdout.readline, ''):
-                        line = line.strip()
-                        if line:
-                            self.queue.put(("[YOSYS]", line)) 
-                            log_file.write(line + "\n")
-                    p1.wait()
-                    if p1.returncode != 0: raise Exception("Yosys Failed")
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
+        self.synth_worker = SynthWorker(root, base, self.active_pdk['lib'], src_v)
+        self.synth_worker.log_line.connect(self._on_synth_log)
+        self.synth_worker.finished.connect(self._on_synth_done)
+        self.synth_worker.start()
 
-            # --- STEP 2: OPENSTA ---
-            try:
-                p2 = subprocess.Popen(f"sta sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                for line in iter(p2.stdout.readline, ''):
-                    line = line.strip()
-                    if line:
-                        self.queue.put(("[STA]", line)) 
-                p2.wait()
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
+    def _on_synth_log(self, tag, line):
+        """Slot — runs on the main GUI thread via Qt signal, zero polling needed."""
+        self.tab_synth.log_main.append(line)
+        sb = self.tab_synth.log_main.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        if tag == "[SYS]":
+            self.log_system(line)
 
-            self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
-            self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
-        
-        threading.Thread(target=task, daemon=True).start()
+    def _on_synth_done(self, success):
+        if success:
+            self.tab_synth.update_dashboard()
+        status = "TIMING MET" if success else "SYNTHESIS FAILED"
+        color  = "#2da44e" if success else "#cf222e"
+        self.tab_synth.card_status.setText(status)
+        self.tab_synth.card_status.setStyleSheet(
+            f"background:{color}; color:white; font-weight:bold; "
+            f"padding:15px; border-radius:6px;")
 
     def run_simulation(self):
         if self.current_file: self.save_file()
@@ -5391,12 +5431,17 @@ class SilisIDE(QMainWindow):
         self.term_mode = "SIM" if self.term_mode == "SHELL" else "SHELL"
         self.tab_compile.mode_btn.setText(f"[{self.term_mode}]")
 
+    def ensure_pdk_active(self):
+        if self.active_pdk: return True
+        self.open_pdk_selector()
+        return self.active_pdk is not None
+
     def open_pdk_selector(self):
         # Summon the new Hub instead of the old PDKSelector
         dlg = SiliconConfigHub(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted and self.active_pdk:
             # Update the Synthesis tab labels to show the config
-            pdk_name = self.active_pdk['name'] if self.active_pdk else "None"
+            pdk_name = self.active_pdk['name']
             macro_count = len(self.active_macros)
             self.tab_synth.lbl_pdk.setText(f"<b>PDK:</b> {pdk_name} | <b>Macros:</b> {macro_count}")
             
@@ -5404,6 +5449,18 @@ class SilisIDE(QMainWindow):
             self.backend_widget.active_pdk = self.active_pdk
             
             self.log_system(f"Config Locked -> PDK: {pdk_name}, Macros: {macro_count}")
+            
+            # Auto-Discover Macros
+            if 'lib' in self.active_pdk:
+                lib_path = self.active_pdk['lib']
+                if 'libs.ref' in lib_path:
+                    libs_ref = lib_path.split('libs.ref')[0] + 'libs.ref'
+                    self.log_system("[Scanner] Starting Macro Auto-Discovery...")
+                    self.macro_scanner = MacroScannerWorker(libs_ref, self.macro_mgr)
+                    self.macro_scanner.log.connect(self.log_system)
+                    self.macro_scanner.finished.connect(lambda c: self.log_system(f"[Scanner] Finished. Found {c} macros."))
+                    self.macro_scanner.start()
+                    
             return True
         return False 
 
@@ -5446,9 +5503,18 @@ class SilisIDE(QMainWindow):
         self.tab_compile.editor.close_tab(self.tab_compile.editor.currentIndex())
 
     def get_context(self):
-        content = self.tab_compile.editor.toPlainText()
+        print("DEBUG: [get_context] Called", flush=True)
+        editor = self.tab_compile.editor.get_current_editor()
+        if not editor:
+            print("DEBUG: [get_context] No active editor tab!", flush=True)
+            return None, None
+        content = editor.toPlainText()
+        print(f"DEBUG: [get_context] content length={len(content)}", flush=True)
         m = re.search(r'module\s+(\w+)', content)
-        if not m: return None, None
+        if not m:
+            print("DEBUG: [get_context] No module found in editor content", flush=True)
+            return None, None
+        print(f"DEBUG: [get_context] Found module: {m.group(1)}", flush=True)
         return m.group(1), m.group(1).replace("tb_", "").replace("_tb", "")
 
     def get_proj_root(self, base):
@@ -5488,35 +5554,44 @@ class SilisIDE(QMainWindow):
     # --- FIXED QUEUE PROCESSOR ---
     # === REPLACE IN SilisIDE CLASS ===
     def process_queue(self):
-        while not self.queue.empty():
+        synth_batch = []
+        backend_batch = []
+        term_batch = []
+        
+        count = 0
+        # Cap max items per 50ms tick so the main GUI thread remains 100% responsive
+        while not self.queue.empty() and count < 150:
+            count += 1
             item = self.queue.get()
             
             if isinstance(item, tuple): tag, content = item
             else: tag, content = "SYS", str(item)
 
-            # [NEW] Route terminal command output to the VSCode terminal widget
             if tag == "TERM_OUT":
-                self.tab_compile.terminal.append_output(content)
-
-            # [NEW] Route Backend-specific messages to Backend Terminal
+                term_batch.append(content)
             elif tag == "[BACKEND]":
-                self.backend_widget.term_log.append(content)
-                self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
-
-            # Existing Routing...
+                backend_batch.append(content)
             elif tag == "UPDATE_DASHBOARD":
                 self.tab_synth.update_dashboard()
-                
             elif tag in ["[YOSYS]", "[STA]", "SYNTH_LOG", "STA_LOG"]:
-                self.tab_synth.log_main.append(content)
-                sb = self.tab_synth.log_main.verticalScrollBar()
-                sb.setValue(sb.maximum())
-                
+                synth_batch.append(content)
             elif tag == "[SYS]" or tag == "SYS":
                 self.log_system(content)
-                
             else:
                 self.log_system(str(item))
+
+        # Perform single batch writes to reduce Qt repaints from 1000s down to 1 per frame
+        if term_batch:
+            self.tab_compile.terminal.append_output("\n".join(term_batch))
+            
+        if backend_batch:
+            self.backend_widget.term_log.append("\n".join(backend_batch))
+            self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
+            
+        if synth_batch:
+            self.tab_synth.log_main.append("\n".join(synth_batch))
+            sb = self.tab_synth.log_main.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def load_violation_log(self): 
         self.frontend_tabs.setCurrentIndex(3)
@@ -5527,6 +5602,125 @@ class SilisIDE(QMainWindow):
     
     def update_ui_labels(self): pass
 # ================= WORKER CLASS =================
+
+# =============================================================================
+#  SYNTH WORKER — QThread with signals (no polling queue, no GUI freeze)
+# =============================================================================
+class SynthWorker(QThread):
+    # tag = "[YOSYS]" | "[STA]" | "[SYS]"
+    log_line = pyqtSignal(str, str)
+    finished = pyqtSignal(bool)   # True = success
+
+    def __init__(self, root, base, pdk_lib, src_v):
+        super().__init__()
+        self.root    = root
+        self.base    = base
+        self.pdk_lib = pdk_lib
+        self.src_v   = src_v
+
+    def _stream(self, proc, tag):
+        for raw in iter(proc.stdout.readline, ''):
+            line = raw.strip()
+            if line:
+                self.log_line.emit(tag, line)
+        proc.wait()
+        return proc.returncode
+
+    def run(self):
+        import time
+        root    = self.root
+        base    = self.base
+        lib     = self.pdk_lib
+        v_net   = f"netlist/{base}_netlist.v"
+        src_v   = self.src_v
+        read_cmd = f"read_verilog {' '.join(src_v)}" if src_v else ""
+
+        # --- Write Yosys script ---
+        ys = f"""
+read_liberty -lib {lib}
+{read_cmd}
+synth -top {base}
+dfflibmap -liberty {lib}
+abc -liberty {lib}
+tee -o reports/area.rpt stat -liberty {lib} -json
+write_verilog -noattr {v_net}
+"""
+        with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
+
+        # --- Write STA script ---
+        tcl = f"""
+read_liberty {lib}
+read_verilog {v_net}
+link_design {base}
+read_sdc netlist/{base}.sdc
+report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
+report_power > reports/power.rpt
+exit
+"""
+        with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
+
+        self.log_line.emit("[SYS]", "=== Starting Synthesis (Yosys) ===")
+
+        # --- Step 1: Yosys ---
+        log_path = os.path.join(root, "reports/synthesis.log")
+        try:
+            with open(log_path, 'w') as lf:
+                p1 = subprocess.Popen(
+                    "yosys synth.ys", shell=True, cwd=root,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1)
+                
+                batch = []
+                for raw in iter(p1.stdout.readline, ''):
+                    line = raw.strip()
+                    if line:
+                        batch.append(line)
+                        lf.write(line + "\n")
+                    
+                    if len(batch) >= 100:
+                        self.log_line.emit("[YOSYS]", "\n".join(batch))
+                        batch.clear()
+                
+                if batch:
+                    self.log_line.emit("[YOSYS]", "\n".join(batch))
+                p1.wait()
+            if p1.returncode != 0:
+                self.log_line.emit("[SYS]", f"[ERR] Yosys failed (exit {p1.returncode})")
+                self.finished.emit(False); return
+        except Exception as e:
+            self.log_line.emit("[SYS]", f"[ERR] Yosys: {e}")
+            self.finished.emit(False); return
+
+        self.log_line.emit("[SYS]", "=== Yosys done — Running OpenSTA ===")
+
+        # --- Step 2: OpenSTA ---
+        try:
+            sta_bin = "sta" if shutil.which("sta") else "opensta"
+            p2 = subprocess.Popen(
+                f"{sta_bin} sta.tcl", shell=True, cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1)
+            
+            batch = []
+            for raw in iter(p2.stdout.readline, ''):
+                line = raw.strip()
+                if line:
+                    batch.append(line)
+                
+                if len(batch) >= 50:
+                    self.log_line.emit("[STA]", "\n".join(batch))
+                    batch.clear()
+                    
+            if batch:
+                self.log_line.emit("[STA]", "\n".join(batch))
+            p2.wait()
+        except Exception as e:
+            self.log_line.emit("[SYS]", f"[ERR] STA: {e}")
+            self.finished.emit(False); return
+
+        self.log_line.emit("[SYS]", "=== Synthesis & Timing Complete ===")
+        self.finished.emit(True)
+
 
 class SchematicWorker(QThread):
     finished = pyqtSignal(str); log = pyqtSignal(str, str)
