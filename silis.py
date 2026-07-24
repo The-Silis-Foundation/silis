@@ -5327,40 +5327,44 @@ class SilisIDE(QMainWindow):
         """
         with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
 
-        self.tab_synth.log_main.appendPlainText("[SYS] Starting Synthesis Flow (Foreground)...")
-        QApplication.processEvents()
+        def task():
+            self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
+            
+            # --- STEP 1: YOSYS ---
+            try:
+                # We pipe output to a file AND the GUI queue
+                log_path = os.path.join(root, "reports/synthesis.log")
+                with open(log_path, "w") as log_file:
+                    p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    
+                    for line in iter(p1.stdout.readline, ''):
+                        line = line.strip()
+                        if line:
+                            self.queue.put(("[YOSYS]", line)) 
+                            log_file.write(line + "\n")
+                    p1.wait()
+                    if p1.returncode != 0: raise Exception("Yosys Failed")
+            except Exception as e:
+                self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
 
-        try:
-            log_path = os.path.join(root, "reports/synthesis.log")
-            with open(log_path, "w") as log_file:
-                # --- STEP 1: YOSYS ---
-                ret1 = subprocess.run(f"yosys synth.ys", shell=True, cwd=root, capture_output=True, text=True)
-                if ret1.stdout:
-                    log_file.write(ret1.stdout)
-                    self.tab_synth.log_main.appendPlainText(ret1.stdout)
-                if ret1.stderr:
-                    log_file.write(ret1.stderr)
-                    self.tab_synth.log_main.appendPlainText(ret1.stderr)
-                if ret1.returncode != 0: raise Exception("Yosys Failed")
+            self.queue.put(("[SYS]", "=== Yosys done — Running OpenSTA ==="))
 
-                self.tab_synth.log_main.appendPlainText("[SYS] === Yosys done — Running OpenSTA ===")
-                QApplication.processEvents()
-
-                # --- STEP 2: OPENSTA ---
+            # --- STEP 2: OPENSTA ---
+            try:
                 sta_bin = "sta" if shutil.which("sta") else "opensta"
-                ret2 = subprocess.run(f"{sta_bin} sta.tcl", shell=True, cwd=root, capture_output=True, text=True)
-                if ret2.stdout:
-                    log_file.write(ret2.stdout)
-                    self.tab_synth.log_main.appendPlainText(ret2.stdout)
-                if ret2.stderr:
-                    log_file.write(ret2.stderr)
-                    self.tab_synth.log_main.appendPlainText(ret2.stderr)
-                if ret2.returncode != 0: raise Exception("STA Failed")
+                p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                for line in iter(p2.stdout.readline, ''):
+                    line = line.strip()
+                    if line:
+                        self.queue.put(("[STA]", line)) 
+                p2.wait()
+            except Exception as e:
+                self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
 
-            self.tab_synth.log_main.appendPlainText("[SYS] Synthesis & Timing Complete.")
-            self.tab_synth.update_dashboard()
-        except Exception as e:
-            self.tab_synth.log_main.appendPlainText(f"[ERR] Synthesis Crash: {e}")
+            self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
+            self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
+        
+        threading.Thread(target=task, daemon=True).start()
 
     def run_simulation(self):
         if self.current_file: self.save_file()
@@ -5590,7 +5594,12 @@ class SilisIDE(QMainWindow):
              with open(p) as f: self.tab_synth.log_main.setPlainText(f.read())
     
     def process_queue(self):
-        while not self.queue.empty():
+        count = 0
+        scroll_synth = False
+        scroll_backend = False
+        
+        while not self.queue.empty() and count < 150:
+            count += 1
             item = self.queue.get()
             
             if isinstance(item, tuple): tag, content = item
@@ -5601,20 +5610,28 @@ class SilisIDE(QMainWindow):
 
             elif tag == "[BACKEND]":
                 self.backend_widget.term_log.append(content)
-                self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
+                scroll_backend = True
 
             elif tag == "UPDATE_DASHBOARD":
                 self.tab_synth.update_dashboard()
                 
             elif tag in ["[YOSYS]", "[STA]", "SYNTH_LOG", "STA_LOG"]:
                 self.tab_synth.log_main.appendPlainText(content)
-                sb = self.tab_synth.log_main.verticalScrollBar()
-                sb.setValue(sb.maximum())
+                scroll_synth = True
                 
             elif tag == "[SYS]" or tag == "SYS":
                 self.log_system(content)
             else:
                 self.log_system(str(item))
+                
+        # Batch repaints outside the loop
+        if scroll_synth:
+            sb = self.tab_synth.log_main.verticalScrollBar()
+            sb.setValue(sb.maximum())
+            
+        if scroll_backend:
+            sb = self.backend_widget.term_log.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def load_violation_log(self): 
         self.frontend_tabs.setCurrentIndex(3)
