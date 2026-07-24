@@ -1,3 +1,0 @@
-fix .vcd file opening via f2
-add on and off feature for auto directory management
-add custom superkey-make it changable in settings
