@@ -3845,7 +3845,7 @@ class ReportEngine:
                     metrics["cell_list"] = sorted([(k, int(v)) for k, v in raw_cells], key=lambda x: x[1], reverse=True)
                 
                 for line in log_content.split('\n'):
-                    if "ERROR" in line or "Warning:" in line:
+                    if "ERROR" in line:
                         if len(metrics["errors"]) < 10: metrics["errors"].append(line.strip())
 
         # 2. PARSE AREA REPORT (Yosys JSON Format)
@@ -4059,6 +4059,8 @@ class SynthesisTab(QWidget):
         
         self.log_main = QPlainTextEdit(); self.log_main.setReadOnly(True)
         self.log_main.setMaximumBlockCount(10000)
+        # CRITICAL FIX: Prevent catastrophic hanging from long single lines (like JSON/Wire lists)
+        self.log_main.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap) 
         self.log_main.setStyleSheet("background:#0d1117; color:#c9d1d9; font-family:Consolas; border:none;")
         self.log_tabs.addTab(self.log_main, "Build Output")
         
@@ -4103,36 +4105,39 @@ class SynthesisTab(QWidget):
         lay.addWidget(right_col, stretch=1)
 
     def update_dashboard(self):
-        # NEW: Parse from FILES in the report directory
-        _, base = self.ide.get_context()
-        if not base: return
-        root = self.ide.get_proj_root(base)
-        report_dir = os.path.join(root, "reports")
-        
-        m = ReportEngine.parse_files(report_dir)
-        
-        if m["status"] == "MET":
-            self.card_status.setText("TIMING MET")
-            self.card_status.setStyleSheet("background:#2da44e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
-        elif m["status"] == "VIOLATED":
-            self.card_status.setText("TIMING FAIL")
-            self.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+        try:
+            # NEW: Parse from FILES in the report directory
+            _, base = self.ide.get_context()
+            if not base: return
+            root = self.ide.get_proj_root(base)
+            report_dir = os.path.join(root, "reports")
             
-        self.val_wns.setText(f"{m['wns']} ns")
-        self.val_area.setText(f"{m['area']} um^2")
-        self.val_gates.setText(m['cells'])
-        
-        self.list_err.clear()
-        for e in m['errors']: self.list_err.addItem(e)
-        if m['errors']: self.log_tabs.setCurrentIndex(1)
-        
-        rpt = ReportEngine.generate_report(m, base or "design")
-        self.preview.setPlainText(rpt)
-        self.last_report = rpt
-        
-        self.ide.log_system("Generating Post Synthesis Report...", "SYS")
-        print(rpt) 
-        self.ide.log_system("Report generated in background.", "RPT")
+            m = ReportEngine.parse_files(report_dir)
+            
+            if m["status"] == "MET":
+                self.card_status.setText("TIMING MET")
+                self.card_status.setStyleSheet("background:#2da44e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+            elif m["status"] == "VIOLATED":
+                self.card_status.setText("TIMING FAIL")
+                self.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+                
+            self.val_wns.setText(f"{m['wns']} ns")
+            self.val_area.setText(f"{m['area']} um^2")
+            self.val_gates.setText(m['cells'])
+            
+            self.list_err.clear()
+            for e in m['errors']: self.list_err.addItem(e)
+            if m['errors']: self.log_tabs.setCurrentIndex(1)
+            
+            rpt = ReportEngine.generate_report(m, base or "design")
+            self.preview.setPlainText(rpt)
+            self.last_report = rpt
+            
+            self.ide.log_system("Generating Post Synthesis Report...", "SYS")
+            print(rpt) 
+            self.ide.log_system("Report generated in background.", "RPT")
+        except Exception as e:
+            self.ide.log_system(f"Report Engine Error: {e}", "ERR")
 
     def save_report(self):
         if not hasattr(self, 'last_report'): return
@@ -5284,11 +5289,20 @@ class SilisIDE(QMainWindow):
 
     def run_synthesis_flow(self):
         if not self.ensure_pdk_active(): return
+        self.save_file()
         _, base = self.get_context()
         if not base:
             QMessageBox.warning(self, "No Design", "Open a Verilog file first — no module found in the editor.")
             return
         root = self.prep_workspace(base)
+        
+        # Ensure active editor content is written to source/ directory
+        editor = self.tab_compile.editor.get_current_editor()
+        if editor:
+            src_file = os.path.join(root, "source", f"{base}.v")
+            with open(src_file, "w") as f:
+                f.write(editor.toPlainText())
+                
         self.run_synthesis_thread(root, base)
 
     def run_synthesis_thread(self, root, base):
@@ -5298,6 +5312,11 @@ class SilisIDE(QMainWindow):
             "background:#eaeef2; color:#57606a; font-weight:bold; "
             "padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
+        self._synth_running = True
+        editor = self.tab_compile.editor.get_current_editor()
+        if editor and hasattr(editor, '_word_hl_timer'):
+            editor._word_hl_timer.stop()
+
         src_v = glob.glob(os.path.join(root, "source", "*.v"))
         src_v = [s for s in src_v if "tb_" not in s]
         read_cmd = f"read_verilog {' '.join(src_v)}" if src_v else ""
@@ -5305,66 +5324,84 @@ class SilisIDE(QMainWindow):
         lib = self.active_pdk['lib']
         v_net = f"netlist/{base}_netlist.v"
 
-        ys = f"""
-        read_liberty -lib {lib}
-        {read_cmd}
-        synth -top {base}
-        dfflibmap -liberty {lib}
-        abc -liberty {lib}
-        tee -o reports/area.rpt stat -liberty {lib} -json
-        write_verilog -noattr {v_net}
-        """
+        ys = f"""read_liberty -lib {lib}
+{read_cmd}
+synth -top {base}
+dfflibmap -liberty {lib}
+abc -liberty {lib}
+tee -q -o reports/area.rpt stat -liberty {lib} -json
+write_verilog -noattr {v_net}
+"""
         with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
 
-        tcl = f"""
-        read_liberty {lib}
-        read_verilog {v_net}
-        link_design {base}
-        read_sdc netlist/{base}.sdc
-        report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
-        report_power > reports/power.rpt
-        exit
-        """
+        tcl = f"""read_liberty {lib}
+read_verilog {v_net}
+link_design {base}
+read_sdc netlist/{base}.sdc
+report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
+report_power > reports/power.rpt
+exit
+"""
         with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
 
-        def task():
-            self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
-            
-            # --- STEP 1: YOSYS ---
-            try:
-                # We pipe output to a file AND the GUI queue
-                log_path = os.path.join(root, "reports/synthesis.log")
-                with open(log_path, "w") as log_file:
-                    p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                    
-                    for line in iter(p1.stdout.readline, ''):
-                        line = line.strip()
-                        if line:
-                            self.queue.put(("[YOSYS]", line)) 
-                            log_file.write(line + "\n")
-                    p1.wait()
-                    if p1.returncode != 0: raise Exception("Yosys Failed")
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
+        self._synth_log_file = open(os.path.join(root, "reports/synthesis.log"), "w")
 
-            self.queue.put(("[SYS]", "=== Yosys done — Running OpenSTA ==="))
+        # === STEP 1: YOSYS via QProcess ===
+        self._yosys_proc = QProcess(self)
+        self._yosys_proc.setWorkingDirectory(root)
+        self._yosys_proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
 
-            # --- STEP 2: OPENSTA ---
-            try:
-                sta_bin = "sta" if shutil.which("sta") else "opensta"
-                p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                for line in iter(p2.stdout.readline, ''):
-                    line = line.strip()
-                    if line:
-                        self.queue.put(("[STA]", line)) 
-                p2.wait()
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
+        def on_yosys_output():
+            raw = bytes(self._yosys_proc.readAllStandardOutput()).decode(errors='replace')
+            self.tab_synth.log_main.appendPlainText(raw.rstrip())
+            self._synth_log_file.write(raw)
+            sb = self.tab_synth.log_main.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
-            self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
-            self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
-        
-        threading.Thread(target=task, daemon=True).start()
+        def on_yosys_done(exit_code, exit_status):
+            self._synth_log_file.flush()
+            if exit_code != 0:
+                self.tab_synth.log_main.appendPlainText(f"[ERR] Yosys exited with code {exit_code}")
+                self.tab_synth.card_status.setText("SYNTHESIS FAIL")
+                self.tab_synth.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+                self._cleanup_synth()
+                return
+            self.tab_synth.log_main.appendPlainText("=== Yosys done — Running OpenSTA ===")
+            self._run_sta(root, base)
+
+        self._yosys_proc.readyReadStandardOutput.connect(on_yosys_output)
+        self._yosys_proc.finished.connect(on_yosys_done)
+        self.log_system("Starting Synthesis (Yosys)...")
+        self._yosys_proc.start("yosys", ["synth.ys"])
+
+    def _run_sta(self, root, base):
+        # === STEP 2: OpenSTA via QProcess ===
+        self._sta_proc = QProcess(self)
+        self._sta_proc.setWorkingDirectory(root)
+        self._sta_proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+
+        def on_sta_output():
+            raw = bytes(self._sta_proc.readAllStandardOutput()).decode(errors='replace')
+            self.tab_synth.log_main.appendPlainText(raw.rstrip())
+            self._synth_log_file.write(raw)
+            sb = self.tab_synth.log_main.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+        def on_sta_done(exit_code, exit_status):
+            self._synth_log_file.close()
+            self.tab_synth.log_main.appendPlainText("=== Synthesis & Timing Complete ===")
+            self.tab_synth.update_dashboard()
+            self._cleanup_synth()
+
+        self._sta_proc.readyReadStandardOutput.connect(on_sta_output)
+        self._sta_proc.finished.connect(on_sta_done)
+        self.log_system("Running OpenSTA...")
+        self._sta_proc.start("sta", ["sta.tcl"])
+
+    def _cleanup_synth(self):
+        self._resume_after_synthesis()
+
+
 
     def run_simulation(self):
         if self.current_file: self.save_file()
@@ -5594,11 +5631,14 @@ class SilisIDE(QMainWindow):
              with open(p) as f: self.tab_synth.log_main.setPlainText(f.read())
     
     def process_queue(self):
-        count = 0
-        scroll_synth = False
-        scroll_backend = False
+        synth_batch = []
+        term_batch = []
+        backend_batch = []
+        update_dash = False
         
-        while not self.queue.empty() and count < 150:
+        count = 0
+        # Bumped to 500 to pull data off the queue faster
+        while not self.queue.empty() and count < 500:
             count += 1
             item = self.queue.get()
             
@@ -5606,32 +5646,48 @@ class SilisIDE(QMainWindow):
             else: tag, content = "SYS", str(item)
 
             if tag == "TERM_OUT":
-                self.tab_compile.terminal.append_output(content)
-
+                term_batch.append(content)
             elif tag == "[BACKEND]":
-                self.backend_widget.term_log.append(content)
-                scroll_backend = True
-
+                backend_batch.append(content)
             elif tag == "UPDATE_DASHBOARD":
-                self.tab_synth.update_dashboard()
-                
+                update_dash = True
             elif tag in ["[YOSYS]", "[STA]", "SYNTH_LOG", "STA_LOG"]:
-                self.tab_synth.log_main.appendPlainText(content)
-                scroll_synth = True
-                
+                synth_batch.append(content)
+            elif tag == "SYNTH_FAILED":
+                self.tab_synth.card_status.setText("SYNTHESIS FAIL")
+                self.tab_synth.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+                self.log_system(f"[ERR] {content}", "ERR")
+                self._resume_after_synthesis()
             elif tag == "[SYS]" or tag == "SYS":
                 self.log_system(content)
             else:
                 self.log_system(str(item))
                 
-        # Batch repaints outside the loop
-        if scroll_synth:
+        # Bulk append without disabling updates (maintains internal rendering optimizations)
+        if synth_batch:
+            self.tab_synth.log_main.appendPlainText("\n".join(synth_batch))
             sb = self.tab_synth.log_main.verticalScrollBar()
             sb.setValue(sb.maximum())
             
-        if scroll_backend:
+        if term_batch:
+            self.tab_compile.terminal.append_output("\n".join(term_batch))
+            
+        if backend_batch:
+            self.backend_widget.term_log.append("\n".join(backend_batch))
             sb = self.backend_widget.term_log.verticalScrollBar()
             sb.setValue(sb.maximum())
+            
+        if update_dash:
+            self.tab_synth.update_dashboard()
+            self._resume_after_synthesis()
+
+    def _resume_after_synthesis(self):
+        """Re-enable non-essential timers paused during synthesis."""
+        if not getattr(self, '_synth_running', False): return
+        self._synth_running = False
+        editor = self.tab_compile.editor.get_current_editor()
+        if editor and hasattr(editor, '_word_hl_timer'):
+            editor._word_hl_timer.start()
 
     def load_violation_log(self): 
         self.frontend_tabs.setCurrentIndex(3)
