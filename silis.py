@@ -52,11 +52,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGraphicsPolygonItem, QGraphicsPathItem, QScrollArea, QListWidget, QFrame, QTabWidget, QGridLayout, QListWidgetItem,
                              QWizard, QWizardPage, QDoubleSpinBox, QSpinBox)
 from PyQt6.QtCore import (Qt, QTimer, QSize, pyqtSignal, QThread, QDir, 
-                          QEvent, QProcess, QRectF, QPointF, QUrl)
+                          QEvent, QProcess, QRectF, QPointF, QUrl, QMimeData)
 from PyQt6.QtGui import (QAction, QFont, QColor, QSyntaxHighlighter, 
                          QTextCharFormat, QTextFormat, QPixmap, QPainter, QImage, QBrush, QPen,
                          QFileSystemModel, QKeySequence, QShortcut, QImageReader, 
-                         QTransform, QPolygonF, QIcon, QPainterPath, QFontMetrics)
+                         QTransform, QPolygonF, QIcon, QPainterPath, QFontMetrics, QDrag, QDropEvent)
 from PyQt6.QtSvgWidgets import QGraphicsSvgItem
 from PyQt6.QtSvg import QSvgRenderer
 import gdstk
@@ -4172,35 +4172,31 @@ class SilisLauncher(QDialog):
             QMessageBox.warning(self, "Error", "Project file not found.")
 
 class FloorplanView(InteractiveGraphicsView):
-    macro_dropped = pyqtSignal(str, QPointF)
+    macro_dropped = pyqtSignal(str, float, float, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat("application/x-qabstractitemmodeldatalist"):
+        if event.mimeData().hasText():
             event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasFormat("application/x-qabstractitemmodeldatalist"):
+        if event.mimeData().hasText():
             event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
 
     def dropEvent(self, event):
-        source = event.source()
-        if isinstance(source, QListWidget):
-            item = source.currentItem()
-            if item:
-                text = item.text().replace(" [PLACED]", "")
-                scene_pos = self.mapToScene(event.position().toPoint())
-                self.macro_dropped.emit(text, scene_pos)
-                event.acceptProposedAction()
-        else:
-            super().dropEvent(event)
+        if event.mimeData().hasText():
+            pos = self.mapToScene(event.position().toPoint())
+            data = event.mimeData().text()
+            if "|" in data:
+                master_name, inst_name = data.split("|", 1)
+            else:
+                master_name = data
+                inst_name = None
+            self.macro_dropped.emit(master_name, pos.x(), pos.y(), inst_name)
+            event.acceptProposedAction()
 
 class MacroItem(QGraphicsRectItem):
     def __init__(self, name, width, height, core_rect, widget_ref, parent=None):
@@ -4303,7 +4299,7 @@ class InteractiveFloorplannerWidget(QDialog):
         
         self.txt_inst_name = QLineEdit()
         self.txt_inst_name.setPlaceholderText("Netlist Instance Name")
-        self.txt_inst_name.textChanged.connect(self.on_inst_name_changed)
+        self.txt_inst_name.editingFinished.connect(self.on_inst_name_changed)
         
         self.sp_sel_x = QDoubleSpinBox(); self.sp_sel_x.setRange(0, 100000)
         self.sp_sel_y = QDoubleSpinBox(); self.sp_sel_y.setRange(0, 100000)
@@ -4340,6 +4336,8 @@ class InteractiveFloorplannerWidget(QDialog):
         
         self.macro_list = QListWidget()
         self.macro_list.setDragEnabled(True)
+        # Setup Draggable List
+        self.macro_list.startDrag = self.start_drag
         self.tabs.addTab(self.macro_list, "Macros")
         
         self.pin_list = QListWidget()
@@ -4351,7 +4349,51 @@ class InteractiveFloorplannerWidget(QDialog):
         
         splitter.setSizes([250, 600, 200])
         self.tabs.setEnabled(False)
-        if self.project_config: self.populate_macros()
+        if self.project_config: self.populate_macro_list(self.project_config)
+
+    def start_drag(self, supportedActions):
+        item = self.macro_list.currentItem()
+        if not item: return
+        drag = QDrag(self.macro_list)
+        mimeData = QMimeData()
+        
+        inst_name = item.data(Qt.ItemDataRole.UserRole)
+        text = item.text().replace(" [PLACED]", "")
+        if inst_name:
+            mimeData.setText(f"{text}|{inst_name}")
+        else:
+            mimeData.setText(text)
+        
+        drag.setMimeData(mimeData)
+        drag.exec(supportedActions)
+
+    def populate_macro_list(self, cfg):
+        self.macro_list.clear()
+        
+        # Try loading from _sizes.json
+        proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+        base = self.parent().ide.get_context()[1]
+        if base:
+            sizes_json_path = os.path.join(proj_root, "reports", f"{base}_sizes.json").replace("\\", "/")
+            if os.path.exists(sizes_json_path):
+                try:
+                    import json
+                    with open(sizes_json_path, 'r') as f:
+                        sizes_data = json.load(f)
+                    if 'macros' in sizes_data:
+                        for inst_name, master_name in sizes_data['macros'].items():
+                            item = QListWidgetItem(master_name)
+                            item.setData(Qt.ItemDataRole.UserRole, inst_name)
+                            self.macro_list.addItem(item)
+                        return
+                except Exception as e:
+                    print("Failed to load sizes.json:", e)
+
+        # Fallback
+        if not cfg or 'macros' not in cfg: return
+        for m in cfg['macros']:
+            item = QListWidgetItem(m)
+            self.macro_list.addItem(item)
 
     def parse_macro_sizes(self):
         try:
@@ -4373,11 +4415,6 @@ class InteractiveFloorplannerWidget(QDialog):
                             self.macro_sizes[name] = (float(m.group(1)), float(m.group(2)))
         except:
             pass
-
-    def populate_macros(self):
-        macros = self.project_config.get("macros", [])
-        for m in macros:
-            self.macro_list.addItem(QListWidgetItem(m))
 
     def init_floorplan(self):
         w = self.sp_die_w.value(); h = self.sp_die_h.value()
@@ -4425,19 +4462,22 @@ class InteractiveFloorplannerWidget(QDialog):
         
         self.view.fitInView(self.die_rect, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def on_macro_dropped(self, name, pos):
+    def on_macro_dropped(self, name, x, y, inst_name=None):
         if not self.floorplan_initialized: return
         
-        # Count existing macros of this type to generate a unique instance name
-        count = 0
-        for item in self.scene.items():
-            if isinstance(item, MacroItem) and item.name == name:
-                count += 1
-                
         w, h = self.macro_sizes.get(name, (100.0, 100.0))
         m_item = MacroItem(name, w, h, self.core_rect, self)
-        m_item.set_inst_name(f"{name}_inst_{count}")
-        m_item.setPos(pos.x(), pos.y())
+        
+        if inst_name:
+            m_item.set_inst_name(inst_name)
+        else:
+            count = 0
+            for item in self.scene.items():
+                if isinstance(item, MacroItem) and item.name == name:
+                    count += 1
+            m_item.set_inst_name(f"{name}_inst_{count}")
+            
+        m_item.setPos(x, y)
         self.scene.addItem(m_item)
         m_item.setPos(m_item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, m_item.pos()))
         for i in range(self.macro_list.count()):
@@ -4450,6 +4490,7 @@ class InteractiveFloorplannerWidget(QDialog):
         items = self.scene.selectedItems()
         if items and isinstance(items[0], MacroItem):
             items[0].set_inst_name(self.txt_inst_name.text())
+            self.scene.update()
 
     def on_spinbox_changed(self):
         items = self.scene.selectedItems()
@@ -4458,21 +4499,24 @@ class InteractiveFloorplannerWidget(QDialog):
             m.setPos(self.sp_sel_x.value(), self.sp_sel_y.value())
 
     def on_selection_changed(self):
-        items = self.scene.selectedItems()
-        if items and isinstance(items[0], MacroItem):
-            m = items[0]
-            self.lbl_sel_name.setText(m.name)
-            self.sp_sel_x.blockSignals(True)
-            self.sp_sel_y.blockSignals(True)
-            self.txt_inst_name.blockSignals(True)
-            self.sp_sel_x.setValue(m.pos().x())
-            self.sp_sel_y.setValue(m.pos().y())
-            self.txt_inst_name.setText(m.inst_name)
-            self.sp_sel_x.blockSignals(False)
-            self.sp_sel_y.blockSignals(False)
-            self.txt_inst_name.blockSignals(False)
-        else:
-            self.lbl_sel_name.setText("None")
+        try:
+            items = self.scene.selectedItems()
+            if items and isinstance(items[0], MacroItem):
+                m = items[0]
+                self.lbl_sel_name.setText(m.name)
+                self.sp_sel_x.blockSignals(True)
+                self.sp_sel_y.blockSignals(True)
+                self.txt_inst_name.blockSignals(True)
+                self.sp_sel_x.setValue(m.pos().x())
+                self.sp_sel_y.setValue(m.pos().y())
+                self.txt_inst_name.setText(m.inst_name)
+                self.sp_sel_x.blockSignals(False)
+                self.sp_sel_y.blockSignals(False)
+                self.txt_inst_name.blockSignals(False)
+            else:
+                self.lbl_sel_name.setText("None")
+        except RuntimeError:
+            pass # Handle C++ object destruction during widget close
 
     def generate_floorplan_tcl(self):
         if not self.floorplan_initialized: return
@@ -4485,10 +4529,12 @@ class InteractiveFloorplannerWidget(QDialog):
         for item in self.scene.items():
             if isinstance(item, MacroItem):
                 tcl += f"set inst [$block findInst {{{item.inst_name}}}]\n"
-                tcl += f"if {{$inst != \"\"}} {{\n"
-                tcl += f"    $inst setPlacementStatus FIRM\n"
-                tcl += f"    $inst setOrient R0\n"
+                tcl += f"if {{$inst != \"NULL\" && $inst != \"\"}} {{\n"
+                tcl += f"    $inst setPlacementStatus NONE\n"
                 tcl += f"    $inst setLocation [expr int(round({item.pos().x()} * $dbu))] [expr int(round({item.pos().y()} * $dbu))]\n"
+                tcl += f"    $inst setOrient R0\n"
+                tcl += f"    $inst setPlacementStatus FIRM\n"
+                tcl += f"    catch {{set_placement_padding -instances {{{item.inst_name}}} -left 10 -right 10}}\n"
                 tcl += f"}}\n"
         
         proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
