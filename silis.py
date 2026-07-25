@@ -46,11 +46,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QInputDialog, QGraphicsView, QGraphicsScene, 
                              QGraphicsPixmapItem, QMenu, QFrame, QDockWidget,
                              QSizePolicy, QDialog, QFormLayout, QComboBox, 
-                             QGraphicsRectItem, QGraphicsTextItem, QTableWidget, QTableWidgetItem,
+                             QGraphicsItem, QGraphicsRectItem, QGraphicsTextItem, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QCheckBox, QGroupBox,
                              QToolButton, QStackedWidget, QButtonGroup, 
                              QGraphicsPolygonItem, QGraphicsPathItem, QScrollArea, QListWidget, QFrame, QTabWidget, QGridLayout, QListWidgetItem,
-                             QWizard, QWizardPage)
+                             QWizard, QWizardPage, QDoubleSpinBox)
 from PyQt6.QtCore import (Qt, QTimer, QSize, pyqtSignal, QThread, QDir, 
                           QEvent, QProcess, QRectF, QPointF, QUrl)
 from PyQt6.QtGui import (QAction, QFont, QColor, QSyntaxHighlighter, 
@@ -526,8 +526,11 @@ class PDKSelector(QDialog):
 
 # ================= 1. ROBUST DEF PARSER (Full) =================
 class DEFParser:
-    def __init__(self, def_path):
+    def __init__(self, def_path, ide=None):
         self.path = def_path
+        self.ide = ide
+        self.macro_sizes = {}
+        if self.ide: self.parse_macro_sizes()
         self.die_rect = QRectF(0,0,0,0)
         self.comps_map = {}   
         self.comp_types = {}  
@@ -540,6 +543,27 @@ class DEFParser:
         self.component_count = 0
         if os.path.exists(def_path):
             self.parse()
+
+    def parse_macro_sizes(self):
+        try:
+            if not getattr(self.ide, 'project_config', None): return
+            pdk_name = self.ide.project_config.get('pdk', '')
+            cfg = next((c for c in self.ide.pdk_mgr.configs if c['name'] == pdk_name), None)
+            if not cfg: return
+            lib_path = cfg.get('lib', '')
+            volare_base = lib_path.split("libs.ref")[0]
+            import os, glob, re
+            search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
+            for lef in glob.glob(search_path):
+                name = os.path.basename(lef).replace('.lef', '')
+                if name in self.ide.project_config.get('macros', []):
+                    with open(lef, 'r') as f:
+                        content = f.read()
+                        m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
+                        if m:
+                            self.macro_sizes[name] = (float(m.group(1)), float(m.group(2)))
+        except:
+            pass
 
     def parse(self):
         if not os.path.exists(self.path): return
@@ -615,7 +639,13 @@ class DEFParser:
                             if coord_match:
                                 x = int(coord_match.group(1))
                                 y = int(coord_match.group(2))
-                                self.comps_map[current_comp_name] = QRectF(x, y, std_w, std_h)
+                                
+                                w, h = std_w, std_h
+                                if current_comp_model in self.macro_sizes:
+                                    w = self.macro_sizes[current_comp_model][0] * self.dbu
+                                    h = self.macro_sizes[current_comp_model][1] * self.dbu
+                                    
+                                self.comps_map[current_comp_name] = QRectF(x, y, w, h)
                                 
                                 model_lower = current_comp_model.lower()
                                 is_tap = "tap" in model_lower or "fill" in model_lower
@@ -729,7 +759,7 @@ class SiliconPeeker(QGraphicsView):
         
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-        self.setBackgroundBrush(QColor("#FFFFFF")) 
+        self.setBackgroundBrush(QBrush(QColor("#1E1E1E"))) 
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         
@@ -869,15 +899,12 @@ class SiliconPeeker(QGraphicsView):
         self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
 
     def load_def_file(self, path):
-        if not os.path.exists(path): return
-        try:
-            self.def_data = DEFParser(path)
+        if os.path.exists(path):
+            self.def_data = DEFParser(path, getattr(self, 'ide', None))
             self.redraw()
             if self.first_load:
                 self.fit_with_slack()
                 self.first_load = False
-        except Exception as e: 
-            print(f"Peeker Load Error: {e}")
 
     def redraw(self):
         try:
@@ -896,8 +923,8 @@ class SiliconPeeker(QGraphicsView):
             self.setSceneRect(d.adjusted(-d.width()*0.25, -d.height()*0.25, d.width()*0.25, d.height()*0.25))
             
             die = QGraphicsRectItem(d)
-            die.setPen(QPen(QColor("#000000"), 0))
-            die.setBrush(QBrush(QColor("#bebebe"))) 
+            die.setPen(QPen(QColor("#4A5568"), 0))
+            die.setBrush(QBrush(QColor("#2D323A"))) 
             die.setZValue(-100)
             self.scene.addItem(die)
 
@@ -958,12 +985,14 @@ class SiliconPeeker(QGraphicsView):
                             item.setBrush(QBrush(QColor("#000000"))) 
                             item.setZValue(-4) 
                         elif ctype == "CLOCK":
-                            # Red for Clock Cells (Excluding Yosys internals)
                             item.setPen(QPen(QColor("#800000"), 0)) 
                             item.setBrush(QBrush(QColor("#D00000"))) 
-                            item.setZValue(15) # Draw on top
+                            item.setZValue(15)
+                        elif rect.width() / self.def_data.dbu > 50:
+                            item.setPen(QPen(Qt.GlobalColor.black, 0))
+                            item.setBrush(QBrush(QColor("#4CAF50")))
+                            item.setZValue(12)
                         else:
-                            # Standard Blue
                             item.setPen(QPen(QColor("#00509d"), 0)) 
                             item.setBrush(QBrush(QColor("#4cc9f0"))) 
                             item.setZValue(10)
@@ -1104,7 +1133,6 @@ class SilisSchematic(QGraphicsView):
         # Clean UI
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setBackgroundBrush(QColor("#FFFFFF")) 
 
     def load_schematic(self, path):
         self.scene.clear()
@@ -2392,12 +2420,12 @@ class SynthesisTab(QWidget):
         left_col = QWidget()
         l_lay = QVBoxLayout(left_col); l_lay.setContentsMargins(0,0,0,0)
         
-        ctrl = QFrame(); ctrl.setStyleSheet("background: #f6f8fa; border-radius: 4px; padding: 5px; border: 1px solid #d0d7de;")
+        ctrl = QFrame(); ctrl.setStyleSheet("border-radius: 4px; padding: 5px; border: 1px solid gray;")
         cl = QHBoxLayout(ctrl); cl.setContentsMargins(5,5,5,5)
-        self.lbl_pdk = QLabel("Active PDK: Sky130A"); self.lbl_pdk.setStyleSheet("font-weight:bold; color:#24292f;")
+        self.lbl_pdk = QLabel("Active PDK: Sky130A"); self.lbl_pdk.setStyleSheet("font-weight:bold;")
         
-        btn_style = "QPushButton { background: #ffffff; color: #24292f; border: 1px solid #d0d7de; padding: 5px 15px; border-radius: 3px; } QPushButton:hover { background: #f3f4f6; }"
-        run_style = "QPushButton { background: #2da44e; color: white; border: 1px solid #2da44e; padding: 5px 15px; border-radius: 3px; font-weight: bold; } QPushButton:hover { background: #2c974b; }"
+        btn_style = "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; }"
+        run_style = "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; font-weight: bold; }"
 
         btn_sel = QPushButton("⚙ PDK"); btn_sel.setStyleSheet(btn_style)
         btn_sel.clicked.connect(self.ide.open_pdk_selector)
@@ -2408,15 +2436,15 @@ class SynthesisTab(QWidget):
         l_lay.addWidget(ctrl)
         
         self.log_tabs = QTabWidget()
-        self.log_tabs.setStyleSheet("QTabWidget::pane { border: 0; } QTabBar::tab { background: #f6f8fa; color: #57606a; padding: 8px; border: 1px solid #e1e4e8; border-bottom: none; } QTabBar::tab:selected { background: #fff; color: #24292f; border-top: 2px solid #fd8c73; }")
+        self.log_tabs.setStyleSheet("")
         
         self.log_main = QTextEdit(); self.log_main.setReadOnly(True)
-        self.log_main.setStyleSheet("background:#0d1117; color:#c9d1d9; font-family:Consolas; border:none;")
+        self.log_main.setStyleSheet("font-family:Consolas; border:none;")
         self.log_tabs.addTab(self.log_main, "Build Output")
         
         # --- UI FIX: WHITE ERRORS TAB ---
         self.list_err = QListWidget()
-        self.list_err.setStyleSheet("background:#ffffff; color:#cf222e; font-family:Consolas; border:1px solid #d0d7de; padding: 5px;")
+        self.list_err.setStyleSheet("color:#cf222e; font-family:Consolas; border:1px solid gray; padding: 5px;")
         self.log_tabs.addTab(self.list_err, "Issues / Errors")
         
         l_lay.addWidget(self.log_tabs)
@@ -2424,17 +2452,17 @@ class SynthesisTab(QWidget):
 
         # === RIGHT COLUMN (DASHBOARD) - COMPACTED ===
         right_col = QFrame()
-        right_col.setStyleSheet("background: #f6f8fa; border-left: 1px solid #d0d7de;")
+        right_col.setStyleSheet("border-left: 1px solid gray;")
         right_col.setFixedWidth(360) 
         r_lay = QVBoxLayout(right_col)
         
         self.card_status = QLabel("READY")
         self.card_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-size:14px; font-weight:bold; padding:10px; border-radius:6px; border: 1px solid #d0d7de;")
+        self.card_status.setStyleSheet("font-size:14px; font-weight:bold; padding:10px; border-radius:6px; border: 1px solid gray;")
         r_lay.addWidget(self.card_status)
         
         grid_w = QWidget(); grid = QGridLayout(grid_w)
-        v_style = "font-weight:bold; font-size:12px; color: #24292f;"
+        v_style = "font-weight:bold; font-size:12px;"
         grid.addWidget(QLabel("WNS (Slack):"), 0, 0); lbl = QLabel("--"); lbl.setStyleSheet(v_style); self.val_wns = lbl; grid.addWidget(lbl, 0, 1)
         grid.addWidget(QLabel("Chip Area:"), 1, 0); lbl2 = QLabel("--"); lbl2.setStyleSheet(v_style); self.val_area = lbl2; grid.addWidget(lbl2, 1, 1)
         grid.addWidget(QLabel("Gate Count:"), 2, 0); lbl3 = QLabel("--"); lbl3.setStyleSheet(v_style); self.val_gates = lbl3; grid.addWidget(lbl3, 2, 1)
@@ -2443,11 +2471,11 @@ class SynthesisTab(QWidget):
         r_lay.addWidget(QLabel("<b style='color:#24292f'>Report Preview:</b>"))
         self.preview = QTextEdit(); self.preview.setReadOnly(True)
         self.preview.setMaximumHeight(250) 
-        self.preview.setStyleSheet("font-family:Consolas; font-size:8pt; background:#ffffff; color:#333; border:1px solid #d0d7de;")
+        self.preview.setStyleSheet("font-family:Consolas; font-size:8pt; border:1px solid gray;")
         self.preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         r_lay.addWidget(self.preview)
         
-        btn_save = QPushButton("Save .rpt File"); btn_save.setStyleSheet("background:#fff; border:1px solid #ccc; padding:5px;")
+        btn_save = QPushButton("Save .rpt File"); btn_save.setStyleSheet("border:1px solid gray; padding:5px;")
         btn_save.clicked.connect(self.save_report)
         r_lay.addWidget(btn_save)
         r_lay.addStretch()
@@ -2694,6 +2722,7 @@ class BackendWidget(QWidget):
         
         # --- 1. INITIALIZE WIDGETS ---
         self.peeker = SiliconPeeker()
+        self.peeker.ide = self.ide
         self.gds_viewer = GDSViewerWidget()
         self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
         
@@ -2719,7 +2748,7 @@ class BackendWidget(QWidget):
         gds_layout = QVBoxLayout(self.gds_ctrl_widget); gds_layout.setContentsMargins(0,0,0,0)
         
         self.layer_list = QListWidget()
-        self.layer_list.setStyleSheet("QListWidget { font-size: 10px; border: none; background: #f0f0f0; }")
+        self.layer_list.setStyleSheet("QListWidget { font-size: 10px; border: none; }")
         self.layer_list.itemChanged.connect(self.on_layer_toggle)
         
         gds_layout.addWidget(QLabel("<b>GDS Layers</b>"))
@@ -2734,14 +2763,14 @@ class BackendWidget(QWidget):
         self.btn_load = QPushButton("📂 Load Routed")
         
         self.term_log = QTextEdit(); self.term_log.setReadOnly(True)
-        self.term_log.setStyleSheet("background: #101010; color: #00FF00; font-family: Consolas; border: none;")
+        self.term_log.setStyleSheet("font-family: Consolas; border: none;")
         self.term_in = QLineEdit(); self.term_in.setPlaceholderText("Enter TCL command...")
-        self.term_in.setStyleSheet("background: #202020; color: white; border-top: 1px solid #444; font-family: Consolas; padding: 5px;")
+        self.term_in.setStyleSheet("font-family: Consolas; padding: 5px; border-top: 1px solid gray;")
 
         # --- 2. LAYOUT ---
         self.layout = QVBoxLayout(self); self.layout.setContentsMargins(0,0,0,0)
         
-        self.ribbon = QFrame(); self.ribbon.setStyleSheet("background: #f0f0f0; border-bottom: 1px solid #ccc;"); self.ribbon.setFixedHeight(40) 
+        self.ribbon = QFrame(); self.ribbon.setStyleSheet("border-bottom: 1px solid gray;"); self.ribbon.setFixedHeight(40) 
         r_lay = QHBoxLayout(self.ribbon); r_lay.setContentsMargins(5,2,5,2)
         
         self.steps = ["Init", "Floorplan", "Tapcells", "PDN", "IO Pins", "Place", "CTS", "Route", "GDS"]
@@ -2768,7 +2797,7 @@ class BackendWidget(QWidget):
         v_split = QSplitter(Qt.Orientation.Vertical)
         h_widget = QWidget(); h_lay = QHBoxLayout(h_widget); h_lay.setContentsMargins(0,0,0,0); h_lay.setSpacing(0)
         
-        sidebar = QFrame(); sidebar.setFixedWidth(140); sidebar.setStyleSheet("background: #e8e8e8; border-right: 1px solid #aaa;")
+        sidebar = QFrame(); sidebar.setFixedWidth(140); sidebar.setStyleSheet("border-right: 1px solid gray;")
         s_lay = QVBoxLayout(sidebar); s_lay.setContentsMargins(5,10,5,10)
         s_lay.addWidget(self.def_ctrl_widget)
         s_lay.addWidget(self.gds_ctrl_widget)
@@ -2961,7 +2990,29 @@ class BackendWidget(QWidget):
                 sdc_path = os.path.join(proj_root, "source", f"{ctx}.sdc")
                 os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
                 with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
-            tcl_content = f"""read_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\nread_liberty "{self.active_pdk['lib']}"\nread_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}" """
+            tcl_content = f"""read_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
+            
+            macros = self.ide.project_config.get('macros', [])
+            if macros:
+                lib_path = self.active_pdk.get('lib', '')
+                volare_base = lib_path.split("libs.ref")[0]
+                lef_search = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
+                lib_search = os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")
+                
+                for lef in glob.glob(lef_search):
+                    name = os.path.basename(lef).replace('.lef', '')
+                    if name in macros:
+                        tcl_content += f"""read_lef "{lef}"\n"""
+                        
+            tcl_content += f"""read_liberty "{self.active_pdk['lib']}"\n"""
+            if macros:
+                for lib in glob.glob(lib_search):
+                    name = os.path.basename(lib).replace('.lib', '')
+                    # handle typical .lib naming which might have extensions like __tt_025C_1v80.lib
+                    if any(m in name for m in macros):
+                        tcl_content += f"""read_liberty "{lib}"\n"""
+                        
+            tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}" """
             try:
                 with open(tcl_path, 'w') as f: f.write(tcl_content)
                 self.pending_init = f"source {tcl_path}"
@@ -2983,9 +3034,12 @@ class BackendWidget(QWidget):
         pdk_name = self.active_pdk.get('name', SSAForge.DEFAULT_PDK) if self.active_pdk else SSAForge.DEFAULT_PDK
         lib_path = self.active_pdk.get('lib', None) if self.active_pdk else None
 
-        if step_name == "Floorplan": cmd = f"initialize_floorplan -die_area \"0 0 400 400\" -core_area \"10 10 390 390\" -site unithd; {write_cmd}"
+        if step_name == "Floorplan": 
+            self.floorplanner_dialog = InteractiveFloorplannerWidget(self.ide.project_config, self.pdk_mgr, self)
+            self.floorplanner_dialog.show()
+            return
         elif step_name == "Tapcells": cmd = SSAForge.get_tap_cmd(pdk_name, lib_path) + f"; {write_cmd}"
-        elif step_name == "PDN": cmd = "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VDD$} -power; add_global_connection -net {VSS} -pin_pattern {^VGND$|^VSS$} -ground; set_voltage_domain -name {Core} -power {VDD} -ground {VSS}; define_pdn_grid -name {grid} -voltage_domains {Core}; add_pdn_stripe -grid {grid} -layer {met1} -width {0.48} -followpins; add_pdn_stripe -grid {grid} -layer {met4} -width {1.6} -pitch {27.2} -offset {13.6} -extend_to_core_ring; add_pdn_connect -grid {grid} -layers {met1 met4}; pdngen; " + write_cmd
+        elif step_name == "PDN": cmd = "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VDD$|^vccd1$} -power; add_global_connection -net {VSS} -pin_pattern {^VGND$|^VSS$|^vssd1$} -ground; set_voltage_domain -name {Core} -power {VDD} -ground {VSS}; define_pdn_grid -name {grid} -voltage_domains {Core}; add_pdn_stripe -grid {grid} -layer {met1} -width {0.48} -followpins; add_pdn_stripe -grid {grid} -layer {met4} -width {1.6} -pitch {27.2} -offset {13.6} -extend_to_core_ring; add_pdn_connect -grid {grid} -layers {met1 met4}; pdngen; " + write_cmd
         elif step_name == "IO Pins": cmd = f"place_pins -hor_layers met3 -ver_layers met4; {write_cmd}"
         elif step_name == "Place": cmd = f"global_placement -density 0.6; detailed_placement; {write_cmd}"
         elif step_name == "CTS": cmd = SSAForge.get_cts_cmd(pdk_name, lib_path) + f"; {write_cmd}"
@@ -3033,7 +3087,29 @@ class BackendWidget(QWidget):
         pdk_tlef = self.active_pdk.get('tlef', ''); pdk_lef = self.active_pdk.get('lef', '')   
         output_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
         if not all(os.path.exists(p) for p in [pdk_gds, pdk_tech, pdk_tlef, pdk_lef]): self.ide.queue.put(("[BACKEND]", f"[ERR] Missing PDK files.")); return
-        script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\ngds read {pdk_gds}\ndef read {def_path}\ngds write {output_gds}\nquit"
+        
+        script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\n"
+        
+        # Load macro LEFs
+        macros = self.ide.project_config.get('macros', [])
+        macro_gds_paths = []
+        if macros:
+            volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
+            import glob
+            for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
+                name = os.path.basename(lef).replace('.lef', '')
+                if name in macros:
+                    script_content += f"lef read {lef}\n"
+            for gds in glob.glob(os.path.join(volare_base, "libs.ref", "*", "gds", "*.gds")):
+                name = os.path.basename(gds).replace('.gds', '')
+                if name in macros:
+                    macro_gds_paths.append(gds)
+        
+        script_content += f"gds read {pdk_gds}\n"
+        for gds in macro_gds_paths:
+            script_content += f"gds read {gds}\n"
+            
+        script_content += f"def read {def_path}\nload {self.ide.get_context()[0] or 'design'}\ngds write {output_gds}\nquit -noprompt"
         script_path = os.path.join(root, "merge_magic.tcl")
         with open(script_path, 'w') as f: f.write(script_content)
         self.term_log.append(f"[SYS] Magic: Merging with LEF support...")
@@ -3041,7 +3117,9 @@ class BackendWidget(QWidget):
             try:
                 cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
                 proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode == 0 and os.path.exists(output_gds): self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
+                if proc.returncode == 0 and os.path.exists(output_gds):
+                    self.ide.queue.put(("[BACKEND_GDS_DONE]", output_gds))
+                    self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
                 else: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{proc.stderr}\n{proc.stdout}"))
             except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Execution Error: {e}"))
         threading.Thread(target=run_magic, daemon=True).start()
@@ -3095,7 +3173,21 @@ class BackendWidget(QWidget):
         def_path = os.path.join(proj_root, "results", "temp.def")
         if not os.path.exists(def_path): return
         view_tcl = os.path.join(proj_root, "view.tcl")
-        with open(view_tcl, 'w') as f: f.write(f'read_lef "{self.active_pdk["tlef"]}"\nread_lef "{self.active_pdk["lef"]}"\nread_def "{def_path}"\n')
+        
+        tcl_content = f'read_lef "{self.active_pdk["tlef"]}"\nread_lef "{self.active_pdk["lef"]}"\n'
+        
+        macros = self.ide.project_config.get('macros', [])
+        if macros:
+            volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
+            import glob
+            for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
+                name = os.path.basename(lef).replace('.lef', '')
+                if name in macros:
+                    tcl_content += f'read_lef "{lef}"\n'
+                    
+        tcl_content += f'read_def "{def_path}"\n'
+        
+        with open(view_tcl, 'w') as f: f.write(tcl_content)
         subprocess.Popen(["openroad", "-gui", view_tcl], cwd=proj_root)
     
     def force_refresh_view(self):
@@ -3951,6 +4043,13 @@ class SilisLauncher(QDialog):
         self.resize(550, 400)
         layout = QVBoxLayout(self)
 
+        banner = QLabel()
+        pm = QPixmap("/home/jerome/silis/banneriguess.png")
+        if not pm.isNull():
+            banner.setPixmap(pm.scaledToWidth(530, Qt.TransformationMode.SmoothTransformation))
+            banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(banner)
+
         title = QLabel("Silis - Silicon Scaffold")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = title.font()
@@ -4032,6 +4131,290 @@ class SilisLauncher(QDialog):
                 QMessageBox.critical(self, "Error", f"Could not load project: {e}")
         else:
             QMessageBox.warning(self, "Error", "Project file not found.")
+
+class FloorplanView(InteractiveGraphicsView):
+    macro_dropped = pyqtSignal(str, QPointF)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat("application/x-qabstractitemmodeldatalist"):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-qabstractitemmodeldatalist"):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        source = event.source()
+        if isinstance(source, QListWidget):
+            item = source.currentItem()
+            if item:
+                text = item.text().replace(" [PLACED]", "")
+                scene_pos = self.mapToScene(event.position().toPoint())
+                self.macro_dropped.emit(text, scene_pos)
+                event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+class MacroItem(QGraphicsRectItem):
+    def __init__(self, name, width, height, core_rect, widget_ref, parent=None):
+        super().__init__(0, 0, width, height, parent)
+        self.name = name
+        self.inst_name = f"{name}_inst"
+        self.w = width
+        self.h = height
+        self.core_rect = core_rect
+        self.widget_ref = widget_ref
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setBrush(QBrush(QColor("#4CAF50")))
+        self.setPen(QPen(Qt.GlobalColor.black))
+        
+        self.text = QGraphicsTextItem(name, self)
+        self.text.setDefaultTextColor(Qt.GlobalColor.white)
+        self.text.setTransform(QTransform.fromScale(1, -1))
+        self.text.setPos(width/2 - self.text.boundingRect().width()/2, height/2 + self.text.boundingRect().height()/2)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            x, y = value.x(), value.y()
+            x = round(x)
+            y = round(y)
+            if self.core_rect:
+                max_x = self.core_rect.width() - self.w
+                max_y = self.core_rect.height() - self.h
+                if x < self.core_rect.x(): x = self.core_rect.x()
+                if y < self.core_rect.y(): y = self.core_rect.y()
+                if x > self.core_rect.x() + max_x: x = self.core_rect.x() + max_x
+                if y > self.core_rect.y() + max_y: y = self.core_rect.y() + max_y
+            
+            if self.isSelected():
+                self.widget_ref.sp_sel_x.blockSignals(True)
+                self.widget_ref.sp_sel_y.blockSignals(True)
+                self.widget_ref.txt_inst_name.blockSignals(True)
+                self.widget_ref.sp_sel_x.setValue(x)
+                self.widget_ref.sp_sel_y.setValue(y)
+                self.widget_ref.txt_inst_name.setText(self.inst_name)
+                self.widget_ref.sp_sel_x.blockSignals(False)
+                self.widget_ref.sp_sel_y.blockSignals(False)
+                self.widget_ref.txt_inst_name.blockSignals(False)
+                
+            return QPointF(x, y)
+        return super().itemChange(change, value)
+
+class InteractiveFloorplannerWidget(QDialog):
+    def __init__(self, project_config, pdk_mgr, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Interactive Floorplanner")
+        self.resize(1200, 800)
+        self.project_config = project_config
+        self.pdk_mgr = pdk_mgr
+        self.floorplan_initialized = False
+        self.die_rect = None
+        self.core_rect = None
+        self.macro_sizes = {}
+        self.parse_macro_sizes()
+        
+        layout = QVBoxLayout(self)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter)
+        
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        gb_die = QGroupBox("Die & Core Specifications")
+        fl_die = QFormLayout(gb_die)
+        self.sp_die_w = QDoubleSpinBox(); self.sp_die_w.setRange(0.1, 100000); self.sp_die_w.setValue(1500)
+        self.sp_die_h = QDoubleSpinBox(); self.sp_die_h.setRange(0.1, 100000); self.sp_die_h.setValue(1500)
+        self.sp_marg_t = QDoubleSpinBox(); self.sp_marg_t.setRange(0, 10000); self.sp_marg_t.setValue(10)
+        self.sp_marg_b = QDoubleSpinBox(); self.sp_marg_b.setRange(0, 10000); self.sp_marg_b.setValue(10)
+        self.sp_marg_l = QDoubleSpinBox(); self.sp_marg_l.setRange(0, 10000); self.sp_marg_l.setValue(10)
+        self.sp_marg_r = QDoubleSpinBox(); self.sp_marg_r.setRange(0, 10000); self.sp_marg_r.setValue(10)
+        fl_die.addRow("Die Width (µm):", self.sp_die_w)
+        fl_die.addRow("Die Height (µm):", self.sp_die_h)
+        fl_die.addRow("Margin Top (µm):", self.sp_marg_t)
+        fl_die.addRow("Margin Bottom (µm):", self.sp_marg_b)
+        fl_die.addRow("Margin Left (µm):", self.sp_marg_l)
+        fl_die.addRow("Margin Right (µm):", self.sp_marg_r)
+        
+        self.btn_init = QPushButton("Initialize Floorplan")
+        self.btn_init.setStyleSheet("background: #0078D7; color: white; font-weight: bold;")
+        self.btn_init.clicked.connect(self.init_floorplan)
+        fl_die.addRow(self.btn_init)
+        left_layout.addWidget(gb_die)
+        
+        gb_sel = QGroupBox("Selected Macro")
+        fl_sel = QFormLayout(gb_sel)
+        self.lbl_sel_name = QLabel("None")
+        
+        self.txt_inst_name = QLineEdit()
+        self.txt_inst_name.setPlaceholderText("Netlist Instance Name")
+        self.txt_inst_name.textChanged.connect(self.on_inst_name_changed)
+        
+        self.sp_sel_x = QDoubleSpinBox(); self.sp_sel_x.setRange(0, 100000)
+        self.sp_sel_y = QDoubleSpinBox(); self.sp_sel_y.setRange(0, 100000)
+        fl_sel.addRow("Macro:", self.lbl_sel_name)
+        fl_sel.addRow("Instance:", self.txt_inst_name)
+        fl_sel.addRow("X (µm):", self.sp_sel_x)
+        fl_sel.addRow("Y (µm):", self.sp_sel_y)
+        self.sp_sel_x.valueChanged.connect(self.on_spinbox_changed)
+        self.sp_sel_y.valueChanged.connect(self.on_spinbox_changed)
+        left_layout.addWidget(gb_sel)
+        
+        btn_tcl = QPushButton("Apply Floorplan & Run")
+        btn_tcl.setStyleSheet("background: #0078D7; color: white; font-weight: bold;")
+        btn_tcl.clicked.connect(self.generate_floorplan_tcl)
+        left_layout.addWidget(btn_tcl)
+        left_layout.addStretch()
+        splitter.addWidget(left_widget)
+        
+        mid_widget = QWidget()
+        mid_layout = QVBoxLayout(mid_widget)
+        self.view = FloorplanView()
+        self.scene = QGraphicsScene()
+        self.view.setScene(self.scene)
+        # Scale Y by -1 so that Y increases upwards (EDA standard)
+        self.view.scale(1, -1)
+        self.view.macro_dropped.connect(self.on_macro_dropped)
+        self.scene.selectionChanged.connect(self.on_selection_changed)
+        mid_layout.addWidget(self.view)
+        splitter.addWidget(mid_widget)
+        
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        self.tabs = QTabWidget()
+        
+        self.macro_list = QListWidget()
+        self.macro_list.setDragEnabled(True)
+        self.tabs.addTab(self.macro_list, "Macros")
+        
+        self.pin_list = QListWidget()
+        self.pin_list.setDragEnabled(True)
+        self.tabs.addTab(self.pin_list, "I/O Pins")
+        
+        right_layout.addWidget(self.tabs)
+        splitter.addWidget(right_widget)
+        
+        splitter.setSizes([250, 600, 200])
+        self.tabs.setEnabled(False)
+        if self.project_config: self.populate_macros()
+
+    def parse_macro_sizes(self):
+        try:
+            if not self.project_config: return
+            pdk_name = self.project_config.get('pdk', '')
+            cfg = next((c for c in self.pdk_mgr.configs if c['name'] == pdk_name), None)
+            if not cfg: return
+            lib_path = cfg.get('lib', '')
+            volare_base = lib_path.split("libs.ref")[0]
+            search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
+            
+            for lef in glob.glob(search_path):
+                name = os.path.basename(lef).replace('.lef', '')
+                if name in self.project_config.get('macros', []):
+                    with open(lef, 'r') as f:
+                        content = f.read()
+                        m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
+                        if m:
+                            self.macro_sizes[name] = (float(m.group(1)), float(m.group(2)))
+        except:
+            pass
+
+    def populate_macros(self):
+        macros = self.project_config.get("macros", [])
+        for m in macros:
+            self.macro_list.addItem(QListWidgetItem(m))
+
+    def init_floorplan(self):
+        w = self.sp_die_w.value(); h = self.sp_die_h.value()
+        ml = self.sp_marg_l.value(); mr = self.sp_marg_r.value()
+        mt = self.sp_marg_t.value(); mb = self.sp_marg_b.value()
+        cw = w - ml - mr; ch = h - mt - mb
+        
+        if cw <= 0 or ch <= 0:
+            QMessageBox.warning(self, "Invalid Dimensions", "Core area became negative. Adjust margins or die size.")
+            return
+            
+        self.scene.clear()
+        self.view.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
+        self.die_rect = QRectF(0, 0, w, h)
+        die_item = self.scene.addRect(self.die_rect, QPen(QColor("#A0AEC0"), 2), QBrush(Qt.BrushStyle.NoBrush))
+        die_item.setZValue(-10)
+        self.core_rect = QRectF(ml, mb, cw, ch)  # y is mb because Y is up!
+        core_item = self.scene.addRect(self.core_rect, QPen(QColor("#4A5568"), 1, Qt.PenStyle.DashLine), QBrush(Qt.BrushStyle.NoBrush))
+        core_item.setZValue(-9)
+        self.floorplan_initialized = True
+        self.tabs.setEnabled(True)
+        self.view.fitInView(self.die_rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def on_macro_dropped(self, name, pos):
+        if not self.floorplan_initialized: return
+        for item in self.scene.items():
+            if isinstance(item, MacroItem) and item.name == name:
+                return
+        w, h = self.macro_sizes.get(name, (100.0, 100.0))
+        m_item = MacroItem(name, w, h, self.core_rect, self)
+        m_item.setPos(pos.x(), pos.y())
+        self.scene.addItem(m_item)
+        m_item.setPos(m_item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, m_item.pos()))
+        for i in range(self.macro_list.count()):
+            it = self.macro_list.item(i)
+            if it.text() == name or it.text() == f"{name} [PLACED]":
+                it.setText(f"{name} [PLACED]")
+                it.setForeground(QBrush(QColor("#4CAF50")))
+
+    def on_inst_name_changed(self):
+        items = self.scene.selectedItems()
+        if items and isinstance(items[0], MacroItem):
+            items[0].inst_name = self.txt_inst_name.text()
+
+    def on_spinbox_changed(self):
+        items = self.scene.selectedItems()
+        if items and isinstance(items[0], MacroItem):
+            m = items[0]
+            m.setPos(self.sp_sel_x.value(), self.sp_sel_y.value())
+
+    def on_selection_changed(self):
+        items = self.scene.selectedItems()
+        if items and isinstance(items[0], MacroItem):
+            m = items[0]
+            self.lbl_sel_name.setText(m.name)
+            self.sp_sel_x.blockSignals(True)
+            self.sp_sel_y.blockSignals(True)
+            self.txt_inst_name.blockSignals(True)
+            self.sp_sel_x.setValue(m.pos().x())
+            self.sp_sel_y.setValue(m.pos().y())
+            self.txt_inst_name.setText(m.inst_name)
+            self.sp_sel_x.blockSignals(False)
+            self.sp_sel_y.blockSignals(False)
+            self.txt_inst_name.blockSignals(False)
+        else:
+            self.lbl_sel_name.setText("None")
+
+    def generate_floorplan_tcl(self):
+        if not self.floorplan_initialized: return
+        die_w = self.die_rect.width(); die_h = self.die_rect.height()
+        core_x1 = self.core_rect.x(); core_y1 = self.core_rect.y()
+        core_x2 = core_x1 + self.core_rect.width(); core_y2 = core_y1 + self.core_rect.height()
+        tcl = f"initialize_floorplan -die_area \"0 0 {die_w} {die_h}\" -core_area \"{core_x1} {core_y1} {core_x2} {core_y2}\" -site unithd\n"
+        for item in self.scene.items():
+            if isinstance(item, MacroItem):
+                tcl += f"place_inst -name {item.inst_name} -origin {{{item.pos().x()} {item.pos().y()}}} -orientation R0 -status FIRM\n"
+        
+        proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+        def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
+        tcl += f"\nwrite_def \"{def_abs_path}\""
+        
+        self.parent().term_log.append("[SYS] Applying Custom Floorplan...")
+        self.parent().send_command_internal(tcl)
+        self.accept()
 
 class SilisIDE(QMainWindow):
     def __init__(self):
@@ -4518,6 +4901,8 @@ class SilisIDE(QMainWindow):
             elif tag == "[BACKEND]":
                 self.backend_widget.term_log.append(content)
                 self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
+            elif tag == "[BACKEND_GDS_DONE]":
+                QMessageBox.information(self, "GDS Generation Complete", f"GDS layout successfully exported to:\n\n{content}")
 
             # Existing Routing...
             elif tag == "UPDATE_DASHBOARD":
