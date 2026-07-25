@@ -51,7 +51,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QToolButton, QStackedWidget, QButtonGroup, 
                              QGraphicsPolygonItem, QGraphicsPathItem, QScrollArea, QListWidget, QFrame, QTabWidget, QGridLayout, QListWidgetItem)
 from PyQt6.QtCore import (Qt, QTimer, QSize, pyqtSignal, QThread, QDir, 
-                          QEvent, QProcess, QRectF, QPointF, QObject)
+                          QEvent, QProcess, QRectF, QPointF)
 from PyQt6.QtGui import (QAction, QFont, QColor, QSyntaxHighlighter, 
                          QTextCharFormat, QTextFormat, QPixmap, QPainter, QImage, QBrush, QPen,
                          QFileSystemModel, QKeySequence, QShortcut, QImageReader, 
@@ -299,142 +299,73 @@ class PDKManager:
 
     def load_cache(self):
         if os.path.exists(self.cache_file):
-            with suppress(Exception):
-                with open(self.cache_file, 'r') as f: self.configs = json.load(f)
+            try:
+                with open(self.cache_file, 'r') as f: 
+                    self.configs = json.load(f)
+            except: 
+                self.configs = []
 
     def save_cache(self):
-        with open(self.cache_file, 'w') as f: json.dump(self.configs, f, indent=2)
+        with open(self.cache_file, 'w') as f: 
+            json.dump(self.configs, f, indent=2)
     
     def update_config(self, config_data):
+        # Remove existing if name matches (Edit Mode)
         self.configs = [c for c in self.configs if c['name'] != config_data['name']]
+        # Insert new at top
         self.configs.insert(0, config_data)
         self.save_cache()
     
     def delete_config(self, name):
         self.configs = [c for c in self.configs if c['name'] != name]
         self.save_cache()
-
-class MacroManager:
-    """Handles the Global Macro Library (The Shopping Cart inventory)."""
-    def __init__(self):
-        self.cache_file = os.path.expanduser("~/.silis_macro_cache.json")
-        self.macros = []
-        self.load_cache()
-
-    def load_cache(self):
-        if os.path.exists(self.cache_file):
-            with suppress(Exception):
-                with open(self.cache_file, 'r') as f: self.macros = json.load(f)
-
-    def save_cache(self):
-        with open(self.cache_file, 'w') as f: json.dump(self.macros, f, indent=2)
-    
-    def update_macro(self, macro_data):
-        self.macros = [m for m in self.macros if m['name'] != macro_data['name']]
-        self.macros.insert(0, macro_data)
+    def add_manual_config(self, name, tlef, lef, lib, gds):
+        # Insert at top
+        entry = {
+            "name": name, 
+            "tlef": tlef, 
+            "lef": lef, 
+            "lib": lib, 
+            "gds": gds, # The missing link for GDS generation
+            "corner": "Manual"
+        }
+        # Remove duplicates based on name to avoid clutter
+        self.configs = [c for c in self.configs if c['name'] != name]
+        self.configs.insert(0, entry)
         self.save_cache()
-    
-    def delete_macro(self, name):
-        self.macros = [m for m in self.macros if m['name'] != name]
-        self.save_cache()
-
-import glob
-import re
-
-class MacroScannerWorker(QThread):
-    finished = pyqtSignal(int)
-    log = pyqtSignal(str)
-
-    def __init__(self, libs_ref_path, macro_mgr):
-        super().__init__()
-        self.libs_ref_path = libs_ref_path
-        self.macro_mgr = macro_mgr
-
-    def run(self):
-        self.log.emit(f"[Scanner] Indexing {self.libs_ref_path} for macros...")
-        found_count = 0
-        try:
-            for folder_name in os.listdir(self.libs_ref_path):
-                folder_path = os.path.join(self.libs_ref_path, folder_name)
-                if not os.path.isdir(folder_path): continue
-                
-                lef_dir = os.path.join(folder_path, "lef")
-                lib_dir = os.path.join(folder_path, "lib")
-                v_dir = os.path.join(folder_path, "verilog")
-                gds_dir = os.path.join(folder_path, "gds")
-                
-                if not os.path.exists(lef_dir): continue
-                
-                for lef_file in glob.glob(os.path.join(lef_dir, "*.lef")):
-                    macro_name = os.path.splitext(os.path.basename(lef_file))[0]
-                    
-                    lib_files = glob.glob(os.path.join(lib_dir, f"{macro_name}*.lib"))
-                    v_files = glob.glob(os.path.join(v_dir, f"{macro_name}*.v"))
-                    gds_files = glob.glob(os.path.join(gds_dir, f"{macro_name}*.gds"))
-                    
-                    lib_path = lib_files[0] if lib_files else ""
-                    v_path = v_files[0] if v_files else ""
-                    gds_path = gds_files[0] if gds_files else ""
-                    
-                    width, height = 0.0, 0.0
-                    ports = []
-                    try:
-                        with open(lef_file, 'r') as f:
-                            content = f.read()
-                            size_match = re.search(r'SIZE\s+([\d.]+)\s+BY\s+([\d.]+)\s+;', content)
-                            if size_match:
-                                width = float(size_match.group(1))
-                                height = float(size_match.group(2))
-                            pin_blocks = re.findall(r'PIN\s+(\S+)[\s\S]*?DIRECTION\s+(\S+)\s+;', content)
-                            for pin_name, direction in pin_blocks:
-                                ports.append({'name': pin_name, 'direction': direction})
-                    except Exception as e:
-                        self.log.emit(f"[Scanner] Error parsing LEF {lef_file}: {e}")
-                    
-                    macro_data = {
-                        'name': macro_name,
-                        'lef': lef_file.replace('\\', '/'),
-                        'lib': lib_path.replace('\\', '/'),
-                        'v': v_path.replace('\\', '/'),
-                        'gds': gds_path.replace('\\', '/'),
-                        'width': width,
-                        'height': height,
-                        'ports': ports
-                    }
-                    self.macro_mgr.update_macro(macro_data)
-                    found_count += 1
-            
-            self.finished.emit(found_count)
-        except Exception as e:
-            self.log.emit(f"[Scanner] Crashed: {e}")
-            self.finished.emit(-1)
 
 class ManualPDKDialog(QDialog):
     def __init__(self, parent=None, config=None):
         super().__init__(parent)
         self.setWindowTitle("PDK Configuration Editor")
-        self.resize(800, 250)
+        self.resize(800, 500)
         self.layout = QFormLayout(self)
         
+        # Name
         self.e_name = QLineEdit(config['name'] if config else "Custom PDK")
         self.layout.addRow("<b>Config Name:</b>", self.e_name)
         
+        # 1. Tech LEF
         self.e_tlef = QLineEdit(config.get('tlef', '') if config else '')
         b_tlef = QPushButton("Browse Tech LEF (.tlef)"); b_tlef.clicked.connect(lambda: self.browse(self.e_tlef, "Tech LEF (*.tlef *.lef)"))
         self.layout.addRow(b_tlef, self.e_tlef)
         
+        # 2. Macro LEF
         self.e_lef = QLineEdit(config.get('lef', '') if config else '')
         b_lef = QPushButton("Browse Macro LEF (.lef)"); b_lef.clicked.connect(lambda: self.browse(self.e_lef, "Macro LEF (*.lef)"))
         self.layout.addRow(b_lef, self.e_lef)
         
+        # 3. Liberty
         self.e_lib = QLineEdit(config.get('lib', '') if config else '')
         b_lib = QPushButton("Browse Timing (.lib)"); b_lib.clicked.connect(lambda: self.browse(self.e_lib, "Liberty (*.lib)"))
         self.layout.addRow(b_lib, self.e_lib)
 
+        # 4. GDS (The Meat)
         self.e_gds = QLineEdit(config.get('gds', '') if config else '')
         b_gds = QPushButton("Browse Std Cell GDS (.gds)"); b_gds.clicked.connect(lambda: self.browse(self.e_gds, "GDSII (*.gds)"))
         self.layout.addRow(b_gds, self.e_gds)
 
+        # 5. Magic Tech File (The Key to GDS Merge)
         self.e_tech = QLineEdit(config.get('tech', '') if config else '')
         b_tech = QPushButton("Browse Magic Tech (.tech)"); b_tech.clicked.connect(lambda: self.browse(self.e_tech, "Magic Tech (*.tech)"))
         self.layout.addRow(b_tech, self.e_tech)
@@ -448,188 +379,142 @@ class ManualPDKDialog(QDialog):
         if f: line_edit.setText(f)
 
     def validate_and_accept(self):
+        # Enforce all 5 files for a working Magic flow
         if not all([self.e_tlef.text(), self.e_lef.text(), self.e_lib.text(), self.e_gds.text(), self.e_tech.text()]):
-            QMessageBox.warning(self, "Incomplete", "All 5 files are required.")
+            QMessageBox.warning(self, "Incomplete", "All 5 files (TLEF, LEF, LIB, GDS, TECH) are required for the full flow.")
             return
         self.accept()
+    
+    def update_config(self, config_data):
+        # Remove existing if name matches (Edit Mode)
+        self.configs = [c for c in self.configs if c['name'] != config_data['name']]
+        # Insert new at top
+        self.configs.insert(0, config_data)
+        self.save_cache()
+    
+    def delete_config(self, name):
+        self.configs = [c for c in self.configs if c['name'] != name]
+        self.save_cache()
 
     def get_data(self):
-        return {"name": self.e_name.text(), "tlef": self.e_tlef.text(), "lef": self.e_lef.text(), "lib": self.e_lib.text(), "gds": self.e_gds.text(), "tech": self.e_tech.text()}
-
-class ManualMacroDialog(QDialog):
-    def __init__(self, parent=None, config=None):
+        return {
+            "name": self.e_name.text(),
+            "tlef": self.e_tlef.text(),
+            "lef": self.e_lef.text(),
+            "lib": self.e_lib.text(),
+            "gds": self.e_gds.text(),
+            "tech": self.e_tech.text(),
+            "corner": "Manual"
+        }
+class PDKSelector(QDialog):
+    def __init__(self, pdk_manager, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Macro Library Editor")
-        self.resize(800, 250)
-        self.layout = QFormLayout(self)
+        self.setWindowTitle("PDK Management")
+        self.resize(1100, 500)
+        self.mgr = pdk_manager
+        self.selected_config = None
         
-        self.e_name = QLineEdit(config['name'] if config else "data_ram")
-        self.layout.addRow("<b>Macro Module Name:</b>", self.e_name)
+        layout = QVBoxLayout(self)
         
-        self.e_v = QLineEdit(config.get('v', '') if config else '')
-        b_v = QPushButton("Browse Verilog Stub (.v)"); b_v.clicked.connect(lambda: self.browse(self.e_v, "Verilog (*.v *.sv)"))
-        self.layout.addRow(b_v, self.e_v)
+        # Search
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search configs...")
+        self.search.textChanged.connect(self.populate)
+        layout.addWidget(self.search)
         
-        self.e_lef = QLineEdit(config.get('lef', '') if config else '')
-        b_lef = QPushButton("Browse Physical (.lef)"); b_lef.clicked.connect(lambda: self.browse(self.e_lef, "LEF (*.lef)"))
-        self.layout.addRow(b_lef, self.e_lef)
+        # Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Name", "Tech LEF", "Macro LEF", "Lib", "GDS", "Magic Tech"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.doubleClicked.connect(self.accept_selection)
+        layout.addWidget(self.table)
         
-        self.e_lib = QLineEdit(config.get('lib', '') if config else '')
-        b_lib = QPushButton("Browse Timing (.lib)"); b_lib.clicked.connect(lambda: self.browse(self.e_lib, "Liberty (*.lib)"))
-        self.layout.addRow(b_lib, self.e_lib)
-
-        self.e_gds = QLineEdit(config.get('gds', '') if config else '')
-        b_gds = QPushButton("Browse Tapeout GDS (.gds)"); b_gds.clicked.connect(lambda: self.browse(self.e_gds, "GDSII (*.gds)"))
-        self.layout.addRow(b_gds, self.e_gds)
-
-        btn_save = QPushButton("Add to Library"); btn_save.setStyleSheet("background: #00509d; color: white; font-weight: bold; padding: 12px;")
-        btn_save.clicked.connect(self.validate_and_accept)
-        self.layout.addRow(btn_save)
-
-    def browse(self, line_edit, filter_str):
-        f, _ = QFileDialog.getOpenFileName(self, "Select File", "", filter_str)
-        if f: line_edit.setText(f)
-
-    def validate_and_accept(self):
-        if not all([self.e_name.text(), self.e_v.text(), self.e_lef.text(), self.e_lib.text(), self.e_gds.text()]):
-            QMessageBox.warning(self, "Incomplete", "All 4 files (V, LEF, LIB, GDS) are required for a Macro.")
-            return
-        self.accept()
-
-    def get_data(self):
-        return {"name": self.e_name.text(), "v": self.e_v.text(), "lef": self.e_lef.text(), "lib": self.e_lib.text(), "gds": self.e_gds.text()}
-
-class SiliconConfigHub(QDialog):
-    def __init__(self, ide_parent):
-        super().__init__(ide_parent)
-        self.ide = ide_parent
-        self.setWindowTitle("Silicon Configuration Hub (PDK & Macros)")
-        self.resize(1100, 600)
+        # --- CRUD BUTTONS ---
+        btn_lay = QHBoxLayout()
         
-        self.layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
-        self.layout.addWidget(self.tabs)
+        btn_add = QPushButton("➕ Add New")
+        btn_add.setStyleSheet("color: #2da44e; font-weight: bold;")
+        btn_add.clicked.connect(self.trigger_add)
         
-        # --- TAB 1: PDK FOUNDRY ---
-        self.w_pdk = QWidget(); l_pdk = QVBoxLayout(self.w_pdk)
-        self.pdk_table = QTableWidget()
-        self.pdk_table.setColumnCount(6)
-        self.pdk_table.setHorizontalHeaderLabels(["Target PDK", "Tech LEF", "Macro LEF", "Lib", "GDS", "Magic Tech"])
-        self.pdk_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.pdk_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.pdk_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        btn_edit = QPushButton("✏️ Edit Selected")
+        btn_edit.clicked.connect(self.trigger_edit)
         
-        pdk_btns = QHBoxLayout()
-        btn_add_pdk = QPushButton("➕ Add PDK"); btn_add_pdk.clicked.connect(self.add_pdk)
-        btn_del_pdk = QPushButton("🗑️ Delete Selected"); btn_del_pdk.clicked.connect(self.del_pdk)
-        pdk_btns.addWidget(btn_add_pdk); pdk_btns.addWidget(btn_del_pdk); pdk_btns.addStretch()
-        l_pdk.addWidget(self.pdk_table); l_pdk.addLayout(pdk_btns)
-        self.tabs.addTab(self.w_pdk, "🏭 PDK Foundry")
-
-        # --- TAB 2: MACRO SHOPPING CART ---
-        self.w_mac = QWidget(); l_mac = QVBoxLayout(self.w_mac)
-        l_mac.addWidget(QLabel("<b>Check the box next to macros you want to include in this synthesis/routing run:</b>"))
+        btn_del = QPushButton("🗑️ Delete Selected")
+        btn_del.setStyleSheet("color: #cf222e;")
+        btn_del.clicked.connect(self.trigger_delete)
         
-        self.mac_table = QTableWidget()
-        self.mac_table.setColumnCount(5)
-        self.mac_table.setHorizontalHeaderLabels(["Include / Module", "Verilog Stub", "LEF", "Liberty", "GDS"])
-        self.mac_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.mac_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.btn_ok = QPushButton("Select (Enter)")
+        self.btn_ok.clicked.connect(self.accept_selection)
+        self.btn_ok.setDefault(True)
         
-        mac_btns = QHBoxLayout()
-        btn_add_mac = QPushButton("📦 Import Macro to Library"); btn_add_mac.clicked.connect(self.add_macro)
-        btn_del_mac = QPushButton("🗑️ Remove from Library"); btn_del_mac.clicked.connect(self.del_macro)
-        mac_btns.addWidget(btn_add_mac); mac_btns.addWidget(btn_del_mac); mac_btns.addStretch()
-        l_mac.addWidget(self.mac_table); l_mac.addLayout(mac_btns)
-        self.tabs.addTab(self.w_mac, "🛒 Macro Shopping Cart")
-
-        # --- SAVE BUTTON ---
-        bbox = QHBoxLayout()
-        self.btn_save = QPushButton("Lock Configuration & Close")
-        self.btn_save.setStyleSheet("background: #2da44e; color: white; font-weight: bold; padding: 10px;")
-        self.btn_save.clicked.connect(self.accept_config)
-        bbox.addStretch(); bbox.addWidget(self.btn_save)
-        self.layout.addLayout(bbox)
+        btn_lay.addWidget(btn_add)
+        btn_lay.addWidget(btn_edit)
+        btn_lay.addWidget(btn_del)
+        btn_lay.addStretch()
+        btn_lay.addWidget(self.btn_ok)
+        layout.addLayout(btn_lay)
         
-        self.populate_pdks()
-        self.populate_macros()
+        self.populate()
+        self.table.setFocus()
 
-    def populate_pdks(self):
-        self.pdk_table.setRowCount(0)
-        for cfg in self.ide.pdk_mgr.configs:
-            r = self.pdk_table.rowCount()
-            self.pdk_table.insertRow(r)
-            self.pdk_table.setItem(r, 0, QTableWidgetItem(cfg['name']))
-            self.pdk_table.setItem(r, 1, QTableWidgetItem(os.path.basename(cfg['tlef'])))
-            self.pdk_table.setItem(r, 2, QTableWidgetItem(os.path.basename(cfg['lef'])))
-            self.pdk_table.setItem(r, 3, QTableWidgetItem(os.path.basename(cfg['lib'])))
-            self.pdk_table.setItem(r, 4, QTableWidgetItem(os.path.basename(cfg.get('gds', '-'))))
-            self.pdk_table.setItem(r, 5, QTableWidgetItem(os.path.basename(cfg.get('tech', '-'))))
-            self.pdk_table.item(r, 0).setData(Qt.ItemDataRole.UserRole, cfg)
-            
-            if self.ide.active_pdk and self.ide.active_pdk['name'] == cfg['name']:
-                self.pdk_table.selectRow(r)
+    def populate(self):
+        self.table.setRowCount(0)
+        txt = self.search.text().lower()
+        for cfg in self.mgr.configs:
+            if txt and txt not in cfg['name'].lower(): continue
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            self.table.setItem(r, 0, QTableWidgetItem(cfg['name']))
+            self.table.setItem(r, 1, QTableWidgetItem(os.path.basename(cfg['tlef'])))
+            self.table.setItem(r, 2, QTableWidgetItem(os.path.basename(cfg['lef'])))
+            self.table.setItem(r, 3, QTableWidgetItem(os.path.basename(cfg['lib'])))
+            self.table.setItem(r, 4, QTableWidgetItem(os.path.basename(cfg.get('gds', '-'))))
+            self.table.setItem(r, 5, QTableWidgetItem(os.path.basename(cfg.get('tech', '-'))))
+            self.table.item(r, 0).setData(Qt.ItemDataRole.UserRole, cfg)
+        if self.table.rowCount() > 0: self.table.selectRow(0)
 
-    def populate_macros(self):
-        self.mac_table.setRowCount(0)
-        active_names = [m['name'] for m in self.ide.active_macros]
-        for mac in self.ide.macro_mgr.macros:
-            r = self.mac_table.rowCount()
-            self.mac_table.insertRow(r)
-            
-            chk_item = QTableWidgetItem(mac['name'])
-            chk_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk_item.setCheckState(Qt.CheckState.Checked if mac['name'] in active_names else Qt.CheckState.Unchecked)
-            chk_item.setData(Qt.ItemDataRole.UserRole, mac)
-            
-            self.mac_table.setItem(r, 0, chk_item)
-            self.mac_table.setItem(r, 1, QTableWidgetItem(os.path.basename(mac['v'])))
-            self.mac_table.setItem(r, 2, QTableWidgetItem(os.path.basename(mac['lef'])))
-            self.mac_table.setItem(r, 3, QTableWidgetItem(os.path.basename(mac['lib'])))
-            self.mac_table.setItem(r, 4, QTableWidgetItem(os.path.basename(mac['gds'])))
-
-    def add_pdk(self):
+    def trigger_add(self):
         d = ManualPDKDialog(self)
         if d.exec() == QDialog.DialogCode.Accepted:
-            self.ide.pdk_mgr.update_config(d.get_data())
-            self.populate_pdks()
+            self.mgr.update_config(d.get_data())
+            self.populate()
 
-    def del_pdk(self):
-        r = self.pdk_table.currentRow()
-        if r >= 0:
-            cfg = self.pdk_table.item(r, 0).data(Qt.ItemDataRole.UserRole)
-            self.ide.pdk_mgr.delete_config(cfg['name'])
-            self.populate_pdks()
-
-    def add_macro(self):
-        d = ManualMacroDialog(self)
+    def trigger_edit(self):
+        r = self.table.currentRow()
+        if r < 0: return
+        cfg = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+        d = ManualPDKDialog(self, config=cfg)
         if d.exec() == QDialog.DialogCode.Accepted:
-            self.ide.macro_mgr.update_macro(d.get_data())
-            self.populate_macros()
+            self.mgr.update_config(d.get_data())
+            self.populate()
 
-    def del_macro(self):
-        r = self.mac_table.currentRow()
+    def trigger_delete(self):
+        r = self.table.currentRow()
+        if r < 0: return
+        cfg = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+        res = QMessageBox.question(self, "Delete", f"Delete config '{cfg['name']}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if res == QMessageBox.StandardButton.Yes:
+            self.mgr.delete_config(cfg['name'])
+            self.populate()
+
+    def accept_selection(self):
+        r = self.table.currentRow()
         if r >= 0:
-            mac = self.mac_table.item(r, 0).data(Qt.ItemDataRole.UserRole)
-            self.ide.macro_mgr.delete_macro(mac['name'])
-            self.populate_macros()
+            self.selected_config = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+            self.accept()
+        elif self.table.rowCount() > 0:
+            self.selected_config = self.table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+            self.accept()
 
-    def accept_config(self):
-        r = self.pdk_table.currentRow()
-        if r >= 0: self.ide.active_pdk = self.pdk_table.item(r, 0).data(Qt.ItemDataRole.UserRole)
-        elif self.pdk_table.rowCount() > 0: self.ide.active_pdk = self.pdk_table.item(0, 0).data(Qt.ItemDataRole.UserRole)
-        else:
-            QMessageBox.warning(self, "Error", "Please select a valid PDK configuration first.")
-            return
-            
-        checked_macros = []
-        for row in range(self.mac_table.rowCount()):
-            item = self.mac_table.item(row, 0)
-            if item.checkState() == Qt.CheckState.Checked:
-                checked_macros.append(item.data(Qt.ItemDataRole.UserRole))
-                
-        self.ide.active_macros = checked_macros
-        self.accept()
+    def keyPressEvent(self, event):
+        if event.key() in [Qt.Key.Key_Enter, Qt.Key.Key_Return]:
+            self.accept_selection()
+            event.accept()
+        else: super().keyPressEvent(event)
+
 
 # ================= ROBUST DEF PARSER =================
 
@@ -639,205 +524,226 @@ class SiliconConfigHub(QDialog):
 
 
 # ================= 1. ROBUST DEF PARSER (Full) =================
-# ================= 1. ROBUST DEF PARSER (With True Sizes) =================
 class DEFParser:
-    def __init__(self, def_path, sizes_json=None):
+    def __init__(self, def_path):
         self.path = def_path
         self.die_rect = QRectF(0,0,0,0)
         self.comps_map = {}   
         self.comp_types = {}  
+        self.module_map = {}  
         self.pins = []       
         self.power_rails = [] 
         self.power_routes = [] 
         self.signal_routes = [] 
         self.dbu = 1000.0    
         self.component_count = 0
-        
-        self.master_sizes = {}
-        if sizes_json and os.path.exists(sizes_json):
-            with suppress(Exception):
-                with open(sizes_json, 'r') as f:
-                    data = json.load(f)
-                    self.dbu = data.get("dbu", 1000.0)
-                    self.master_sizes = data.get("masters", {})
-
         if os.path.exists(def_path):
             self.parse()
 
     def parse(self):
-        with open(self.path, 'r') as f: lines = f.readlines()
+        if not os.path.exists(self.path): return
+
+        with open(self.path, 'r') as f:
+            lines = f.readlines()
+
         current_section = None
+        std_w, std_h = 5.0, 2.72 
         
+        current_comp_name = None
+        current_comp_model = None
+        current_pin_name = None
+        
+        # Route State
         current_route_width = 0
         current_route_points = [] 
         parsing_route = False
-        last_x = last_y = None
         
-        # Fallbacks
-        std_w = 5 * self.dbu
-        std_h = 2.72 * self.dbu
+        # Routing Context
+        last_x = None
+        last_y = None
 
         for line in lines:
             try:
                 line = line.strip()
                 if not line or line.startswith('#'): continue
 
+                # --- GLOBAL ---
                 if line.startswith("UNITS DISTANCE MICRONS"):
                     parts = line.split()
-                    if len(parts) >= 4: self.dbu = float(parts[3])
+                    if len(parts) >= 4:
+                        self.dbu = float(parts[3])
+                        std_w = 5 * self.dbu 
+                        std_h = 2.72 * self.dbu 
+
                 elif line.startswith("DIEAREA"):
                     nums = re.findall(r'(-?\d+)', line)
                     if len(nums) >= 4:
                         x1, y1, x2, y2 = map(int, nums[:4])
                         self.die_rect = QRectF(x1, y1, x2-x1, y2-y1)
-                
-                elif line.startswith("COMPONENTS"): current_section = "COMPONENTS"
-                elif line.startswith("PINS"): current_section = "PINS"
-                elif line.startswith("SPECIALNETS"): current_section = "SPECIALNETS"
-                elif line.startswith("NETS") and "SPECIAL" not in line: current_section = "NETS"
-                elif line.startswith("END"): current_section = None
+
+                # --- SECTIONS ---
+                elif line.startswith("COMPONENTS"): 
+                    current_section = "COMPONENTS"
+                    parsing_route = False
+                elif line.startswith("PINS"): 
+                    current_section = "PINS"
+                    parsing_route = False
+                elif line.startswith("SPECIALNETS"): 
+                    current_section = "SPECIALNETS"
+                elif line.startswith("NETS") and "SPECIAL" not in line: 
+                    current_section = "NETS"
+                elif line.startswith("END"): 
+                    current_section = None
+                    if len(current_route_points) >= 2:
+                        if current_section == "SPECIALNETS": self.power_routes.append((current_route_width, current_route_points))
+                        elif current_section == "NETS": self.signal_routes.append(current_route_points)
+                    current_route_points = []
+                    parsing_route = False
 
                 # --- COMPONENTS ---
-                elif current_section == "COMPONENTS" and line.startswith("-"):
+                elif current_section == "COMPONENTS":
                     parts = line.split()
-                    if len(parts) >= 3:
-                        cname = parts[1]
-                        cmodel = parts[2]
-                        # Find coords in same line (single-line DEF format)
-                        coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
-                        if coord_match:
-                            x, y = int(coord_match.group(1)), int(coord_match.group(2))
-                            
-                            # Get true size from JSON!
-                            w = self.master_sizes.get(cmodel, {}).get("w", std_w)
-                            h = self.master_sizes.get(cmodel, {}).get("h", std_h)
-                            
-                            self.comps_map[cname] = QRectF(x, y, w, h)
-                            
-                            model_l = cmodel.lower()
-                            if "tap" in model_l or "fill" in model_l: self.comp_types[cname] = "TAP"
-                            elif "clk" in model_l: self.comp_types[cname] = "CLOCK"
-                            elif "ram" in model_l or "sram" in model_l or "block" in self.master_sizes.get(cmodel, {}).get("type", "").lower(): 
-                                self.comp_types[cname] = "MACRO"
-                            else: self.comp_types[cname] = "STD"
-                            self.component_count += 1
-                
+                    if line.startswith("-"):
+                        if len(parts) >= 3:
+                            current_comp_name = parts[1]
+                            current_comp_model = parts[2]
+                    
+                    if current_comp_name:
+                        if "PLACED" in line or "FIXED" in line or "COVER" in line:
+                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
+                            if coord_match:
+                                x = int(coord_match.group(1))
+                                y = int(coord_match.group(2))
+                                self.comps_map[current_comp_name] = QRectF(x, y, std_w, std_h)
+                                
+                                model_lower = current_comp_model.lower()
+                                is_tap = "tap" in model_lower or "fill" in model_lower
+                                is_clock = "clk" in model_lower and not current_comp_name.startswith("_")
+                                
+                                if is_tap: self.comp_types[current_comp_name] = "TAP"
+                                elif is_clock: self.comp_types[current_comp_name] = "CLOCK"
+                                else: self.comp_types[current_comp_name] = "STD"
+                                
+                                self.module_map[current_comp_name] = "STD_LOGIC" 
+                                self.component_count += 1
+                                current_comp_name = None
+
                 # --- PINS ---
-                elif current_section == "PINS" and line.startswith("-"):
+                elif current_section == "PINS":
                     parts = line.split()
-                    if len(parts) > 2:
-                        pname = parts[1]
+                    if line.startswith("-") and len(parts) > 2:
+                        current_pin_name = parts[1]
+                    
+                    if current_pin_name and ("PLACED" in line or "FIXED" in line):
                         coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
                         if coord_match:
-                            x, y = int(coord_match.group(1)), int(coord_match.group(2))
-                            sz = 1 * self.dbu 
-                            self.pins.append((QRectF(x, y, sz, sz), pname))
-                            
-                # --- ROUTES ---
+                            x = int(coord_match.group(1))
+                            y = int(coord_match.group(2))
+                            pin_sz = 1 * self.dbu 
+                            self.pins.append((QRectF(x, y, pin_sz, pin_sz), current_pin_name))
+                            current_pin_name = None 
+
+                # --- ROUTING (FINAL RECT FIX) ---
                 elif current_section in ["NETS", "SPECIALNETS"]:
+                    
+                    # 1. TRIGGER: Start parsing on ROUTED or NEW
                     if "ROUTED" in line or "NEW" in line:
                         parsing_route = True
                         if len(current_route_points) >= 2:
                             if current_section == "SPECIALNETS": self.power_routes.append((current_route_width, current_route_points))
                             else: self.signal_routes.append(current_route_points)
+                        
                         current_route_points = []
-                        last_x = last_y = None
+                        last_x = None 
+                        last_y = None 
+
                         if current_section == "SPECIALNETS":
                             w_match = re.search(r'ROUTED\s+\S+\s+(\d+)', line)
                             if w_match: current_route_width = int(w_match.group(1))
-                            
-                    if "RECT" in line or "LAYER" in line: continue
-                    
+
+                    # 2. FILTER: Ignore Shape Definitions (RECT, PORT, VIA definitions)
+                    if "RECT" in line or "LAYER" in line:
+                        continue 
+
                     if parsing_route:
+                        # Stop if end of statement
                         if line.startswith("-") or ";" in line:
                             parsing_route = False
                             if len(current_route_points) >= 2:
                                 if current_section == "SPECIALNETS": self.power_routes.append((current_route_width, current_route_points))
                                 else: self.signal_routes.append(current_route_points)
                             current_route_points = []
-                        
+                            last_x = None
+                            last_y = None
+
                         if "(" in line:
+                            # 3. STRICT PARSING: Only look inside ( ... )
                             raw_groups = line.split('(')
+                            
                             for group in raw_groups[1:]: 
                                 if ")" not in group: continue
-                                tokens = group.split(')')[0].split()
+                                content = group.split(')')[0]
+                                
+                                tokens = content.split()
                                 if len(tokens) >= 2:
-                                    x = last_x if tokens[0] == "*" else int(tokens[0]) if tokens[0].lstrip('-').isdigit() else None
-                                    y = last_y if tokens[1] == "*" else int(tokens[1]) if tokens[1].lstrip('-').isdigit() else None
+                                    val_x_str = tokens[0]
+                                    val_y_str = tokens[1]
+                                    
+                                    x = None
+                                    if val_x_str == "*": x = last_x
+                                    elif val_x_str.lstrip('-').isdigit(): x = int(val_x_str)
+                                    
+                                    y = None
+                                    if val_y_str == "*": y = last_y
+                                    elif val_y_str.lstrip('-').isdigit(): y = int(val_y_str)
+                                    
                                     if x is not None and y is not None:
                                         current_route_points.append(QPointF(x, y))
                                         last_x, last_y = x, y
 
-            except Exception: continue
+            except Exception as inner_e:
+                continue
+        
+        # EOF Flush
+        if len(current_route_points) >= 2:
+             if current_section == "SPECIALNETS":
+                 self.power_routes.append((current_route_width, current_route_points))
+             elif current_section == "NETS":
+                 self.signal_routes.append(current_route_points)
+        
+        print(f"DEBUG: Parsed {self.component_count} comps, {len(self.power_routes)} pwr_segs, {len(self.signal_routes)} sig_nets.")
 
 
-from PyQt6.QtWidgets import QGraphicsItem
 
-class MacroItem(QGraphicsRectItem):
-    """Interactive Draggable Macro Block."""
-    def __init__(self, inst_name, master_name, x, y, w, h, snap_w, snap_h, dbu):
-        super().__init__(0, 0, w, h)
-        self.setPos(x, y)
-        self.inst_name = inst_name
-        self.master_name = master_name
-        self.snap_w = snap_w
-        self.snap_h = snap_h
-        self.dbu = dbu
-        
-        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
-                      QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
-                      QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
-        
-        # Professional Styling
-        self.setBrush(QBrush(QColor(50, 100, 150, 220))) 
-        self.setPen(QPen(Qt.GlobalColor.white, int(max(2, dbu/200))))
-        self.setZValue(100) 
 
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
-            new_pos = value
-            snapped_x = round(new_pos.x() / self.snap_w) * self.snap_w
-            snapped_y = round(new_pos.y() / self.snap_h) * self.snap_h
-            return QPointF(snapped_x, snapped_y)
-        return super().itemChange(change, value)
-    
-    def paint(self, painter, option, widget):
-        super().paint(painter, option, widget)
-        painter.save()
-        painter.setPen(Qt.GlobalColor.white)
-        font = QFont("Consolas", int(max(self.rect().width(), self.rect().height()) / 15))
-        font.setBold(True)
-        painter.setFont(font)
-        
-        # CAD Coordinate Flip Compensation for Text
-        cx, cy = self.rect().center().x(), self.rect().center().y()
-        painter.translate(cx, cy)
-        painter.scale(1, -1)
-        painter.translate(-cx, -cy)
-        
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"{self.inst_name}\n({self.master_name})")
-        painter.restore()
 
 
 # ================= 2. SILICON PEEKER (Visualizer Full) =================
+
 class SiliconPeeker(QGraphicsView):
-    def __init__(self, controller=None):
-        super().__init__()
-        self.controller = controller
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # [FIX] REMOVED OpenGL to stop MESA/libEGL errors and Black Screen
+        # self.setViewport(QOpenGLWidget()) 
+        
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-        self.setBackgroundBrush(QColor("#1e1e1e")) # Pro Dark Mode 
+        self.setBackgroundBrush(QColor("#FFFFFF")) 
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        self.scale(1, -1) # Flip Y
+        # Optimization
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setOptimizationFlags(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing)
+        
+        # Flip Y (CAD Coordinates)
+        self.scale(1, -1) 
+        
+        # Initial Default Scene Rect (Will be overridden by set_die_area)
         self.setSceneRect(0, 0, 1000, 1000)
         
         self.def_data = None
         self.first_load = True
-        self.sandbox_active = False
-        self.macro_items = []
-        self.sizes_json_path = None
         
         self.show_insts = True
         self.show_pins = True
@@ -845,59 +751,115 @@ class SiliconPeeker(QGraphicsView):
         self.show_power = True
         self.show_heatmap = False
 
-    def enter_sandbox_mode(self, json_path, die_w_um=1000, die_h_um=1000):
-        self.scene.clear()
-        self.sandbox_active = True
-        self.macro_items = []
-        
-        with suppress(Exception):
-            with open(json_path, 'r') as f: data = json.load(f)
-            
-            dbu = data.get("dbu", 1000)
-            snap_w = data.get("site_w", 460)
-            snap_h = data.get("site_h", 2720)
-            
-            die_w_dbu, die_h_dbu = die_w_um * dbu, die_h_um * dbu
-            self.set_die_area(0, 0, die_w_dbu, die_h_dbu)
-            
-            spawn_x = die_w_dbu + (50 * dbu)
-            spawn_y = 50 * dbu
-            
-            for inst_name, mname in data.get("macros", {}).items():
-                w = data["masters"].get(mname, {}).get("w", 50000)
-                h = data["masters"].get(mname, {}).get("h", 50000)
-                m = MacroItem(inst_name, mname, spawn_x, spawn_y, w, h, snap_w, snap_h, dbu)
-                self.scene.addItem(m)
-                self.macro_items.append(m)
-                spawn_y += h + (20 * dbu) 
-
     def set_die_area(self, x1, y1, x2, y2):
+        """
+        Called by BackendWidget to pre-set the view before DEF is loaded.
+        Centers the chip in a scene that is 1.5x larger than the chip itself.
+        """
         self.scene.clear()
-        width, height = x2 - x1, y2 - y1
-        scene_w, scene_h = width * 1.5, height * 1.5
+        
+        # Chip Dimensions
+        width = x2 - x1
+        height = y2 - y1
+        
+        # [USER REQUEST] New Scene Rect Logic
+        # Scene Size = 1.5x Chip Size
+        scene_w = width * 1.5
+        scene_h = height * 1.5
+        
+        # Set Scene Rect starting at 0,0
         self.setSceneRect(0, 0, scene_w, scene_h)
         
-        offset_x, offset_y = (scene_w - width) / 2, (scene_h - height) / 2
-        rect = QRectF(offset_x, offset_y, width, height)
+        # Calculate where to put the Chip so it is centered in that Scene
+        # Center of Scene: (scene_w/2, scene_h/2)
+        # We want Chip Center (x1 + w/2, y1 + h/2) to land there.
+        # Since we draw relative to (0,0), we offset the drawing.
         
+        offset_x = (scene_w - width) / 2
+        offset_y = (scene_h - height) / 2
+        
+        # Draw the Die Outline (Offset to center)
+        rect = QRectF(offset_x, offset_y, width, height)
         item = QGraphicsRectItem(rect)
-        item.setPen(QPen(QColor("#555555"), 4))
-        item.setBrush(QBrush(QColor("#252526"))) # Floorplan background
-        item.setZValue(-100)
+        item.setPen(QPen(QColor("#000000"), 2))
+        item.setBrush(QBrush(QColor("#eeeeee")))
         self.scene.addItem(item)
         
+        # Add a text label
+        t = self.scene.addText(f"Die Area: {width:.1f} x {height:.1f}")
+        # Position text at geometric center
+        t.setPos(offset_x + width/2, offset_y + height/2)
+        # Flip text back so it's readable
+        t.setTransform(QTransform().scale(1, -1))
+        
+        # Force the Viewport to look at this centered area
         self.centerOn(offset_x + width/2, offset_y + height/2)
+        # Fit, but keep it tight enough to see
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def load_def_file(self, path):
-        if not os.path.exists(path): return
+    def drawForeground(self, painter, rect):
+        # [FIX] CRITICAL GUARD CLAUSE
+        # Prevents "Painter not active" errors on startup
+        if self.viewport().width() <= 0 or self.viewport().height() <= 0:
+            return
+            
+        if not self.def_data: return
+        
+        # --- HUD RENDERER ---
         try:
-            self.def_data = DEFParser(path, self.sizes_json_path)
-            self.redraw()
-            if self.first_load:
-                self.fit_with_slack()
-                self.first_load = False
-        except Exception as e: print(f"Peeker Error: {e}")
+            painter.save()
+            painter.resetTransform()
+            
+            view_transform = self.transform()
+            # m11 is the X scale factor. Since we flipped Y, m22 is negative.
+            zoom_level = view_transform.m11() 
+            
+            if self.def_data and self.def_data.dbu > 0:
+                pixels_per_micron = zoom_level * self.def_data.dbu
+            else:
+                pixels_per_micron = zoom_level * 1000 # Fallback
+            
+            if pixels_per_micron > 0.1:
+                target_px = 150
+                target_microns = target_px / pixels_per_micron
+                
+                # Snap to nice numbers
+                if target_microns >= 100: d_val = 100
+                elif target_microns >= 10: d_val = 10
+                elif target_microns >= 1: d_val = 1
+                else: d_val = 0.1
+                
+                bar_w = d_val * pixels_per_micron
+                vx, vy = self.viewport().width(), self.viewport().height()
+                
+                # Draw Red Bar
+                painter.setPen(QPen(Qt.GlobalColor.red, 2))
+                painter.drawLine(int(vx - bar_w - 20), int(vy - 30), int(vx - 20), int(vy - 30))
+                painter.drawText(int(vx - bar_w - 20), int(vy - 40), f"{d_val} µm")
+
+            painter.restore()
+        except Exception:
+            pass # Suppress painting errors during resize
+
+    def wheelEvent(self, event):
+        zoomInFactor = 1.25
+        zoomOutFactor = 1 / zoomInFactor
+        oldPos = self.mapToScene(event.position().toPoint())
+        
+        if event.angleDelta().y() > 0:
+            self.scale(zoomInFactor, zoomInFactor)
+        else:
+            self.scale(zoomOutFactor, zoomOutFactor)
+            
+        newPos = self.mapToScene(event.position().toPoint())
+        delta = newPos - oldPos
+        self.translate(delta.x(), delta.y())
+        event.accept()
+        self.viewport().update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.viewport().update()
 
     def fit_with_slack(self):
         rect = self.scene.itemsBoundingRect()
@@ -905,97 +867,156 @@ class SiliconPeeker(QGraphicsView):
         margin = max(rect.width(), rect.height()) * 0.1
         self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def wheelEvent(self, event):
-        zoomInFactor = 1.25
-        oldPos = self.mapToScene(event.position().toPoint())
-        if event.angleDelta().y() > 0: self.scale(zoomInFactor, zoomInFactor)
-        else: self.scale(1/zoomInFactor, 1/zoomInFactor)
-        newPos = self.mapToScene(event.position().toPoint())
-        self.translate(newPos.x() - oldPos.x(), newPos.y() - oldPos.y())
+    def load_def_file(self, path):
+        if not os.path.exists(path): return
+        try:
+            self.def_data = DEFParser(path)
+            self.redraw()
+            if self.first_load:
+                self.fit_with_slack()
+                self.first_load = False
+        except Exception as e: 
+            print(f"Peeker Load Error: {e}")
 
     def redraw(self):
-        if not self.def_data: return
-        current_transform = self.transform()
-        self.scene.clear()
-        
-        d = self.def_data.die_rect
-        self.setSceneRect(d.adjusted(-d.width()*0.25, -d.height()*0.25, d.width()*0.25, d.height()*0.25))
-        
-        die = QGraphicsRectItem(d)
-        die.setPen(QPen(QColor("#555555"), 4))
-        die.setBrush(QBrush(QColor("#252526"))) 
-        die.setZValue(-100)
-        self.scene.addItem(die)
+        try:
+            current_transform = self.transform()
+            self.scene.clear()
+            if not self.def_data: return
 
-        # === THE GPU PATH BATCHING ===
-        if self.show_insts:
-            path_std = QPainterPath()
-            path_tap = QPainterPath()
-            path_clk = QPainterPath()
-            path_mac = QPainterPath()
+            # 1. Die Background
+            d = self.def_data.die_rect
             
-            for name, rect in self.def_data.comps_map.items():
-                ctype = self.def_data.comp_types.get(name, "STD")
-                if ctype == "TAP": path_tap.addRect(rect)
-                elif ctype == "CLOCK": path_clk.addRect(rect)
-                elif ctype == "MACRO": path_mac.addRect(rect)
-                else: path_std.addRect(rect)
-
-            if not path_std.isEmpty():
-                item = QGraphicsPathItem(path_std)
-                item.setPen(Qt.PenStyle.NoPen)
-                item.setBrush(QBrush(QColor(0, 120, 215, 180)))
-                item.setZValue(10)
-                self.scene.addItem(item)
-
-            if not path_clk.isEmpty():
-                item = QGraphicsPathItem(path_clk)
-                item.setPen(Qt.PenStyle.NoPen)
-                item.setBrush(QBrush(QColor(200, 50, 50, 200)))
-                item.setZValue(15)
-                self.scene.addItem(item)
-                
-            if not path_tap.isEmpty():
-                item = QGraphicsPathItem(path_tap)
-                item.setPen(Qt.PenStyle.NoPen)
-                item.setBrush(QBrush(QColor(80, 80, 80, 100)))
-                item.setZValue(-4)
-                self.scene.addItem(item)
-                
-            if not path_mac.isEmpty():
-                item = QGraphicsPathItem(path_mac)
-                item.setPen(QPen(Qt.GlobalColor.white, 2))
-                item.setBrush(QBrush(QColor(50, 100, 150, 220)))
-                item.setZValue(50)
-                self.scene.addItem(item)
-
-        if self.show_power:
-            thin_width = d.width() / 1200.0
-            for width, points in self.def_data.power_routes:
-                p = QPainterPath()
-                p.moveTo(points[0])
-                for pt in points[1:]: p.lineTo(pt)
-                i = QGraphicsPathItem(p)
-                pen = QPen(QColor("#dcdcaa"), thin_width)
-                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-                i.setPen(pen)
-                i.setZValue(-5)
-                self.scene.addItem(i)
-
-        if self.show_nets:
-            path = QPainterPath()
-            for points in self.def_data.signal_routes:
-                if not points: continue
-                path.moveTo(points[0])
-                for p in points[1:]: path.lineTo(p)
+            # [USER REQUEST] Recentering Logic for Actual Chip Data
+            # If we previously set a big scene, we want to place this chip in the middle of it.
+            # However, DEF data comes with absolute coordinates (e.g. 1000, 1000).
+            # We respect the DEF coordinates but ensure the SceneRect covers them + padding.
             
-            pen = QPen(QColor("#505050"), 0) 
-            item = QGraphicsPathItem(path)
-            item.setPen(pen)
-            item.setZValue(-5) 
-            self.scene.addItem(item)
+            self.setSceneRect(d.adjusted(-d.width()*0.25, -d.height()*0.25, d.width()*0.25, d.height()*0.25))
+            
+            die = QGraphicsRectItem(d)
+            die.setPen(QPen(QColor("#000000"), 0))
+            die.setBrush(QBrush(QColor("#bebebe"))) 
+            die.setZValue(-100)
+            self.scene.addItem(die)
 
-        self.setTransform(current_transform)
+            if self.def_data.component_count == 0 and d.width() > 0:
+                t = self.scene.addText(f"Parsed {self.def_data.component_count} components")
+                t.setPos(d.center().x(), d.center().y())
+                t.setTransform(QTransform().scale(100, -100))
+                t.setDefaultTextColor(QColor("red"))
+
+            if self.show_heatmap:
+                self.draw_organic_heatmap(d)
+            else:
+                # POWER
+                if self.show_power:
+                    for r in self.def_data.power_rails:
+                        item = QGraphicsRectItem(r)
+                        item.setPen(QPen(Qt.PenStyle.NoPen))
+                        item.setBrush(QBrush(QColor("#ffaa00"))) 
+                        item.setZValue(-5)
+                        self.scene.addItem(item)
+                    
+                    thin_width = d.width() / 1200.0
+                    for width, points in self.def_data.power_routes:
+                        path = QPainterPath()
+                        path.moveTo(points[0])
+                        for p in points[1:]: path.lineTo(p)
+                        
+                        pen = QPen(QColor("#ffaa00"), thin_width)
+                        pen.setCapStyle(Qt.PenCapStyle.FlatCap) 
+                        item = QGraphicsPathItem(path)
+                        item.setPen(pen)
+                        item.setZValue(-5)
+                        self.scene.addItem(item)
+
+                # NETS (Signal)
+                if self.show_nets:
+                    path = QPainterPath()
+                    for points in self.def_data.signal_routes:
+                        if not points: continue
+                        path.moveTo(points[0])
+                        for p in points[1:]: path.lineTo(p)
+                    
+                    # Dark Grey for better visibility
+                    pen = QPen(QColor("#505050"), 0) 
+                    item = QGraphicsPathItem(path)
+                    item.setPen(pen)
+                    item.setZValue(-5) 
+                    self.scene.addItem(item)
+
+                # CELLS
+                if self.show_insts:
+                    for name, rect in self.def_data.comps_map.items():
+                        ctype = self.def_data.comp_types.get(name, "STD")
+                        item = QGraphicsRectItem(rect)
+                        
+                        if ctype == "TAP":
+                            item.setPen(QPen(Qt.PenStyle.NoPen)) 
+                            item.setBrush(QBrush(QColor("#000000"))) 
+                            item.setZValue(-4) 
+                        elif ctype == "CLOCK":
+                            # Red for Clock Cells (Excluding Yosys internals)
+                            item.setPen(QPen(QColor("#800000"), 0)) 
+                            item.setBrush(QBrush(QColor("#D00000"))) 
+                            item.setZValue(15) # Draw on top
+                        else:
+                            # Standard Blue
+                            item.setPen(QPen(QColor("#00509d"), 0)) 
+                            item.setBrush(QBrush(QColor("#4cc9f0"))) 
+                            item.setZValue(10)
+                        
+                        self.scene.addItem(item)
+
+            # PINS
+            if self.show_pins:
+                for rect, name in self.def_data.pins:
+                    cx, cy = rect.center().x(), rect.center().y()
+                    sz = max(5 * self.def_data.dbu, d.width() / 150)
+                    poly = QPolygonF([QPointF(cx, cy + sz), QPointF(cx - sz/2, cy), QPointF(cx + sz/2, cy)])
+                    item = QGraphicsPolygonItem(poly)
+                    item.setPen(QPen(QColor("#000000"), 0)) 
+                    item.setBrush(QBrush(QColor("#ff0000")))
+                    item.setZValue(30)
+                    self.scene.addItem(item)
+                    
+                    text = self.scene.addText(name)
+                    text.setPos(cx, cy)
+                    sf = d.width() / 1200.0 if d.width() > 0 else 1.0
+                    text.setTransform(QTransform().scale(sf, -sf)) 
+                    text.setDefaultTextColor(QColor("black"))
+                    text.setZValue(31)
+
+            self.setTransform(current_transform)
+            
+        except Exception as e:
+            print(f"Redraw Exception: {e}")
+
+    def draw_organic_heatmap(self, die_rect):
+        expansion = 8 * self.def_data.dbu 
+        color = QColor(255, 0, 0, 8) 
+        brush = QBrush(color)
+        
+        count = 0
+        for rect in self.def_data.comps_map.values():
+            count += 1
+            if count > 40000: break
+            
+            big_rect = rect.adjusted(-expansion, -expansion, expansion, expansion)
+            final_rect = big_rect.intersected(die_rect)
+            
+            if not final_rect.isEmpty():
+                item = QGraphicsRectItem(final_rect)
+                item.setPen(QPen(Qt.PenStyle.NoPen))
+                item.setBrush(brush)
+                item.setZValue(20)
+                self.scene.addItem(item)
+
+
+
+
+
 
 
 # ================= 1. FRONTEND COMPONENTS (Tabs) =================
@@ -1113,249 +1134,20 @@ class SilisSchematic(QGraphicsView):
         reset_act.triggered.connect(lambda: self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio))
         menu.addAction(reset_act)
         menu.exec(event.globalPos())
-from PyQt6.QtGui import QTextCursor, QTextDocument
-
-# Style presets definition
-EDITOR_PRESETS = {
-    "Silis Dark": {
-        "label": "Silis Dark", "icon": "🌑",
-        "desc": "Default dark theme — optimised for long sessions",
-        "bg": "#0d0e12", "fg": "#c8cad8", "gutter_bg": "#0a0b0f",
-        "gutter_fg": "#3a3e52", "line_hl": "#1a1c24",
-        "cursor": "#00bcd4", "selection": "#1e3a52",
-        "font_family": "JetBrains Mono", "font_size": 11, "tab_width": 4,
-        "keyword":   "#569cd6",   # module, input, output, wire, reg…
-        "keyword2":  "#c586c0",   # always, begin, end, if, else, case…
-        "string":    "#ce9178",   # "strings"
-        "comment":   "#6a9955",   # // and /* */
-        "number":    "#b5cea8",   # 1'b0, 8'hFF, 32'd100
-        "operator":  "#d4d4d4",   # = + - & | ^ ~ << >>
-        "directive": "#9cdcfe",   # `timescale `include `define
-        "type_kw":   "#4ec9b0",   # integer, real, time, parameter
-        "identifier":"#dcdcaa",   # signal/instance names after keywords
-    },
-    "Silis Light": {
-        "label": "Silis Light", "icon": "☀️",
-        "desc": "Clean light theme — ideal for bright environments",
-        "bg": "#ffffff", "fg": "#1a1d2e", "gutter_bg": "#f4f5f7",
-        "gutter_fg": "#9098b0", "line_hl": "#e8f4fb",
-        "cursor": "#0077b6", "selection": "#cce5f6",
-        "font_family": "JetBrains Mono", "font_size": 11, "tab_width": 4,
-        "keyword":   "#0000ff",
-        "keyword2":  "#af00db",
-        "string":    "#a31515",
-        "comment":   "#008000",
-        "number":    "#098658",
-        "operator":  "#000000",
-        "directive": "#0070c1",
-        "type_kw":   "#267f99",
-        "identifier":"#001080",
-    },
-    "Monokai": {
-        "label": "Monokai", "icon": "🌴",
-        "desc": "Retro high-contrast colorful theme",
-        "bg": "#272822", "fg": "#f8f8f2", "gutter_bg": "#1e1f1c",
-        "gutter_fg": "#75715e", "line_hl": "#3e3d32",
-        "cursor": "#f8f8f0", "selection": "#49483e",
-        "font_family": "Monaco", "font_size": 11, "tab_width": 4,
-        "keyword":   "#f92672",
-        "keyword2":  "#66d9ef",
-        "string":    "#e6db74",
-        "comment":   "#75715e",
-        "number":    "#ae81ff",
-        "operator":  "#f92672",
-        "directive": "#a6e22e",
-        "type_kw":   "#66d9ef",
-        "identifier":"#a6e22e",
-    },
-    "Vivado Classic": {
-        "label": "Vivado Classic", "icon": "🟦",
-        "desc": "Matches Xilinx Vivado default editor colours",
-        "bg": "#ffffff", "fg": "#000000", "gutter_bg": "#f0f0f0",
-        "gutter_fg": "#888888", "line_hl": "#e8f0ff",
-        "cursor": "#000000", "selection": "#b3d7ff",
-        "font_family": "Courier New", "font_size": 10, "tab_width": 3,
-        "keyword":   "#0000ff",
-        "keyword2":  "#800080",
-        "string":    "#800000",
-        "comment":   "#008000",
-        "number":    "#098658",
-        "operator":  "#000000",
-        "directive": "#2b91af",
-        "type_kw":   "#2b91af",
-        "identifier":"#000000",
-    }
-}
-_active_editor_preset = "Silis Dark"
-
-class VerilogHighlighter(QSyntaxHighlighter):
-    """
-    Full Verilog/SystemVerilog, SDC, and TCL syntax highlighter.
-    """
-    _KW1 = r"\b(module|endmodule|input|output|inout|wire|reg|logic|parameter|localparam|assign|function|endfunction|task|endtask|generate|endgenerate|genvar|specify|endspecify|primitive|endprimitive|table|endtable|fork|join|begin|end|initial|always|always_ff|always_comb|always_latch|posedge|negedge|edge)\b"
-    _KW2 = r"\b(if|else|case|casez|casex|endcase|for|while|repeat|forever|disable|return|break|continue|wait|force|release|deassign|default)\b"
-    _TYPE = r"\b(integer|real|realtime|time|bit|byte|shortint|int|longint|shortreal|string|void|enum|struct|union|typedef|class|interface|modport|clocking|covergroup|property|sequence)\b"
-    _NUM  = r"\b(\d+\'[bBoOhHdD][0-9a-fA-FxXzZ_]+|\d+\.\d+|\d+)\b"
-    _STR  = r'"[^"\\]*(?:\\.[^"\\]*)*"'
-    _DIR  = r"`[a-zA-Z_][a-zA-Z0-9_]*"
-    _CMT1 = r"//[^\n]*"
-    _CMT2_S = r"/\*"
-    _CMT2_E = r"\*/"
-    _TCL_KW = r"\b(set|expr|if|else|elseif|for|foreach|while|switch|proc|return|exit|source|puts|catch|info|global|upvar|namespace)\b"
-    _SDC_CMD = r"\b(create_clock|create_generated_clock|set_clock_latency|set_clock_uncertainty|set_clock_transition|set_input_delay|set_output_delay|set_max_delay|set_min_delay|set_false_path|set_multicycle_path|set_disable_timing|set_case_analysis|set_input_transition|set_driving_cell|set_load|set_fanout_limit)\b"
-    _TCL_VAR = r"\$[a-zA-Z_0-9:]+"
-    _OP   = r"[=<>!&|^~+\-*/%;:@#]+"
-
-    def __init__(self, document, preset_name="Silis Dark"):
-        super().__init__(document)
-        self.preset_name = preset_name
-        self._build_rules()
-
-    def _fmt(self, color, bold=False, italic=False):
-        f = QTextCharFormat()
-        f.setForeground(QColor(color))
-        if bold:   f.setFontWeight(700)
-        if italic: f.setFontItalic(True)
-        return f
-
-    def _build_rules(self):
-        p = EDITOR_PRESETS.get(self.preset_name, EDITOR_PRESETS["Silis Dark"])
-        self._rules = [
-            (re.compile(self._CMT1),    self._fmt(p["comment"], italic=True)),
-            (re.compile(self._DIR),     self._fmt(p["directive"], bold=True)),
-            (re.compile(self._KW1),     self._fmt(p["keyword"], bold=True)),
-            (re.compile(self._KW2),     self._fmt(p["keyword2"], bold=True)),
-            (re.compile(self._TCL_KW),  self._fmt(p["keyword2"], bold=True)),
-            (re.compile(self._SDC_CMD), self._fmt(p["keyword"], bold=True)),
-            (re.compile(self._TYPE),    self._fmt(p["type_kw"], bold=True)),
-            (re.compile(self._NUM),     self._fmt(p["number"])),
-            (re.compile(self._STR),     self._fmt(p["string"])),
-            (re.compile(self._TCL_VAR), self._fmt(p["directive"])),
-            (re.compile(self._OP),      self._fmt(p["operator"])),
-        ]
-        self._in_ml_comment = self._fmt(p["comment"], italic=True)
-        self.rehighlight()
-
-    def set_preset(self, name):
-        self.preset_name = name
-        self._build_rules()
-
-    def highlightBlock(self, text):
-        self.setCurrentBlockState(0)
-        start = 0
-
-        if self.previousBlockState() == 1:
-            end = text.find("*/")
-            if end == -1:
-                self.setCurrentBlockState(1)
-                self.setFormat(0, len(text), self._in_ml_comment)
-                return
-            else:
-                length = end + 2
-                self.setFormat(0, length, self._in_ml_comment)
-                start = length
-
-        # Apply single-pass rules
-        for pattern, fmt in self._rules:
-            for m in pattern.finditer(text):
-                if m.start() >= start:
-                    self.setFormat(m.start(), m.end() - m.start(), fmt)
-
-        while True:
-            cmt_start = text.find("/*", start)
-            if cmt_start == -1:
-                break
-            cmt_end = text.find("*/", cmt_start)
-            if cmt_end == -1:
-                self.setCurrentBlockState(1)
-                self.setFormat(cmt_start, len(text) - cmt_start, self._in_ml_comment)
-                break
-            else:
-                length = cmt_end - cmt_start + 2
-                self.setFormat(cmt_start, length, self._in_ml_comment)
-                start = cmt_start + length
-
 class CodeEditor(QPlainTextEdit):
-    def __init__(self, parent_widget=None):
+    def __init__(self):
         super().__init__()
-        self.parent_widget = parent_widget
         self.lineNumberArea = LineNumberArea(self)
         self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
         self.updateRequest.connect(self.updateLineNumberArea)
         self.cursorPositionChanged.connect(self.highlightCurrentLine)
         self.updateLineNumberAreaWidth(0)
-        
-        self._word_hl_timer = QTimer(self)
-        self._word_hl_timer.setSingleShot(True)
-        self._word_hl_timer.setInterval(250)
-        self._word_hl_timer.timeout.connect(self.highlight_word_occurrences)
-        self.cursorPositionChanged.connect(self._word_hl_timer.start)
-        
-        self.apply_theme_settings()
+        self.setFont(QFont("Consolas", 11))
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        
-    def apply_theme_settings(self):
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-        self.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {p['bg']};
-                color: {p['fg']};
-                selection-background-color: {p['selection']};
-                border: none;
-            }}
-        """)
-        font = QFont(p["font_family"], p["font_size"])
-        self.setFont(font)
-        metrics = QFontMetrics(font)
-        self.setTabStopDistance(metrics.horizontalAdvance(' ') * p["tab_width"])
-        self.lineNumberArea.update()
-        self.highlightCurrentLine()
-
-    def zoom_in(self):
-        font = self.font()
-        font.setPointSize(font.pointSize() + 1)
-        self.setFont(font)
-        metrics = QFontMetrics(font)
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-        self.setTabStopDistance(metrics.horizontalAdvance(' ') * p["tab_width"])
-        self.updateLineNumberAreaWidth(0)
-
-    def zoom_out(self):
-        font = self.font()
-        if font.pointSize() > 6:
-            font.setPointSize(font.pointSize() - 1)
-            self.setFont(font)
-            metrics = QFontMetrics(font)
-            global _active_editor_preset
-            p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-            self.setTabStopDistance(metrics.horizontalAdvance(' ') * p["tab_width"])
-            self.updateLineNumberAreaWidth(0)
-
-    def zoom_reset(self):
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-        font = self.font()
-        font.setPointSize(p["font_size"])
-        self.setFont(font)
-        metrics = QFontMetrics(font)
-        self.setTabStopDistance(metrics.horizontalAdvance(' ') * p["tab_width"])
-        self.updateLineNumberAreaWidth(0)
-
-    def wheelEvent(self, event):
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            if event.angleDelta().y() > 0:
-                self.zoom_in()
-            else:
-                self.zoom_out()
-            event.accept()
-        else:
-            super().wheelEvent(event)
 
     def lineNumberAreaWidth(self):
         digits = len(str(max(1, self.blockCount())))
-        space = 15 + self.fontMetrics().horizontalAdvance('9') * digits
+        space = 10 + self.fontMetrics().horizontalAdvance('9') * digits
         return space
 
     def updateLineNumberAreaWidth(self, _):
@@ -1372,761 +1164,35 @@ class CodeEditor(QPlainTextEdit):
         self.lineNumberArea.setGeometry(cr.left(), cr.top(), self.lineNumberAreaWidth(), cr.height())
 
     def lineNumberAreaPaintEvent(self, event):
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
         painter = QPainter(self.lineNumberArea)
-        painter.fillRect(event.rect(), QColor(p["gutter_bg"]))
+        painter.fillRect(event.rect(), QColor("#f0f0f0"))
         block = self.firstVisibleBlock()
         blockNumber = block.blockNumber()
         top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
         bottom = top + self.blockBoundingRect(block).height()
-        font = self.font()
-        painter.setFont(font)
-        painter.setPen(QColor(p["gutter_fg"]))
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(blockNumber + 1)
-                painter.drawText(0, int(top), self.lineNumberArea.width() - 8, self.fontMetrics().height(), Qt.AlignmentFlag.AlignRight, number)
+                painter.setPen(Qt.GlobalColor.black)
+                painter.drawText(0, int(top), self.lineNumberArea.width() - 5, self.fontMetrics().height(), Qt.AlignmentFlag.AlignRight, number)
             block = block.next(); top = bottom; bottom = top + self.blockBoundingRect(block).height(); blockNumber += 1
 
     def highlightCurrentLine(self):
         extraSelections = []
         if not self.isReadOnly():
-            global _active_editor_preset
-            p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
             selection = QTextEdit.ExtraSelection()
-            selection.format.setBackground(QColor(p["line_hl"]))
+            selection.format.setBackground(QColor(Qt.GlobalColor.yellow).lighter(160))
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
             selection.cursor = self.textCursor()
             selection.cursor.clearSelection()
             extraSelections.append(selection)
         self.setExtraSelections(extraSelections)
 
-    def highlight_word_occurrences(self):
-        cursor = self.textCursor()
-        if not cursor.hasSelection():
-            self.highlightCurrentLine()
-            return
-        selected_text = cursor.selectedText().strip()
-        if not selected_text.isalnum() or len(selected_text) < 2:
-            self.highlightCurrentLine()
-            return
-        extraSelections = []
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-        curr_line = QTextEdit.ExtraSelection()
-        curr_line.format.setBackground(QColor(p["line_hl"]))
-        curr_line.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-        curr_line.cursor = self.textCursor()
-        curr_line.cursor.clearSelection()
-        extraSelections.append(curr_line)
-        doc = self.document()
-        expr = re.compile(r'\b' + re.escape(selected_text) + r'\b')
-        text = doc.toPlainText()
-        for m in expr.finditer(text):
-            start = m.start()
-            end = m.end()
-            sel = QTextEdit.ExtraSelection()
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(start)
-            sel.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            sel.format.setBackground(QColor(p["selection"]).lighter(120))
-            extraSelections.append(sel)
-        self.setExtraSelections(extraSelections)
-
-    def keyPressEvent(self, event):
-        key = event.key()
-        modifiers = event.modifiers()
-        cursor = self.textCursor()
-        
-        brackets = {
-            Qt.Key.Key_ParenLeft: ")",
-            Qt.Key.Key_BraceLeft: "}",
-            Qt.Key.Key_BracketLeft: "]",
-            Qt.Key.Key_QuoteDbl: '"',
-            Qt.Key.Key_Apostrophe: "'"
-        }
-        if key in brackets:
-            char = event.text()
-            closing = brackets[key]
-            cursor.insertText(char + closing)
-            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-            self.setTextCursor(cursor)
-            event.accept()
-            return
-
-        if key == Qt.Key.Key_Backspace:
-            pos = cursor.position()
-            if pos > 0 and pos < self.document().characterCount() - 1:
-                cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
-                left_char = cursor.selectedText()
-                cursor.setPosition(pos)
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                right_char = cursor.selectedText()
-                cursor.setPosition(pos)
-                bracket_pairs = [("(", ")"), ("{", "}"), ("[", "]"), ('"', '"'), ("'", "'")]
-                if (left_char, right_char) in bracket_pairs:
-                    cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-                    cursor.deleteChar()
-                    cursor.deleteChar()
-                    self.setTextCursor(cursor)
-                    event.accept()
-                    return
-
-        if key == Qt.Key.Key_Slash and modifiers == Qt.KeyboardModifier.ControlModifier:
-            self.toggle_comment()
-            event.accept()
-            return
-        if key == Qt.Key.Key_D and modifiers == Qt.KeyboardModifier.ControlModifier:
-            self.duplicate_line()
-            event.accept()
-            return
-        if key == Qt.Key.Key_Up and modifiers == Qt.KeyboardModifier.AltModifier:
-            self.move_line_up()
-            event.accept()
-            return
-        if key == Qt.Key.Key_Down and modifiers == Qt.KeyboardModifier.AltModifier:
-            self.move_line_down()
-            event.accept()
-            return
-        if key == Qt.Key.Key_Tab:
-            if cursor.hasSelection():
-                self.indent_block()
-                event.accept()
-                return
-            else:
-                super().keyPressEvent(event)
-                return
-        if key == Qt.Key.Key_Backtab:
-            self.unindent_block()
-            event.accept()
-            return
-        if key == Qt.Key.Key_Return:
-            current_line = cursor.block().text()
-            indent = ""
-            for char in current_line:
-                if char in (' ', '\t'): indent += char
-                else: break
-            stripped = current_line.strip()
-            extra_indent = ""
-            if stripped.endswith("begin") or stripped.endswith("{") or stripped.startswith("module") or stripped.endswith(":"):
-                global _active_editor_preset
-                p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-                extra_indent = "\t" if p["tab_width"] == 4 else "   "
-            super().keyPressEvent(event)
-            self.insertPlainText(indent + extra_indent)
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def toggle_comment(self):
-        cursor = self.textCursor()
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
-        cursor.setPosition(start)
-        start_block = cursor.blockNumber()
-        cursor.setPosition(end)
-        end_block = cursor.blockNumber()
-        if end_block > start_block and cursor.atBlockStart():
-            end_block -= 1
-        cursor.beginEditBlock()
-        for b_idx in range(start_block, end_block + 1):
-            block = self.document().findBlockByNumber(b_idx)
-            cursor.setPosition(block.position())
-            text = block.text()
-            if text.strip().startswith("//"):
-                slash_idx = text.find("//")
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, slash_idx)
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 2)
-                cursor.removeSelectedText()
-            else:
-                cursor.insertText("//")
-        cursor.endEditBlock()
-
-    def duplicate_line(self):
-        cursor = self.textCursor()
-        if cursor.hasSelection():
-            sel_text = cursor.selectedText()
-            cursor.setPosition(cursor.selectionEnd())
-            cursor.insertText(sel_text)
-        else:
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-            line_text = cursor.selectedText()
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
-            cursor.insertText("\n" + line_text)
-            
-    def move_line_up(self):
-        cursor = self.textCursor()
-        block = cursor.block()
-        prev_block = block.previous()
-        if not prev_block.isValid(): return
-        cursor.beginEditBlock()
-        curr_text = block.text()
-        prev_text = prev_block.text()
-        cursor.setPosition(block.position())
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertText(prev_text)
-        cursor.setPosition(prev_block.position())
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertText(curr_text)
-        cursor.setPosition(prev_block.position())
-        self.setTextCursor(cursor)
-        cursor.endEditBlock()
-
-    def move_line_down(self):
-        cursor = self.textCursor()
-        block = cursor.block()
-        next_block = block.next()
-        if not next_block.isValid(): return
-        cursor.beginEditBlock()
-        curr_text = block.text()
-        next_text = next_block.text()
-        cursor.setPosition(next_block.position())
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertText(curr_text)
-        cursor.setPosition(block.position())
-        cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertText(next_text)
-        cursor.setPosition(next_block.position())
-        self.setTextCursor(cursor)
-        cursor.endEditBlock()
-
-    def indent_block(self):
-        cursor = self.textCursor()
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
-        cursor.setPosition(start)
-        start_block = cursor.blockNumber()
-        cursor.setPosition(end)
-        end_block = cursor.blockNumber()
-        if end_block > start_block and cursor.atBlockStart():
-            end_block -= 1
-        cursor.beginEditBlock()
-        for b_idx in range(start_block, end_block + 1):
-            block = self.document().findBlockByNumber(b_idx)
-            cursor.setPosition(block.position())
-            cursor.insertText("\t")
-        cursor.endEditBlock()
-
-    def unindent_block(self):
-        cursor = self.textCursor()
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
-        cursor.setPosition(start)
-        start_block = cursor.blockNumber()
-        cursor.setPosition(end)
-        end_block = cursor.blockNumber()
-        if end_block > start_block and cursor.atBlockStart():
-            end_block -= 1
-        cursor.beginEditBlock()
-        for b_idx in range(start_block, end_block + 1):
-            block = self.document().findBlockByNumber(b_idx)
-            text = block.text()
-            if not text: continue
-            cursor.setPosition(block.position())
-            if text.startswith("\t"):
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                cursor.removeSelectedText()
-            elif text.startswith(" "):
-                global _active_editor_preset
-                p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-                spaces_count = 0
-                for char in text:
-                    if char == ' ' and spaces_count < p["tab_width"]: spaces_count += 1
-                    else: break
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, spaces_count)
-                cursor.removeSelectedText()
-        cursor.endEditBlock()
-
 class LineNumberArea(QWidget):
     def __init__(self, editor):
         super().__init__(editor); self.codeEditor = editor
     def sizeHint(self): return QSize(self.codeEditor.lineNumberAreaWidth(), 0)
     def paintEvent(self, event): self.codeEditor.lineNumberAreaPaintEvent(event)
-
-class FindReplaceBar(QWidget):
-    def __init__(self, editor=None):
-        super().__init__()
-        self.editor = editor
-        self.setStyleSheet("background: #252526; border-bottom: 1px solid #333; padding: 4px;")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(4,4,4,4)
-        lay.setSpacing(4)
-        
-        r1 = QHBoxLayout()
-        r1.setContentsMargins(0,0,0,0)
-        self.lbl_find = QLabel("Find:")
-        self.lbl_find.setStyleSheet("color: #ccc; font-weight: bold;")
-        self.e_find = QLineEdit()
-        self.e_find.setStyleSheet("background: #3c3c3c; color: white; border: 1px solid #555; padding: 2px;")
-        self.e_find.textChanged.connect(self.highlight_all)
-        
-        btn_style = "QPushButton { background: #333; color: white; border: 1px solid #555; padding: 2px 8px; } QPushButton:hover { background: #444; }"
-        self.btn_prev = QPushButton("◀ Prev"); self.btn_prev.setStyleSheet(btn_style); self.btn_prev.clicked.connect(self.find_prev)
-        self.btn_next = QPushButton("Next ▶"); self.btn_next.setStyleSheet(btn_style); self.btn_next.clicked.connect(self.find_next)
-        self.lbl_match_count = QLabel("0 matches")
-        self.lbl_match_count.setStyleSheet("color: #888; margin-left: 5px;")
-        
-        self.btn_close = QPushButton("✕")
-        self.btn_close.setStyleSheet("QPushButton { background: transparent; color: #aaa; border: none; font-weight: bold; } QPushButton:hover { color: white; }")
-        self.btn_close.clicked.connect(self.hide)
-        
-        r1.addWidget(self.lbl_find)
-        r1.addWidget(self.e_find)
-        r1.addWidget(self.btn_prev)
-        r1.addWidget(self.btn_next)
-        r1.addWidget(self.lbl_match_count)
-        r1.addWidget(self.btn_close)
-        lay.addLayout(r1)
-        
-        self.r2_widget = QWidget()
-        r2 = QHBoxLayout(self.r2_widget)
-        r2.setContentsMargins(0,0,0,0)
-        self.lbl_replace = QLabel("Replace:")
-        self.lbl_replace.setStyleSheet("color: #ccc; font-weight: bold; min-width: 32px;")
-        self.e_replace = QLineEdit()
-        self.e_replace.setStyleSheet("background: #3c3c3c; color: white; border: 1px solid #555; padding: 2px;")
-        self.btn_rep = QPushButton("Replace"); self.btn_rep.setStyleSheet(btn_style); self.btn_rep.clicked.connect(self.replace)
-        self.btn_rep_all = QPushButton("Replace All"); self.btn_rep_all.setStyleSheet(btn_style); self.btn_rep_all.clicked.connect(self.replace_all)
-        
-        r2.addWidget(self.lbl_replace)
-        r2.addWidget(self.e_replace)
-        r2.addWidget(self.btn_rep)
-        r2.addWidget(self.btn_rep_all)
-        r2.addStretch()
-        lay.addWidget(self.r2_widget)
-        
-    def show_find(self):
-        self.r2_widget.setVisible(False)
-        self.show()
-        self.e_find.setFocus()
-        self.e_find.selectAll()
-        self.highlight_all()
-        
-    def show_replace(self):
-        self.r2_widget.setVisible(True)
-        self.show()
-        self.e_find.setFocus()
-        self.e_find.selectAll()
-        self.highlight_all()
-        
-    def highlight_all(self):
-        if not self.editor: return
-        query = self.e_find.text()
-        if not query:
-            self.lbl_match_count.setText("0 matches")
-            self.editor.highlightCurrentLine()
-            return
-        doc = self.editor.document()
-        matches = list(re.finditer(re.escape(query), doc.toPlainText()))
-        self.lbl_match_count.setText(f"{len(matches)} matches")
-        extraSelections = []
-        global _active_editor_preset
-        p = EDITOR_PRESETS.get(_active_editor_preset, EDITOR_PRESETS["Silis Dark"])
-        curr_line = QTextEdit.ExtraSelection()
-        curr_line.format.setBackground(QColor(p["line_hl"]))
-        curr_line.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-        curr_line.cursor = self.editor.textCursor()
-        curr_line.cursor.clearSelection()
-        extraSelections.append(curr_line)
-        for m in matches:
-            sel = QTextEdit.ExtraSelection()
-            sel.cursor = self.editor.textCursor()
-            sel.cursor.setPosition(m.start())
-            sel.cursor.setPosition(m.end(), QTextCursor.MoveMode.KeepAnchor)
-            sel.format.setBackground(QColor("#e67e22").lighter(130))
-            extraSelections.append(sel)
-        self.editor.setExtraSelections(extraSelections)
-        
-    def find_next(self):
-        if not self.editor: return
-        query = self.e_find.text()
-        if not query: return
-        cursor = self.editor.textCursor()
-        found = self.editor.find(query)
-        if not found:
-            cursor.setPosition(0)
-            self.editor.setTextCursor(cursor)
-            self.editor.find(query)
-        self.highlight_all()
-            
-    def find_prev(self):
-        if not self.editor: return
-        query = self.e_find.text()
-        if not query: return
-        found = self.editor.find(query, QTextDocument.FindFlag.FindBackward)
-        if not found:
-            cursor = self.editor.textCursor()
-            cursor.setPosition(self.editor.document().characterCount() - 1)
-            self.editor.setTextCursor(cursor)
-            self.editor.find(query, QTextDocument.FindFlag.FindBackward)
-        self.highlight_all()
-            
-    def replace(self):
-        if not self.editor: return
-        query = self.e_find.text()
-        replace_text = self.e_replace.text()
-        if not query: return
-        cursor = self.editor.textCursor()
-        if cursor.hasSelection() and cursor.selectedText() == query:
-            cursor.insertText(replace_text)
-            self.find_next()
-        else:
-            self.find_next()
-            cursor = self.editor.textCursor()
-            if cursor.hasSelection() and cursor.selectedText() == query:
-                cursor.insertText(replace_text)
-                self.find_next()
-        self.highlight_all()
-                
-    def replace_all(self):
-        if not self.editor: return
-        query = self.e_find.text()
-        replace_text = self.e_replace.text()
-        if not query: return
-        cursor = self.editor.textCursor()
-        cursor.beginEditBlock()
-        text = self.editor.toPlainText()
-        modified = text.replace(query, replace_text)
-        self.editor.setPlainText(modified)
-        cursor.endEditBlock()
-        self.highlight_all()
-
-class EditorWidget(QWidget):
-    def __init__(self, parent_tab_widget=None):
-        super().__init__()
-        self.parent_tab_widget = parent_tab_widget
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0,0,0,0)
-        lay.setSpacing(0)
-        self.find_bar = FindReplaceBar()
-        self.editor = CodeEditor(self)
-        self.find_bar.editor = self.editor
-        self.find_bar.setVisible(False)
-        lay.addWidget(self.find_bar)
-        lay.addWidget(self.editor)
-        self.highlighter = VerilogHighlighter(self.editor.document())
-
-class EditorTabWidget(QTabWidget):
-    currentChangedSignal = pyqtSignal(int)
-    
-    def __init__(self, ide_ref=None):
-        super().__init__()
-        self.ide = ide_ref
-        self.setTabsClosable(True)
-        self.setMovable(True)
-        self.tabCloseRequested.connect(self.close_tab)
-        self.currentChanged.connect(self.on_current_changed)
-        self.filepaths = {}
-        self.modified_states = {}
-        self.untitled_counter = 1
-        
-        self.setStyleSheet("""
-            QTabWidget::pane { border: none; background: #1e1e1e; }
-            QTabBar::tab { background: #2d2d2d; color: #888; padding: 6px 12px; border-right: 1px solid #1a1a1a; }
-            QTabBar::tab:selected { background: #1e1e1e; color: #fff; border-bottom: 2px solid #fd8c73; }
-            QTabBar::tab:hover:!selected { background: #333; color: #ccc; }
-        """)
-        self.new_untitled_tab()
-
-    def get_current_editor_widget(self) -> EditorWidget:
-        idx = self.currentIndex()
-        if idx == -1: return None
-        return self.widget(idx)
-        
-    def get_current_editor(self) -> CodeEditor:
-        w = self.get_current_editor_widget()
-        if not w: return None
-        return w.editor
-
-    def toPlainText(self) -> str:
-        """Shim so callers that treat EditorTabWidget as a plain editor still work."""
-        e = self.get_current_editor()
-        return e.toPlainText() if e else ""
-
-    def setPlainText(self, text: str):
-        """Shim so callers can set text on the active tab."""
-        e = self.get_current_editor()
-        if e: e.setPlainText(text)
-
-    def new_untitled_tab(self):
-        w = EditorWidget(self)
-        name = f"Untitled-{self.untitled_counter}"
-        self.untitled_counter += 1
-        idx = self.addTab(w, name)
-        self.filepaths[w] = None
-        self.modified_states[w] = False
-        w.editor.textChanged.connect(lambda: self.mark_modified(w))
-        self.setCurrentIndex(idx)
-        w.editor.setFocus()
-        return w
-
-    def open_file(self, filepath):
-        filepath = os.path.abspath(filepath)
-        for idx in range(self.count()):
-            w = self.widget(idx)
-            if self.filepaths.get(w) == filepath:
-                self.setCurrentIndex(idx)
-                w.editor.setFocus()
-                return w
-        try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open file:\n{e}")
-            return None
-        if self.count() == 1:
-            w = self.widget(0)
-            if self.filepaths.get(w) is None and not self.modified_states.get(w) and not w.editor.toPlainText():
-                w.editor.setPlainText(content)
-                self.setTabText(0, os.path.basename(filepath))
-                self.setTabToolTip(0, filepath)
-                self.filepaths[w] = filepath
-                self.modified_states[w] = False
-                w.highlighter.set_preset(_active_editor_preset)
-                self.setCurrentIndex(0)
-                w.editor.setFocus()
-                return w
-        w = EditorWidget(self)
-        w.editor.setPlainText(content)
-        w.highlighter.set_preset(_active_editor_preset)
-        idx = self.addTab(w, os.path.basename(filepath))
-        self.setTabToolTip(idx, filepath)
-        self.filepaths[w] = filepath
-        self.modified_states[w] = False
-        w.editor.textChanged.connect(lambda: self.mark_modified(w))
-        self.setCurrentIndex(idx)
-        w.editor.setFocus()
-        return w
-
-    def mark_modified(self, w):
-        if not self.modified_states.get(w, False):
-            self.modified_states[w] = True
-            idx = self.indexOf(w)
-            title = self.tabText(idx)
-            if not title.endswith("*"):
-                self.setTabText(idx, title + "*")
-
-    def mark_saved(self, w):
-        self.modified_states[w] = False
-        idx = self.indexOf(w)
-        title = self.tabText(idx)
-        if title.endswith("*"):
-            self.setTabText(idx, title[:-1])
-
-    def close_tab(self, idx):
-        w = self.widget(idx)
-        if self.modified_states.get(w, False):
-            name = self.tabText(idx).rstrip("*")
-            reply = QMessageBox.question(
-                self, 'Save Changes?',
-                f"File '{name}' has unsaved changes. Do you want to save them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.save_tab(w): pass
-                else: return
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return
-        self.removeTab(idx)
-        if w in self.filepaths: del self.filepaths[w]
-        if w in self.modified_states: del self.modified_states[w]
-        if self.count() == 0:
-            self.new_untitled_tab()
-
-    def save_tab(self, w) -> bool:
-        path = self.filepaths.get(w)
-        if not path:
-            f, _ = QFileDialog.getSaveFileName(self, "Save File", self.ide.cwd if self.ide else "")
-            if not f: return False
-            path = os.path.abspath(f)
-            self.filepaths[w] = path
-            idx = self.indexOf(w)
-            self.setTabText(idx, os.path.basename(path))
-            self.setTabToolTip(idx, path)
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(w.editor.toPlainText())
-            self.mark_saved(w)
-            if self.ide:
-                self.ide.log_system(f"Saved {os.path.basename(path)}")
-                if self.currentWidget() == w:
-                    self.ide.current_file = path
-                    if hasattr(self.ide, 'lbl_proj'):
-                        self.ide.lbl_proj.setText(os.path.basename(path))
-            return True
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save file:\n{e}")
-            return False
-
-    def on_current_changed(self, idx):
-        if idx == -1: return
-        w = self.widget(idx)
-        path = self.filepaths.get(w)
-        if self.ide:
-            self.ide.current_file = path
-            if hasattr(self.ide, 'lbl_proj'):
-                if path: self.ide.lbl_proj.setText(os.path.basename(path))
-                else: self.ide.lbl_proj.setText("Untitled")
-        self.currentChangedSignal.emit(idx)
-
-    def setPlainText(self, text):
-        e = self.get_current_editor()
-        if e: e.setPlainText(text)
-    def toPlainText(self):
-        e = self.get_current_editor()
-        return e.toPlainText() if e else ""
-    def clear(self):
-        e = self.get_current_editor()
-        if e: e.clear()
-    def setFocus(self):
-        e = self.get_current_editor()
-        if e: e.setFocus()
-
-class GotoLineDialog(QDialog):
-    def __init__(self, max_line, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Go to Line")
-        self.resize(250, 100)
-        lay = QVBoxLayout(self)
-        self.lbl = QLabel(f"Enter line number (1 - {max_line}):")
-        self.e_line = QLineEdit()
-        self.e_line.setStyleSheet("background: #3c3c3c; color: white; border: 1px solid #555; padding: 4px;")
-        btn_box = QHBoxLayout()
-        self.btn_ok = QPushButton("Go"); self.btn_ok.clicked.connect(self.accept)
-        self.btn_ok.setStyleSheet("background: #00bcd4; color: white; font-weight: bold;")
-        self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
-        btn_box.addWidget(self.btn_cancel)
-        btn_box.addWidget(self.btn_ok)
-        lay.addWidget(self.lbl)
-        lay.addWidget(self.e_line)
-        lay.addLayout(btn_box)
-    def get_line(self):
-        try: return int(self.e_line.text())
-        except: return 1
-
-class CommandPalette(QDialog):
-    def __init__(self, ide_ref, parent=None):
-        super().__init__(parent)
-        self.ide = ide_ref
-        self.setWindowTitle("Command Palette")
-        self.resize(500, 300)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setStyleSheet("background: #252526; border: 1px solid #444; color: white;")
-        lay = QVBoxLayout(self)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Type a command...")
-        self.search.setStyleSheet("background: #3c3c3c; color: white; border: 1px solid #555; padding: 8px; font-size: 14px;")
-        self.search.textChanged.connect(self.filter_commands)
-        lay.addWidget(self.search)
-        self.list_w = QListWidget()
-        self.list_w.setStyleSheet("background: #1e1e1e; border: none; font-size: 12px; padding: 4px;")
-        self.list_w.itemDoubleClicked.connect(self.run_item)
-        lay.addWidget(self.list_w)
-        
-        self.commands = [
-            ("📁 New File", "Ctrl+N", self.ide.new_file),
-            ("💾 Save File", "Ctrl+S", self.ide.save_file),
-            ("❌ Close Tab", "Ctrl+W", self.close_active_tab),
-            ("🔍 Find text", "Ctrl+F", self.open_find),
-            ("🔄 Replace text", "Ctrl+H", self.open_replace),
-            ("📝 Go to Line...", "Ctrl+G", self.open_goto),
-            ("🔎 Zoom In", "Ctrl+=", self.zoom_in_ed),
-            ("🔍 Zoom Out", "Ctrl+-", self.zoom_out_ed),
-            ("🔄 Reset Zoom", "Ctrl+0", self.zoom_reset_ed),
-            ("🔀 Toggle Word Wrap", "Alt+Z", self.toggle_wrap),
-            ("🌗 Toggle Theme (Silis Dark)", "", lambda: self.set_theme("Silis Dark")),
-            ("🌗 Toggle Theme (Silis Light)", "", lambda: self.set_theme("Silis Light")),
-            ("🌗 Toggle Theme (Monokai)", "", lambda: self.set_theme("Monokai")),
-            ("🌗 Toggle Theme (Vivado Classic)", "", lambda: self.set_theme("Vivado Classic")),
-        ]
-        self.populate()
-        
-    def populate(self):
-        self.list_w.clear()
-        for cmd, shortcut, func in self.commands:
-            item = QListWidgetItem(cmd)
-            if shortcut: item.setToolTip(shortcut)
-            self.list_w.addItem(item)
-        self.list_w.setCurrentRow(0)
-            
-    def filter_commands(self, text):
-        self.list_w.clear()
-        for cmd, shortcut, func in self.commands:
-            if text.lower() in cmd.lower():
-                item = QListWidgetItem(cmd)
-                if shortcut: item.setToolTip(shortcut)
-                self.list_w.addItem(item)
-        if self.list_w.count() > 0: self.list_w.setCurrentRow(0)
-            
-    def keyPressEvent(self, e):
-        if e.key() == Qt.Key.Key_Escape: self.reject()
-        elif e.key() == Qt.Key.Key_Up:
-            curr = self.list_w.currentRow()
-            if curr > 0: self.list_w.setCurrentRow(curr - 1)
-        elif e.key() == Qt.Key.Key_Down:
-            curr = self.list_w.currentRow()
-            if curr < self.list_w.count() - 1: self.list_w.setCurrentRow(curr + 1)
-        elif e.key() == Qt.Key.Key_Return: self.run_item(self.list_w.currentItem())
-        else: super().keyPressEvent(e)
-            
-    def run_item(self, item):
-        if not item: return
-        cmd_text = item.text()
-        for cmd, shortcut, func in self.commands:
-            if cmd == cmd_text:
-                self.accept()
-                func()
-                break
-                
-    def close_active_tab(self):
-        self.ide.tab_compile.editor.close_tab(self.ide.tab_compile.editor.currentIndex())
-    def open_find(self):
-        w = self.ide.tab_compile.editor.get_current_editor_widget()
-        if w: w.find_bar.show_find()
-    def open_replace(self):
-        w = self.ide.tab_compile.editor.get_current_editor_widget()
-        if w: w.find_bar.show_replace()
-    def open_goto(self):
-        e = self.ide.tab_compile.editor.get_current_editor()
-        if not e: return
-        dlg = GotoLineDialog(e.blockCount(), self.ide)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            line = dlg.get_line()
-            cursor = e.textCursor()
-            block = e.document().findBlockByNumber(max(0, min(line - 1, e.blockCount() - 1)))
-            cursor.setPosition(block.position())
-            e.setTextCursor(cursor)
-            e.setFocus()
-    def zoom_in_ed(self):
-        e = self.ide.tab_compile.editor.get_current_editor()
-        if e: e.zoom_in()
-    def zoom_out_ed(self):
-        e = self.ide.tab_compile.editor.get_current_editor()
-        if e: e.zoom_out()
-    def zoom_reset_ed(self):
-        e = self.ide.tab_compile.editor.get_current_editor()
-        if e: e.zoom_reset()
-    def toggle_wrap(self):
-        e = self.ide.tab_compile.editor.get_current_editor()
-        if e:
-            if e.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap:
-                e.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-            else:
-                e.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-    def set_theme(self, name):
-        global _active_editor_preset
-        _active_editor_preset = name
-        editor_tab_widget = self.ide.tab_compile.editor
-        for idx in range(editor_tab_widget.count()):
-            w = editor_tab_widget.widget(idx)
-            w.editor.apply_theme_settings()
-            w.highlighter.set_preset(name)
 
 # === TAB 1: COMPILE ===
 # ================= VS CODE-STYLE TERMINAL WIDGET =================
@@ -2694,8 +1760,8 @@ class CompileTab(QWidget):
         # Code
         self.code_container = QWidget()
         c_lay = QVBoxLayout(self.code_container); c_lay.setContentsMargins(0,0,0,0)
-        self.editor = EditorTabWidget(self.ide)
-        c_lay.addWidget(self.editor)
+        self.editor = CodeEditor()
+        c_lay.addWidget(QLabel("SOURCE CODE")); c_lay.addWidget(self.editor)
         self.right_split.addWidget(self.code_container)
         
         # ── VS Code-style terminal ──────────────────────────────────────────
@@ -2758,24 +1824,9 @@ class SignalPeeker(QWidget):
         if t: self.load_file(t)
 
     def auto_load(self):
-        candidates = []
-        candidates += glob.glob(os.path.join(self.ide.cwd, "*.vcd"))
-        candidates += glob.glob(os.path.join(self.ide.cwd, "**", "*.vcd"), recursive=True)
+        candidates = glob.glob(os.path.join(self.ide.cwd, "*.vcd"))
         parent_dir = os.path.dirname(self.ide.cwd)
         candidates += glob.glob(os.path.join(parent_dir, "*.vcd"))
-        
-        try:
-            _, base = self.ide.get_context()
-            if base:
-                root = self.ide.get_proj_root(base)
-                if os.path.exists(root):
-                    candidates += glob.glob(os.path.join(root, "*.vcd"))
-                    candidates += glob.glob(os.path.join(root, "**", "*.vcd"), recursive=True)
-        except Exception:
-            pass
-
-        # Filter unique and existing paths
-        candidates = list(set([os.path.abspath(c) for c in candidates if os.path.exists(c)]))
         if candidates: self.load_file(max(candidates, key=os.path.getctime))
         else: self.lbl_info.setText("No .vcd files found.")
 
@@ -2793,705 +1844,6 @@ class SignalPeeker(QWidget):
     def launch_gtkwave(self):
         if self.current_vcd_path: subprocess.Popen(["gtkwave", self.current_vcd_path])
         else: QMessageBox.information(self, "Info", "Load a VCD file first.")
-
-# ================= 3. BACKEND COMPONENT =================
-# ================= 3. BACKEND COMPONENT =================
-
-
-# ================= 3. BACKEND COMPONENT =================
-
-
-
-class TCLConfirmDialog(QDialog):
-    """The Multiline TCL Editor for Flow Steps."""
-    def __init__(self, title, label, text, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(750, 450)
-        lay = QVBoxLayout(self)
-        
-        lbl = QLabel(label)
-        lbl.setStyleSheet("font-weight: bold; font-size: 12px;")
-        lay.addWidget(lbl)
-        
-        self.editor = CodeEditor()
-        self.editor.setPlainText(text)
-        lay.addWidget(self.editor)
-        
-        btn_box = QHBoxLayout()
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.clicked.connect(self.reject)
-        
-        btn_run = QPushButton("Execute Script")
-        btn_run.setStyleSheet("background: #2da44e; color: white; font-weight: bold; padding: 8px 16px;")
-        btn_run.clicked.connect(self.accept)
-        
-        btn_box.addStretch()
-        btn_box.addWidget(btn_cancel)
-        btn_box.addWidget(btn_run)
-        lay.addLayout(btn_box)
-
-    def get_script(self):
-        return self.editor.toPlainText()
-
-class FloorplanConfigDialog(QDialog):
-    """Dialog to gather Die and Core Area before Sandbox mode."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Sandbox Floorplan Setup")
-        self.resize(350, 180)
-        form = QFormLayout(self)
-        
-        self.e_w = QLineEdit("1000")
-        self.e_h = QLineEdit("1000")
-        self.e_m = QLineEdit("10")
-        
-        form.addRow("<b>Die Width (µm):</b>", self.e_w)
-        form.addRow("<b>Die Height (µm):</b>", self.e_h)
-        form.addRow("<b>Core Margin (µm):</b>", self.e_m)
-        
-        btn = QPushButton("Initialize Sandbox")
-        btn.setStyleSheet("background: #00509d; color: white; font-weight: bold; padding: 10px;")
-        btn.clicked.connect(self.accept)
-        form.addRow("", btn)
-        
-    def get_values(self):
-        return float(self.e_w.text()), float(self.e_h.text()), float(self.e_m.text())
-
-
-# ================= 3. BACKEND COMPONENT =================
-class BackendWidget(QWidget):
-    def __init__(self, parent_ide):
-        super().__init__(parent_ide)
-        self.ide = parent_ide 
-        
-        # --- 1. INITIALIZE WIDGETS ---
-        self.peeker = SiliconPeeker(self)
-        self.gds_viewer = GDSViewerWidget()
-        self.gds3d_port = GDS3DPort(self.ide) 
-        
-        # --- SIDEBAR STACK ---
-        self.sidebar_stack = QStackedWidget()
-        
-        # Page 0: DEF Controls
-        self.def_ctrl_widget = QWidget()
-        def_layout = QVBoxLayout(self.def_ctrl_widget)
-        def_layout.setContentsMargins(0,0,0,0)
-        self.chk_inst = QCheckBox("Cells"); self.chk_inst.setChecked(True)
-        self.chk_pins = QCheckBox("Pins"); self.chk_pins.setChecked(True)
-        self.chk_nets = QCheckBox("Nets"); self.chk_nets.setChecked(False)
-        self.chk_power = QCheckBox("Power"); self.chk_power.setChecked(True)
-        self.btn_heat = QPushButton("Heatmap"); self.btn_heat.setCheckable(True)
-        self.btn_heat.setStyleSheet("QPushButton:checked { background-color: #ffcccc; color: red; border: 1px solid red; }")
-        
-        def_layout.addWidget(QLabel("<b>DEF Layers</b>"))
-        def_layout.addWidget(self.chk_inst)
-        def_layout.addWidget(self.chk_pins)
-        def_layout.addWidget(self.chk_nets)
-        def_layout.addWidget(self.chk_power)
-        def_layout.addSpacing(10)
-        def_layout.addWidget(QLabel("<b>Overlay</b>"))
-        def_layout.addWidget(self.btn_heat)
-        def_layout.addStretch()
-        self.sidebar_stack.addWidget(self.def_ctrl_widget)
-
-        # Page 1: GDS Controls
-        self.gds_ctrl_widget = QWidget()
-        gds_layout = QVBoxLayout(self.gds_ctrl_widget)
-        gds_layout.setContentsMargins(0,0,0,0)
-        self.layer_list = QListWidget()
-        self.layer_list.setStyleSheet("QListWidget { font-size: 10px; border: none; background: #f0f0f0; }")
-        self.layer_list.itemChanged.connect(self.on_layer_toggle)
-        gds_layout.addWidget(QLabel("<b>GDS Layers</b>"))
-        gds_layout.addWidget(self.layer_list)
-        self.sidebar_stack.addWidget(self.gds_ctrl_widget)
-
-        # Page 2: Macro Cart Picker (The Sandbox)
-        self.cart_widget = QWidget()
-        cart_layout = QVBoxLayout(self.cart_widget)
-        cart_layout.setContentsMargins(0,0,0,0)
-        cart_layout.addWidget(QLabel("<b>📦 Macro Cart</b>"))
-        cart_layout.addWidget(QLabel("<small>Drag macros from the right<br>into the die area.</small>"))
-        self.cart_list = QListWidget()
-        self.cart_list.setStyleSheet("background: #fff; font-size: 11px;")
-        cart_layout.addWidget(self.cart_list)
-        self.sidebar_stack.addWidget(self.cart_widget)
-
-        self.btn_gui = QPushButton("Native GUI (OpenROAD)")
-        self.btn_magic = QPushButton("✨ Magic GUI")
-        self.btn_magic.setStyleSheet("color: #5a32a3; font-weight: bold;") 
-        self.btn_ref = QPushButton("Refresh View")
-        self.btn_load = QPushButton("📂 Load Routed")
-        
-        # STANDARD TERMINAL LOG & INPUT
-        self.term_log = QTextEdit()
-        self.term_log.setReadOnly(True)
-        self.term_log.setStyleSheet("background: #101010; color: #00FF00; font-family: Consolas; border: none;")
-        self.term_in = QLineEdit()
-        self.term_in.setPlaceholderText("Enter TCL command... (Press Enter to Execute)")
-        self.term_in.setStyleSheet("background: #202020; color: white; border-top: 1px solid #444; font-family: Consolas; padding: 5px;")
-
-        # --- 2. LAYOUT ---
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0,0,0,0)
-        
-        self.ribbon = QFrame()
-        self.ribbon.setStyleSheet("background: #f0f0f0; border-bottom: 1px solid #ccc;")
-        self.ribbon.setFixedHeight(40) 
-        r_lay = QHBoxLayout(self.ribbon)
-        r_lay.setContentsMargins(5,2,5,2)
-        
-        self.steps = ["Init", "Floorplan", "Tapcells", "PDN", "IO Pins", "Place", "CTS", "Route", "GDS"]
-        self.signoff_steps = ["Antenna", "STA", "DRC"] 
-        
-        for step in self.steps:
-            btn = QPushButton(step)
-            btn.setStyleSheet("padding: 2px; font-weight: bold; font-size: 11px;")
-            btn.clicked.connect(lambda _, s=step: self.run_flow_step(s))
-            r_lay.addWidget(btn)
-            
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.VLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        r_lay.addWidget(line)
-        
-        for step in self.signoff_steps:
-            btn = QPushButton(step)
-            btn.setStyleSheet("padding: 2px; font-weight: bold; font-size: 11px; color: #880000;")
-            btn.clicked.connect(lambda _, s=step: self.run_flow_step(s))
-            r_lay.addWidget(btn)
-
-        r_lay.addStretch()
-        btn_rst = QPushButton("🔄 Reset")
-        btn_rst.clicked.connect(self.reset_backend)
-        r_lay.addWidget(btn_rst)
-        self.layout.addWidget(self.ribbon)
-        
-        v_split = QSplitter(Qt.Orientation.Vertical)
-        h_widget = QWidget()
-        h_lay = QHBoxLayout(h_widget)
-        h_lay.setContentsMargins(0,0,0,0)
-        h_lay.setSpacing(0)
-        
-        sidebar = QFrame()
-        sidebar.setFixedWidth(150)
-        sidebar.setStyleSheet("background: #e8e8e8; border-right: 1px solid #aaa;")
-        s_lay = QVBoxLayout(sidebar)
-        s_lay.setContentsMargins(5,10,5,10)
-        s_lay.addWidget(self.sidebar_stack)
-        s_lay.addWidget(self.btn_gui)
-        s_lay.addWidget(self.btn_magic)
-        s_lay.addWidget(self.btn_ref)
-        s_lay.addWidget(self.btn_load)
-        h_lay.addWidget(sidebar)
-        
-        self.viz_tabs = QTabWidget()
-        self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
-        self.viz_tabs.addTab(self.peeker, "Live Floorplan (DEF)")
-        self.viz_tabs.addTab(self.gds_viewer, "Final Chip (GDS)")
-        self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
-        h_lay.addWidget(self.viz_tabs)
-        
-        v_split.addWidget(h_widget)
-        
-        term_widget = QWidget()
-        t_lay = QVBoxLayout(term_widget)
-        t_lay.setContentsMargins(0,0,0,0)
-        t_lay.addWidget(self.term_log)
-        t_lay.addWidget(self.term_in)
-        
-        v_split.addWidget(term_widget)
-        v_split.setStretchFactor(0, 4)
-        v_split.setStretchFactor(1, 1)
-        self.layout.addWidget(v_split)
-
-        # --- 3. CONNECTIONS ---
-        self.chk_inst.toggled.connect(self.update_view)
-        self.chk_pins.toggled.connect(self.update_view)
-        self.chk_nets.toggled.connect(self.update_view)
-        self.chk_power.toggled.connect(self.update_view)
-        self.btn_heat.toggled.connect(self.update_view)
-        
-        self.btn_gui.clicked.connect(self.launch_native_gui)
-        self.btn_magic.clicked.connect(self.launch_magic_gui) 
-        self.btn_ref.clicked.connect(self.force_refresh_view)
-        self.btn_load.clicked.connect(self.load_routed_design)
-        
-        self.viz_tabs.currentChanged.connect(self.on_tab_changed)
-        self.term_in.returnPressed.connect(self.send_command)
-
-        # --- 4. STARTUP ---
-        self.fp_w, self.fp_h, self.fp_m = 1000, 1000, 10 # Default Sandbox limits
-        self.proc = None
-        self.pending_init = None
-        self.cmd_active = False
-        self.reset_backend() 
-        self.viz_tabs.setCurrentIndex(0)
-
-    # ------------------ CLASS METHODS ------------------
-
-    def ask_command(self, title, label, text):
-        """Summons the new Multiline Code Editor Dialog."""
-        dlg = TCLConfirmDialog(title, label, text, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            return dlg.get_script(), True
-        return "", False
-
-    def activate_sandbox(self):
-        """Called automatically after Init to setup the Macro Drag-and-Drop."""
-        if hasattr(self.peeker, 'sizes_json_path') and os.path.exists(self.peeker.sizes_json_path):
-            
-            # Step 1: Interactively Ask for Floorplan Dimensions
-            dlg = FloorplanConfigDialog(self)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                self.fp_w, self.fp_h, self.fp_m = dlg.get_values()
-            else:
-                self.fp_w, self.fp_h, self.fp_m = 1000, 1000, 10 # Failsafe
-            
-            # Step 2: Push sizes to the UI rendering engine
-            self.peeker.enter_sandbox_mode(self.peeker.sizes_json_path, self.fp_w, self.fp_h)
-            self.sidebar_stack.setCurrentIndex(2) # Switch to Macro Cart Mode
-            
-            # Step 3: Populate Cart UI List
-            self.cart_list.clear()
-            for m in self.peeker.macro_items:
-                self.cart_list.addItem(f"✅ {m.inst_name}")
-
-    def on_tab_changed(self, index):
-        if index == 0:
-            if hasattr(self.peeker, 'sandbox_active') and self.peeker.sandbox_active:
-                self.sidebar_stack.setCurrentIndex(2) 
-            else:
-                self.sidebar_stack.setCurrentIndex(0) 
-        elif index == 1:
-            self.sidebar_stack.setCurrentIndex(1) 
-            self.view_final_gds()
-        elif index == 2:
-            self.sidebar_stack.setCurrentIndex(0) 
-
-    def on_layer_toggle(self, item):
-        layer, datatype = item.data(Qt.ItemDataRole.UserRole)
-        visible = (item.checkState() == Qt.CheckState.Checked)
-        self.gds_viewer.set_layer_visible(layer, datatype, visible)
-
-    def populate_gds_layers(self):
-        self.layer_list.clear()
-        layers = self.gds_viewer.get_layers()
-        for layer, datatype in layers:
-            item = QListWidgetItem(f"{layer}/{datatype}")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole, (layer, datatype))
-            self.layer_list.addItem(item)
-
-    def view_final_gds(self):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        gds_path = os.path.join(proj_root, "results", "design.gds")
-        if os.path.exists(gds_path):
-            if self.gds_viewer.loaded_file != gds_path:
-                self.term_log.append(f"[SYS] Loading GDS: {gds_path}...")
-                self.gds_viewer.load_gds(gds_path)
-                self.populate_gds_layers()
-        else:
-            self.term_log.append(f"[ERR] GDS not found. Run 'GDS' step first.")
-
-    def send_command(self): 
-        cmd = self.term_in.text()
-        self.term_in.clear()
-        self.send_command_internal(cmd)
-        
-    def send_command_internal(self, cmd):
-        for line in cmd.split('\n'):
-            if line.strip(): 
-                self.term_log.append(f"> {line}")
-            
-        if "initialize_floorplan" in cmd:
-            m = re.search(r'-die_area\s+"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"', cmd)
-            if m:
-                x1, y1, x2, y2 = map(float, m.groups())
-                try: 
-                    self.peeker.set_die_area(x1, y1, x2, y2)
-                except: 
-                    pass
-                
-        if self.proc and self.proc.state() == QProcess.ProcessState.Running: 
-            self.cmd_active = True
-            self.proc.write(f"{cmd}\n".encode())
-        else: 
-            self.term_log.append(f"[ERR] Backend not running. Click Reset.")
-
-    def run_flow_step(self, step_name):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        results_dir = os.path.join(proj_root, "results")
-        os.makedirs(results_dir, exist_ok=True)
-        reports_dir = os.path.join(proj_root, "reports")
-        os.makedirs(reports_dir, exist_ok=True)
-        
-        def_abs_path = os.path.join(results_dir, "temp.def").replace("\\", "/")
-        write_cmd = f"write_def \"{def_abs_path}\""
-
-        if step_name == "Antenna":
-            self.term_log.append("\n[SIGNOFF] Running Antenna Check...")
-            self.send_command_internal("check_antennas -report_file reports/antenna.rpt; puts \"Antenna Violations: [check_antennas]\"")
-            return
-
-        if step_name == "STA":
-            if not self.ide.ensure_pdk_active(): return
-            self.term_log.append("\n[SIGNOFF] Running Signoff Timing Analysis...")
-            lib_cmd = f"read_liberty \"{self.ide.active_pdk['lib']}\""
-            cmd = f"{lib_cmd}\nreport_checks -path_delay max -format full_clock_expanded -fields {{slew cap input_pins fanout}} -digits 4\nreport_worst_slack -max\nreport_tns\nreport_wns"
-            self.send_command_internal(cmd)
-            return
-
-        if step_name == "DRC":
-            if not self.ide.active_pdk or 'gds' not in self.ide.active_pdk: 
-                QMessageBox.critical(self, "Error", "PDK GDS Required.")
-                return
-            gds_file = os.path.join(results_dir, "design.gds")
-            if not os.path.exists(gds_file): 
-                self.term_log.append("[ERR] Generate GDS first!")
-                return
-            self.trigger_magic_drc(proj_root, gds_file)
-            return
-
-        if step_name == "Init":
-            db_path = os.path.join(results_dir, "checkpoint.odb")
-            if os.path.exists(db_path):
-                reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.Yes: 
-                    self.load_checkpoint()
-                    return
-                
-            if not self.ide.ensure_pdk_active(): return
-            
-            ctx = self.ide.get_context()[0] or "top"
-            netlist_path = os.path.join(proj_root, "netlist", f"{ctx}_netlist.v")
-            if not os.path.exists(netlist_path): 
-                netlist_path = self.ide.current_file or "design.v"
-                
-            sdc_path = os.path.join(proj_root, "netlist", f"{ctx}.sdc")
-            
-            json_out_path = os.path.join(reports_dir, f"{ctx}_sizes.json").replace("\\", "/")
-            self.peeker.sizes_json_path = json_out_path 
-
-            macro_lefs = "\n".join([f'read_lef "{m["lef"]}"' for m in self.ide.active_macros])
-            macro_libs = "\n".join([f'read_liberty "{m["lib"]}"' for m in self.ide.active_macros])
-
-            tcl_content = f"""
-read_lef "{self.ide.active_pdk['tlef']}"
-read_lef "{self.ide.active_pdk['lef']}"
-{macro_lefs}
-read_liberty "{self.ide.active_pdk['lib']}"
-{macro_libs}
-read_verilog "{netlist_path}"
-link_design {ctx}
-read_sdc "{sdc_path}"
-
-# --- SILIS DATA EXTRACTION ---
-set tech [[ord::get_db] getTech]
-set dbu [$tech getDbUnitsPerMicron]
-set site_w 460
-set site_h 2720
-foreach lib [[ord::get_db] getLibs] {{
-    set sites [$lib getSites]
-    if {{[llength $sites] > 0}} {{
-        set site [lindex $sites 0]
-        set site_w [$site getWidth]
-        set site_h [$site getHeight]
-        break
-    }}
-}}
-
-set out_file [open "{json_out_path}" w]
-puts $out_file "{{\n  \\\"dbu\\\": $dbu,\n  \\\"site_w\\\": $site_w,\n  \\\"site_h\\\": $site_h,\n  \\\"masters\\\": {{"
-set first 1
-foreach lib [[ord::get_db] getLibs] {{
-    foreach master [$lib getMasters] {{
-        if {{!$first}} {{ puts $out_file "," }}
-        set mname [$master getName]
-        set w [$master getWidth]
-        set h [$master getHeight]
-        set type [$master getType]
-        puts -nonewline $out_file "    \\\"$mname\\\": {{\\\"w\\\": $w, \\\"h\\\": $h, \\\"type\\\": \\\"$type\\\"}}"
-        set first 0
-    }}
-}}
-puts $out_file "\n  }},\n  \\\"macros\\\": {{"
-set block [[[ord::get_db] getChip] getBlock]
-set first_inst 1
-foreach inst [$block getInsts] {{
-    set master [$inst getMaster]
-    if {{[string match "BLOCK*" [$master getType]]}} {{
-        if {{!$first_inst}} {{ puts $out_file "," }}
-        set iname [$inst getName]
-        set mname [$master getName]
-        puts -nonewline $out_file "    \\\"$iname\\\": \\\"$mname\\\""
-        set first_inst 0
-    }}
-}}
-puts $out_file "\n  }}\n}}"
-close $out_file
-"""
-            tcl_path = os.path.join(proj_root, "init_pdk.tcl")
-            with open(tcl_path, 'w') as f: 
-                f.write(tcl_content)
-                
-            self.pending_init = f"source {tcl_path}"
-            self.term_log.append("[SYS] Rebooting OpenROAD...")
-            self.reset_backend() 
-            
-            # TRIGGER THE SANDBOX DELAYED
-            QTimer.singleShot(2500, self.activate_sandbox)
-            return
-
-        if step_name == "Floorplan":
-            w = getattr(self, 'fp_w', 1000)
-            h = getattr(self, 'fp_h', 1000)
-            m = getattr(self, 'fp_m', 10)
-            
-            cmd = f"initialize_floorplan -die_area \"0 0 {w} {h}\" -core_area \"{m} {m} {w-m} {h-m}\" -site unithd;\n"
-            
-            # Scrape Sandbox Macro Positions and execute via OpenDB
-            if hasattr(self.peeker, 'sandbox_active') and self.peeker.sandbox_active:
-                cmd += "set block [[[ord::get_db] getChip] getBlock]\n"
-                for mac in self.peeker.macro_items:
-                    x_dbu = int(mac.pos().x())
-                    y_dbu = int(mac.pos().y())
-                    inst_name = mac.inst_name
-                    
-                    # Native OpenROAD DB Script for explicit physical placement
-                    cmd += f"""set inst [$block findInst "{inst_name}"]
-if {{$inst != "NULL"}} {{
-    $inst setOrigin {x_dbu} {y_dbu}
-    $inst setOrient R0
-    $inst setPlacementStatus FIRM
-}}
-set_placement_padding -instances "{inst_name}" -left 10 -top 10 -right 10 -bottom 10
-"""
-                
-                # Turn off sandbox
-                self.peeker.sandbox_active = False
-                self.sidebar_stack.setCurrentIndex(0)
-            
-            cmd += write_cmd
-            self.send_command_internal(cmd)
-            return
-
-        if step_name == "GDS":
-            if not self.ide.active_pdk or 'gds' not in self.ide.active_pdk: 
-                QMessageBox.critical(self, "Error", "No GDS defined.")
-                return
-            self.term_log.append("[SYS] Starting GDS Generation Flow...")
-            final_def = os.path.join(results_dir, "final_routed.def").replace("\\", "/")
-            self.send_command_internal(f"write_def \"{final_def}\"")
-            QTimer.singleShot(2000, lambda: self.trigger_magic_merge(proj_root, final_def))
-            return
-
-        cmd = ""
-        pdk_name = self.ide.active_pdk.get('name', SSAForge.DEFAULT_PDK) if self.ide.active_pdk else SSAForge.DEFAULT_PDK
-        lib_path = self.ide.active_pdk.get('lib', None) if self.ide.active_pdk else None
-
-        if step_name == "Tapcells": 
-            cmd = SSAForge.get_tap_cmd(pdk_name, lib_path) + f"; {write_cmd}"
-        elif step_name == "PDN": 
-            cmd = "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VDD$} -power; add_global_connection -net {VSS} -pin_pattern {^VGND$|^VSS$} -ground; set_voltage_domain -name {Core} -power {VDD} -ground {VSS}; define_pdn_grid -name {grid} -voltage_domains {Core}; add_pdn_stripe -grid {grid} -layer {met1} -width {0.48} -followpins; add_pdn_stripe -grid {grid} -layer {met4} -width {1.6} -pitch {27.2} -offset {13.6} -extend_to_core_ring; add_pdn_connect -grid {grid} -layers {met1 met4}; pdngen; " + write_cmd
-        elif step_name == "IO Pins": 
-            cmd = f"place_pins -hor_layers met3 -ver_layers met4; {write_cmd}"
-        elif step_name == "Place": 
-            cmd = f"global_placement -density 0.6; detailed_placement; {write_cmd}"
-        elif step_name == "CTS": 
-            cmd = SSAForge.get_cts_cmd(pdk_name, lib_path) + f"; {write_cmd}"
-        elif step_name == "Route":
-            guide_path = os.path.join(results_dir, "route.guide").replace("\\", "/")
-            drc_path = os.path.join(reports_dir, "drc.rpt").replace("\\", "/")
-            fix_script = os.path.join(proj_root, "fix.tcl").replace("\\", "/")
-            try: 
-                with open(fix_script, 'w') as f: 
-                    f.write("set db [ord::get_db]; set chip [$db getChip]; set block [$chip getBlock]; set net_names {zero_ one_ logic0 logic1}; foreach name $net_names { set net [$block findNet $name]; if {$net != \"NULL\"} { $net setSigType \"SIGNAL\" } }")
-            except: 
-                pass
-            cmd = f"source \"{fix_script}\"; global_route -guide_file \"{guide_path}\" -congestion_iterations 50 -verbose; detailed_route -output_drc \"{drc_path}\"; {write_cmd}"
-
-        if cmd:
-            text, ok = self.ask_command(f"Run {step_name}", "Edit TCL Execution Script:", cmd)
-            if ok and text: 
-                self.send_command_internal(text)
-
-    def trigger_magic_drc(self, root, gds_path):
-        if not shutil.which("magic"): 
-            self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' not found.")); return
-        pdk_tech = self.ide.active_pdk.get('tech', '')
-        if not os.path.exists(pdk_tech): 
-            self.ide.queue.put(("[BACKEND]", "[ERR] Missing Tech file.")); return
-            
-        script_content = f"drc off\ngds read {gds_path}\ndrc style drc(fast)\ndrc on\ndrc check\ndrc catchup\nset count [drc list count]\nputs \"SILIS_DRC_VIOLATIONS: $count\"\nif {{$count > 0}} {{ drc list all }}\nquit"
-        script_path = os.path.join(root, "run_drc.tcl")
-        with open(script_path, 'w') as f: 
-            f.write(script_content)
-            
-        self.term_log.append(f"\n[SIGNOFF] Running Magic DRC on {os.path.basename(gds_path)}...")
-        def run_drc():
-            try:
-                cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                for line in iter(proc.stdout.readline, ''):
-                    line = line.strip()
-                    if "SILIS_DRC_VIOLATIONS" in line:
-                        m = re.search(r'(\d+)\s*\}?$', line); count = m.group(1) if m else "Unknown"
-                        if count == "0": self.ide.queue.put(("[BACKEND]", "🟢 DRC CLEAN (0 Violations)"))
-                        else: self.ide.queue.put(("[BACKEND]", f"🔴 DRC FAILED: {count} Violations Found"))
-                    elif "Error:" in line or "error" in line.lower(): 
-                        self.ide.queue.put(("[BACKEND]", f"[DRC ERR] {line}"))
-                proc.wait()
-                self.ide.queue.put(("[BACKEND]", "DRC Run Complete."))
-            except Exception as e: 
-                self.ide.queue.put(("[BACKEND]", f"[ERR] DRC Execution Failed: {e}"))
-        threading.Thread(target=run_drc, daemon=True).start()
-
-    def trigger_magic_merge(self, root, def_path):
-        if not shutil.which("magic"): 
-            self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' executable not found.")); return
-            
-        pdk_gds = self.ide.active_pdk.get('gds', '')
-        pdk_tech = self.ide.active_pdk.get('tech', '')
-        pdk_tlef = self.ide.active_pdk.get('tlef', '')
-        pdk_lef = self.ide.active_pdk.get('lef', '')   
-        output_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
-        
-        if not all(os.path.exists(p) for p in [pdk_gds, pdk_tech, pdk_tlef, pdk_lef]): 
-            self.ide.queue.put(("[BACKEND]", f"[ERR] Missing PDK files.")); return
-        
-        macro_gds_lines = "\n".join([f"gds read {m['gds']}" for m in self.ide.active_macros])
-            
-        script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\ngds read {pdk_gds}\n{macro_gds_lines}\ndef read {def_path}\ngds write {output_gds}\nquit"
-        script_path = os.path.join(root, "merge_magic.tcl")
-        
-        with open(script_path, 'w') as f: 
-            f.write(script_content)
-            
-        self.term_log.append(f"[SYS] Magic: Merging with LEF support...")
-        def run_magic():
-            try:
-                cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode == 0 and os.path.exists(output_gds): 
-                    self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
-                else: 
-                    self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{proc.stderr}\n{proc.stdout}"))
-            except Exception as e: 
-                self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Execution Error: {e}"))
-        threading.Thread(target=run_magic, daemon=True).start()
-
-    def launch_native_gui(self):
-        if not self.ide.active_pdk: 
-            self.term_log.append("[ERR] No PDK Active.")
-            return
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        def_path = os.path.join(proj_root, "results", "temp.def")
-        if not os.path.exists(def_path): 
-            self.term_log.append("[ERR] temp.def not found. Run Floorplan first.")
-            return
-            
-        view_tcl = os.path.join(proj_root, "view.tcl")
-        with open(view_tcl, 'w') as f: 
-            f.write(f'read_lef "{self.ide.active_pdk["tlef"]}"\nread_lef "{self.ide.active_pdk["lef"]}"\nread_def "{def_path}"\n')
-        subprocess.Popen(["openroad", "-gui", view_tcl], cwd=proj_root)
-
-    def launch_magic_gui(self):
-        if not shutil.which("magic"): 
-            self.term_log.append("[ERR] Magic not found.")
-            return
-        if not self.ide.active_pdk: 
-            self.term_log.append("[ERR] No PDK Active.")
-            return
-            
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        gds_path = os.path.join(proj_root, "results", "design.gds")
-        
-        if not os.path.exists(gds_path): 
-            self.term_log.append("[ERR] GDS not found. Run 'GDS' step first.")
-            return
-            
-        pdk_tech = self.ide.active_pdk.get('tech', '')
-        if not os.path.exists(pdk_tech): 
-            self.term_log.append("[ERR] Magic Tech file not found.")
-            return
-            
-        self.term_log.append(f"[SYS] Launching Magic GUI for {os.path.basename(gds_path)}...")
-        subprocess.Popen(["magic", "-d", "XR", "-T", pdk_tech, gds_path], cwd=proj_root)
-
-    def reset_backend(self):
-        if self.proc:
-            if self.proc.state() == QProcess.ProcessState.Running: self.proc.kill()
-            self.proc = None
-        self.term_log.clear()
-        self.proc = QProcess(self)
-        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.proc.readyReadStandardOutput.connect(self.read_stdout)
-        if shutil.which("openroad"): self.proc.start("openroad")
-        else: self.term_log.append("[ERR] OpenROAD binary not found.")
-
-    def read_stdout(self):
-        data = self.proc.readAllStandardOutput().data().decode()
-        self.term_log.append(data.strip())
-        self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
-        
-        if self.pending_init and ("OpenROAD" in data or "openroad>" in data): 
-            self.send_command_internal(self.pending_init)
-            self.pending_init = None
-            
-        if self.cmd_active and "openroad>" in data: 
-            self.cmd_active = False
-            self.force_refresh_view()
-    
-    def update_view(self):
-        try:
-            self.peeker.show_insts = self.chk_inst.isChecked()
-            self.peeker.show_pins = self.chk_pins.isChecked()
-            self.peeker.show_nets = self.chk_nets.isChecked()
-            self.peeker.show_power = self.chk_power.isChecked()
-            if hasattr(self, 'btn_heat'): 
-                self.peeker.show_heatmap = self.btn_heat.isChecked()
-            self.peeker.redraw()
-        except: 
-            pass
-    
-    def load_routed_design(self):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        def_path = os.path.join(proj_root, "results", "final_routed.def")
-        if os.path.exists(def_path): 
-            self.term_log.append(f"[SYS] Loading Routed Design from: {def_path}")
-            self.peeker.load_def_file(def_path)
-            self.chk_nets.setChecked(True)
-            self.peeker.show_nets = True
-            self.peeker.redraw()
-            self.viz_tabs.setCurrentIndex(0)
-        else: 
-            self.term_log.append(f"[ERR] Routed file not found at: {def_path}")
-
-    def force_refresh_view(self):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        def_path = os.path.join(proj_root, "results", "temp.def")
-        if os.path.exists(def_path): 
-            self.peeker.load_def_file(def_path)
-
-    def load_checkpoint(self):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        db_path = os.path.join(proj_root, "results", "checkpoint.odb").replace("\\", "/")
-        if os.path.exists(db_path):
-            self.term_log.append(f"[SYS] Loading Checkpoint from {db_path}...")
-            self.send_command_internal(f"read_db \"{db_path}\"")
-            self.force_refresh_view()
-            return True
-        return False
-
-    def save_checkpoint(self):
-        if not self.proc: return
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        db_path = os.path.join(proj_root, "results", "checkpoint.odb").replace("\\", "/")
-        self.term_log.append(f"[SYS] Saving Checkpoint to {db_path}...")
-        self.send_command_internal(f"write_db \"{db_path}\"")
-
 
 
 
@@ -3845,7 +2197,7 @@ class ReportEngine:
                     metrics["cell_list"] = sorted([(k, int(v)) for k, v in raw_cells], key=lambda x: x[1], reverse=True)
                 
                 for line in log_content.split('\n'):
-                    if "ERROR" in line:
+                    if "ERROR" in line or "Warning:" in line:
                         if len(metrics["errors"]) < 10: metrics["errors"].append(line.strip())
 
         # 2. PARSE AREA REPORT (Yosys JSON Format)
@@ -4057,10 +2409,7 @@ class SynthesisTab(QWidget):
         self.log_tabs = QTabWidget()
         self.log_tabs.setStyleSheet("QTabWidget::pane { border: 0; } QTabBar::tab { background: #f6f8fa; color: #57606a; padding: 8px; border: 1px solid #e1e4e8; border-bottom: none; } QTabBar::tab:selected { background: #fff; color: #24292f; border-top: 2px solid #fd8c73; }")
         
-        self.log_main = QPlainTextEdit(); self.log_main.setReadOnly(True)
-        self.log_main.setMaximumBlockCount(10000)
-        # CRITICAL FIX: Prevent catastrophic hanging from long single lines (like JSON/Wire lists)
-        self.log_main.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap) 
+        self.log_main = QTextEdit(); self.log_main.setReadOnly(True)
         self.log_main.setStyleSheet("background:#0d1117; color:#c9d1d9; font-family:Consolas; border:none;")
         self.log_tabs.addTab(self.log_main, "Build Output")
         
@@ -4105,39 +2454,36 @@ class SynthesisTab(QWidget):
         lay.addWidget(right_col, stretch=1)
 
     def update_dashboard(self):
-        try:
-            # NEW: Parse from FILES in the report directory
-            _, base = self.ide.get_context()
-            if not base: return
-            root = self.ide.get_proj_root(base)
-            report_dir = os.path.join(root, "reports")
+        # NEW: Parse from FILES in the report directory
+        _, base = self.ide.get_context()
+        if not base: return
+        root = self.ide.get_proj_root(base)
+        report_dir = os.path.join(root, "reports")
+        
+        m = ReportEngine.parse_files(report_dir)
+        
+        if m["status"] == "MET":
+            self.card_status.setText("TIMING MET")
+            self.card_status.setStyleSheet("background:#2da44e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+        elif m["status"] == "VIOLATED":
+            self.card_status.setText("TIMING FAIL")
+            self.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
             
-            m = ReportEngine.parse_files(report_dir)
-            
-            if m["status"] == "MET":
-                self.card_status.setText("TIMING MET")
-                self.card_status.setStyleSheet("background:#2da44e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
-            elif m["status"] == "VIOLATED":
-                self.card_status.setText("TIMING FAIL")
-                self.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
-                
-            self.val_wns.setText(f"{m['wns']} ns")
-            self.val_area.setText(f"{m['area']} um^2")
-            self.val_gates.setText(m['cells'])
-            
-            self.list_err.clear()
-            for e in m['errors']: self.list_err.addItem(e)
-            if m['errors']: self.log_tabs.setCurrentIndex(1)
-            
-            rpt = ReportEngine.generate_report(m, base or "design")
-            self.preview.setPlainText(rpt)
-            self.last_report = rpt
-            
-            self.ide.log_system("Generating Post Synthesis Report...", "SYS")
-            print(rpt) 
-            self.ide.log_system("Report generated in background.", "RPT")
-        except Exception as e:
-            self.ide.log_system(f"Report Engine Error: {e}", "ERR")
+        self.val_wns.setText(f"{m['wns']} ns")
+        self.val_area.setText(f"{m['area']} um^2")
+        self.val_gates.setText(m['cells'])
+        
+        self.list_err.clear()
+        for e in m['errors']: self.list_err.addItem(e)
+        if m['errors']: self.log_tabs.setCurrentIndex(1)
+        
+        rpt = ReportEngine.generate_report(m, base or "design")
+        self.preview.setPlainText(rpt)
+        self.last_report = rpt
+        
+        self.ide.log_system("Generating Post Synthesis Report...", "SYS")
+        print(rpt) 
+        self.ide.log_system("Report generated in background.", "RPT")
 
     def save_report(self):
         if not hasattr(self, 'last_report'): return
@@ -4338,30 +2684,26 @@ class GDS3DPort(QWidget):
 
 # ================= 2. BACKEND COMPONENT =================
 
-# ================= 2. BACKEND COMPONENT =================
-
-# ================= 2. BACKEND COMPONENT =================
-
 class BackendWidget(QWidget):
     def __init__(self, parent_ide):
         super().__init__(parent_ide)
         self.ide = parent_ide 
+        self.pdk_mgr = PDKManager()
+        self.active_pdk = None
         
         # --- 1. INITIALIZE WIDGETS ---
-        self.peeker = SiliconPeeker(self)
+        self.peeker = SiliconPeeker()
         self.gds_viewer = GDSViewerWidget()
-        self.gds3d_port = GDS3DPort(self.ide) 
+        self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
         
-        # --- SIDEBAR STACK ---
-        self.sidebar_stack = QStackedWidget()
-        
-        # Page 0: DEF Controls
         self.def_ctrl_widget = QWidget()
         def_layout = QVBoxLayout(self.def_ctrl_widget); def_layout.setContentsMargins(0,0,0,0)
+        
         self.chk_inst = QCheckBox("Cells"); self.chk_inst.setChecked(True)
         self.chk_pins = QCheckBox("Pins"); self.chk_pins.setChecked(True)
         self.chk_nets = QCheckBox("Nets"); self.chk_nets.setChecked(False)
         self.chk_power = QCheckBox("Power"); self.chk_power.setChecked(True)
+        
         self.btn_heat = QPushButton("Heatmap"); self.btn_heat.setCheckable(True)
         self.btn_heat.setStyleSheet("QPushButton:checked { background-color: #ffcccc; color: red; border: 1px solid red; }")
         
@@ -4370,41 +2712,30 @@ class BackendWidget(QWidget):
         def_layout.addWidget(self.chk_nets); def_layout.addWidget(self.chk_power)
         def_layout.addSpacing(10); def_layout.addWidget(QLabel("<b>Overlay</b>"))
         def_layout.addWidget(self.btn_heat); def_layout.addStretch()
-        self.sidebar_stack.addWidget(self.def_ctrl_widget)
 
-        # Page 1: GDS Controls
         self.gds_ctrl_widget = QWidget()
+        self.gds_ctrl_widget.setVisible(False)
         gds_layout = QVBoxLayout(self.gds_ctrl_widget); gds_layout.setContentsMargins(0,0,0,0)
+        
         self.layer_list = QListWidget()
         self.layer_list.setStyleSheet("QListWidget { font-size: 10px; border: none; background: #f0f0f0; }")
         self.layer_list.itemChanged.connect(self.on_layer_toggle)
-        gds_layout.addWidget(QLabel("<b>GDS Layers</b>")); gds_layout.addWidget(self.layer_list)
-        self.sidebar_stack.addWidget(self.gds_ctrl_widget)
+        
+        gds_layout.addWidget(QLabel("<b>GDS Layers</b>"))
+        gds_layout.addWidget(self.layer_list)
 
-        # Page 2: Macro Cart Picker (The Sandbox)
-        self.cart_widget = QWidget()
-        cart_layout = QVBoxLayout(self.cart_widget); cart_layout.setContentsMargins(0,0,0,0)
-        cart_layout.addWidget(QLabel("<b>📦 Macro Cart</b>"))
-        cart_layout.addWidget(QLabel("<small>Drag macros from the right<br>into the die area.</small>"))
-        self.cart_list = QListWidget()
-        self.cart_list.setStyleSheet("background: #fff; font-size: 11px;")
-        cart_layout.addWidget(self.cart_list)
-        self.sidebar_stack.addWidget(self.cart_widget)
-
+        # [UPDATE] Added Magic GUI Button
         self.btn_gui = QPushButton("Native GUI (OpenROAD)")
         self.btn_magic = QPushButton("✨ Magic GUI")
-        self.btn_magic.setStyleSheet("color: #5a32a3; font-weight: bold;") 
+        self.btn_magic.setStyleSheet("color: #5a32a3; font-weight: bold;") # Magic purple branding
+        
         self.btn_ref = QPushButton("Refresh View")
         self.btn_load = QPushButton("📂 Load Routed")
         
-        # PRO TCL EDITOR
         self.term_log = QTextEdit(); self.term_log.setReadOnly(True)
         self.term_log.setStyleSheet("background: #101010; color: #00FF00; font-family: Consolas; border: none;")
-        self.term_in = CodeEditor()
-        self.term_in.setPlaceholderText("Write Multiline TCL Here... (Ctrl+Enter to Execute)")
-        self.term_in.setStyleSheet("background: #202020; color: white; border-top: 1px solid #444;")
-        self.btn_exec_tcl = QPushButton("Execute TCL")
-        self.btn_exec_tcl.setStyleSheet("background: #00509d; color: white; font-weight: bold;")
+        self.term_in = QLineEdit(); self.term_in.setPlaceholderText("Enter TCL command...")
+        self.term_in.setStyleSheet("background: #202020; color: white; border-top: 1px solid #444; font-family: Consolas; padding: 5px;")
 
         # --- 2. LAYOUT ---
         self.layout = QVBoxLayout(self); self.layout.setContentsMargins(0,0,0,0)
@@ -4430,20 +2761,25 @@ class BackendWidget(QWidget):
 
         r_lay.addStretch()
         btn_rst = QPushButton("🔄 Reset"); btn_rst.clicked.connect(self.reset_backend); r_lay.addWidget(btn_rst)
+        btn_cfg = QPushButton("⚙ PDK Config"); btn_cfg.clicked.connect(self.open_pdk_selector); r_lay.addWidget(btn_cfg)
         self.layout.addWidget(self.ribbon)
         
         v_split = QSplitter(Qt.Orientation.Vertical)
         h_widget = QWidget(); h_lay = QHBoxLayout(h_widget); h_lay.setContentsMargins(0,0,0,0); h_lay.setSpacing(0)
         
-        sidebar = QFrame(); sidebar.setFixedWidth(150); sidebar.setStyleSheet("background: #e8e8e8; border-right: 1px solid #aaa;")
+        sidebar = QFrame(); sidebar.setFixedWidth(140); sidebar.setStyleSheet("background: #e8e8e8; border-right: 1px solid #aaa;")
         s_lay = QVBoxLayout(sidebar); s_lay.setContentsMargins(5,10,5,10)
-        s_lay.addWidget(self.sidebar_stack)
+        s_lay.addWidget(self.def_ctrl_widget)
+        s_lay.addWidget(self.gds_ctrl_widget)
+        
+        # [UPDATE] Add buttons to sidebar
         s_lay.addWidget(self.btn_gui)
         s_lay.addWidget(self.btn_magic)
         s_lay.addWidget(self.btn_ref)
         s_lay.addWidget(self.btn_load)
         h_lay.addWidget(sidebar)
         
+        # [NEW] Center Tabs mapped correctly
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.viz_tabs.addTab(self.peeker, "Live Floorplan (DEF)")
         self.viz_tabs.addTab(self.gds_viewer, "Final Chip (GDS)")
@@ -4453,13 +2789,7 @@ class BackendWidget(QWidget):
         v_split.addWidget(h_widget)
         
         term_widget = QWidget(); t_lay = QVBoxLayout(term_widget); t_lay.setContentsMargins(0,0,0,0)
-        t_lay.addWidget(self.term_log)
-        
-        tcl_input_lay = QHBoxLayout()
-        tcl_input_lay.addWidget(self.term_in)
-        tcl_input_lay.addWidget(self.btn_exec_tcl)
-        t_lay.addLayout(tcl_input_lay)
-        
+        t_lay.addWidget(self.term_log); t_lay.addWidget(self.term_in)
         v_split.addWidget(term_widget)
         v_split.setStretchFactor(0, 4); v_split.setStretchFactor(1, 1)
         self.layout.addWidget(v_split)
@@ -4470,31 +2800,30 @@ class BackendWidget(QWidget):
         self.chk_nets.toggled.connect(self.update_view)
         self.chk_power.toggled.connect(self.update_view)
         self.btn_heat.toggled.connect(self.update_view)
+        
         self.btn_gui.clicked.connect(self.launch_native_gui)
         self.btn_magic.clicked.connect(self.launch_magic_gui) 
         self.btn_ref.clicked.connect(self.force_refresh_view)
         self.btn_load.clicked.connect(self.load_routed_design)
-        self.viz_tabs.currentChanged.connect(self.on_tab_changed)
-        self.btn_exec_tcl.clicked.connect(self.send_command)
         
-        # Shortcut for Code Editor Execute
-        shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.term_in)
-        shortcut.activated.connect(self.send_command)
+        self.viz_tabs.currentChanged.connect(self.on_tab_changed)
+        self.term_in.returnPressed.connect(self.send_command)
 
         # --- 4. STARTUP ---
         self.proc = None
         self.pending_init = None
         self.cmd_active = False
+        
         self.reset_backend() 
         self.viz_tabs.setCurrentIndex(0)
-
     # === [NEW] MAGIC GUI LAUNCHER ===
     def launch_magic_gui(self):
+        """Launches Magic VLSI in GUI mode with the correct Tech file."""
         if not shutil.which("magic"):
             self.term_log.append("[ERR] Magic not found.")
             return
 
-        if not self.ide.active_pdk: 
+        if not self.active_pdk: 
             self.term_log.append("[ERR] No PDK Active.")
             return
 
@@ -4505,41 +2834,22 @@ class BackendWidget(QWidget):
              self.term_log.append("[ERR] GDS not found. Run 'GDS' step first.")
              return
 
-        pdk_tech = self.ide.active_pdk.get('tech', '')
+        pdk_tech = self.active_pdk.get('tech', '')
         if not os.path.exists(pdk_tech):
              self.term_log.append("[ERR] Magic Tech file not found in PDK config.")
              return
 
         self.term_log.append(f"[SYS] Launching Magic GUI for {os.path.basename(gds_path)}...")
+        # -d XR uses the X11 Cairo renderer (faster/better looking than default)
+        # -T loads the tech file
         subprocess.Popen(["magic", "-d", "XR", "-T", pdk_tech, gds_path], cwd=proj_root)
 
-    def on_layer_toggle(self, item):
-        layer, datatype = item.data(Qt.ItemDataRole.UserRole)
-        visible = (item.checkState() == Qt.CheckState.Checked)
-        self.gds_viewer.set_layer_visible(layer, datatype, visible)
-
-    def populate_gds_layers(self):
-        self.layer_list.clear()
-        layers = self.gds_viewer.get_layers()
-        for layer, datatype in layers:
-            item = QListWidgetItem(f"{layer}/{datatype}")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole, (layer, datatype))
-            self.layer_list.addItem(item)
-
-    def on_tab_changed(self, index):
-        if index == 0:
-            if hasattr(self.peeker, 'sandbox_active') and self.peeker.sandbox_active:
-                self.sidebar_stack.setCurrentIndex(2) # Show Macro Cart
-            else:
-                self.sidebar_stack.setCurrentIndex(0) # Show DEF Controls
-        elif index == 1:
-            self.sidebar_stack.setCurrentIndex(1) # Show GDS
-            self.view_final_gds()
-        elif index == 2:
-            self.sidebar_stack.setCurrentIndex(0) # Hide sidebar functionally
-
+    # === KEEP ALL EXISTING HELPERS BELOW ===
+    # (ask_command, reset_backend, on_tab_changed, populate_gds_layers, on_layer_toggle, 
+    # view_final_gds, run_flow_step, trigger_magic_drc, trigger_magic_merge, open_pdk_selector, 
+    # read_stdout, send_command, send_command_internal, update_view, load_routed_design, 
+    # launch_native_gui, force_refresh_view, load_checkpoint, save_checkpoint)
+    
     def ask_command(self, title, label, text):
         dlg = QInputDialog(None)
         dlg.setWindowTitle(title)
@@ -4561,6 +2871,39 @@ class BackendWidget(QWidget):
         if shutil.which("openroad"): self.proc.start("openroad")
         else: self.term_log.append("[ERR] OpenROAD binary not found.")
 
+    def on_tab_changed(self, index):
+        if index == 0:
+            # Tab 0: DEF Live Floorplan
+            self.def_ctrl_widget.setVisible(True)
+            self.gds_ctrl_widget.setVisible(False)
+            
+        elif index == 1:
+            # Tab 1: 2D GDS Viewer
+            self.def_ctrl_widget.setVisible(False)
+            self.gds_ctrl_widget.setVisible(True)
+            self.view_final_gds() # Load the 2D GDS
+            
+        elif index == 2:
+            # Tab 2: 3D GDS Viewer
+            self.def_ctrl_widget.setVisible(False)
+            self.gds_ctrl_widget.setVisible(False)
+            # The sidebar is now completely hidden for the 3D view to maximize screen space!
+
+    def populate_gds_layers(self):
+        self.layer_list.clear()
+        layers = self.gds_viewer.get_layers()
+        for layer, datatype in layers:
+            item = QListWidgetItem(f"{layer}/{datatype}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, (layer, datatype))
+            self.layer_list.addItem(item)
+
+    def on_layer_toggle(self, item):
+        layer, datatype = item.data(Qt.ItemDataRole.UserRole)
+        visible = (item.checkState() == Qt.CheckState.Checked)
+        self.gds_viewer.set_layer_visible(layer, datatype, visible)
+
     def view_final_gds(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         gds_path = os.path.join(proj_root, "results", "design.gds")
@@ -4571,27 +2914,6 @@ class BackendWidget(QWidget):
                 self.populate_gds_layers()
         else:
             self.term_log.append(f"[ERR] GDS not found. Run 'GDS' step first.")
-
-    def send_command(self): 
-        cmd = self.term_in.toPlainText()
-        self.term_in.clear()
-        self.send_command_internal(cmd)
-        
-    def send_command_internal(self, cmd):
-        for line in cmd.split('\n'):
-            if line.strip(): self.term_log.append(f"> {line}")
-        if self.proc and self.proc.state() == QProcess.ProcessState.Running: 
-            self.cmd_active = True
-            self.proc.write(f"{cmd}\n".encode())
-        else: 
-            self.term_log.append(f"[ERR] Backend not running. Click Reset.")
-
-    def read_stdout(self):
-        data = self.proc.readAllStandardOutput().data().decode()
-        self.term_log.append(data.strip())
-        self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
-        if self.pending_init and ("OpenROAD" in data or "openroad>" in data): self.send_command_internal(self.pending_init); self.pending_init = None
-        if self.cmd_active and "openroad>" in data: self.cmd_active = False; self.force_refresh_view()
 
     def run_flow_step(self, step_name):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
@@ -4606,15 +2928,15 @@ class BackendWidget(QWidget):
             return
 
         if step_name == "STA":
-            if not self.ide.ensure_pdk_active(): return
+            if not self.active_pdk: QMessageBox.critical(self, "Error", "PDK not active."); return
             self.term_log.append("\n[SIGNOFF] Running Signoff Timing Analysis...")
-            lib_cmd = f"read_liberty \"{self.ide.active_pdk['lib']}\""
+            lib_cmd = f"read_liberty \"{self.active_pdk['lib']}\""
             cmd = f"{lib_cmd}\nreport_checks -path_delay max -format full_clock_expanded -fields {{slew cap input_pins fanout}} -digits 4\nreport_worst_slack -max\nreport_tns\nreport_wns"
             self.send_command_internal(cmd)
             return
 
         if step_name == "DRC":
-            if not self.ide.active_pdk or 'gds' not in self.ide.active_pdk: QMessageBox.critical(self, "Error", "PDK GDS Required."); return
+            if not self.active_pdk or 'gds' not in self.active_pdk: QMessageBox.critical(self, "Error", "PDK GDS Required."); return
             gds_file = os.path.join(results_dir, "design.gds")
             if not os.path.exists(gds_file): self.term_log.append("[ERR] Generate GDS first!"); return
             self.trigger_magic_drc(proj_root, gds_file)
@@ -4625,105 +2947,26 @@ class BackendWidget(QWidget):
             if os.path.exists(db_path):
                 reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if reply == QMessageBox.StandardButton.Yes: self.load_checkpoint(); return
-            
-            if not self.ide.ensure_pdk_active(): return
-            
+            if not self.active_pdk: 
+                 if not self.open_pdk_selector(): return
+            tcl_path = os.path.join(proj_root, "init_pdk.tcl")
             ctx = self.ide.get_context()[0] or "top"
             netlist_path = os.path.join(proj_root, "netlist", f"{ctx}_netlist.v")
             if not os.path.exists(netlist_path): netlist_path = self.ide.current_file or "design.v"
             sdc_path = os.path.join(proj_root, "netlist", f"{ctx}.sdc")
-            
-            json_out_path = os.path.join(reports_dir, f"{ctx}_sizes.json").replace("\\", "/")
-            self.peeker.sizes_json_path = json_out_path 
-
-            # Build the Macro Injections
-            macro_lefs = "\n".join([f'read_lef "{m["lef"]}"' for m in self.ide.active_macros])
-            macro_libs = "\n".join([f'read_liberty "{m["lib"]}"' for m in self.ide.active_macros])
-
-            tcl_content = f"""
-read_lef "{self.ide.active_pdk['tlef']}"
-read_lef "{self.ide.active_pdk['lef']}"
-{macro_lefs}
-read_liberty "{self.ide.active_pdk['lib']}"
-{macro_libs}
-read_verilog "{netlist_path}"
-link_design {ctx}
-read_sdc "{sdc_path}"
-
-# --- SILIS DATA EXTRACTION ---
-set tech [[ord::get_db] getTech]
-set dbu [$tech getDbUnitsPerMicron]
-set site_w 460
-set site_h 2720
-foreach lib [[ord::get_db] getLibs] {{
-    set sites [$lib getSites]
-    if {{[llength $sites] > 0}} {{
-        set site [lindex $sites 0]
-        set site_w [$site getWidth]
-        set site_h [$site getHeight]
-        break
-    }}
-}}
-
-set out_file [open "{json_out_path}" w]
-puts $out_file "{{\n  \\\"dbu\\\": $dbu,\n  \\\"site_w\\\": $site_w,\n  \\\"site_h\\\": $site_h,\n  \\\"masters\\\": {{"
-set first 1
-foreach lib [[ord::get_db] getLibs] {{
-    foreach master [$lib getMasters] {{
-        if {{!$first}} {{ puts $out_file "," }}
-        set mname [$master getName]
-        set w [$master getWidth]
-        set h [$master getHeight]
-        set type [$master getType]
-        puts -nonewline $out_file "    \\\"$mname\\\": {{\\\"w\\\": $w, \\\"h\\\": $h, \\\"type\\\": \\\"$type\\\"}}"
-        set first 0
-    }}
-}}
-puts $out_file "\n  }},\n  \\\"macros\\\": {{"
-set block [[[ord::get_db] getChip] getBlock]
-set first_inst 1
-foreach inst [$block getInsts] {{
-    set master [$inst getMaster]
-    if {{[string match "BLOCK*" [$master getType]]}} {{
-        if {{!$first_inst}} {{ puts $out_file "," }}
-        set iname [$inst getName]
-        set mname [$master getName]
-        puts -nonewline $out_file "    \\\"$iname\\\": \\\"$mname\\\""
-        set first_inst 0
-    }}
-}}
-puts $out_file "\n  }}\n}}"
-close $out_file
-"""
-            tcl_path = os.path.join(proj_root, "init_pdk.tcl")
-            with open(tcl_path, 'w') as f: f.write(tcl_content)
-            self.pending_init = f"source {tcl_path}"
-            self.term_log.append("[SYS] Rebooting OpenROAD...")
-            self.reset_backend() 
-            
-            # TRIGGER THE SANDBOX DELAYED
-            QTimer.singleShot(2500, self.activate_sandbox)
-            return
-
-        if step_name == "Floorplan":
-            cmd = "initialize_floorplan -die_area \"0 0 1000 1000\" -core_area \"10 10 990 990\" -site unithd;\n"
-            # Scrape Sandbox Macro Positions
-            if hasattr(self.peeker, 'sandbox_active') and self.peeker.sandbox_active:
-                for m in self.peeker.macro_items:
-                    x_um = m.pos().x() / m.dbu
-                    y_um = m.pos().y() / m.dbu
-                    cmd += f"place_cell -inst_name {m.inst_name} -origin {{{x_um} {y_um}}} -orient R0;\n"
-                    cmd += f"add_macro_placement_blockage -halo {{10.0 10.0}};\n"
-                
-                self.peeker.sandbox_active = False
-                self.sidebar_stack.setCurrentIndex(0)
-            
-            cmd += write_cmd
-            self.send_command_internal(cmd)
+            if not os.path.exists(sdc_path):
+               with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
+            tcl_content = f"""read_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\nread_liberty "{self.active_pdk['lib']}"\nread_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}" """
+            try:
+                with open(tcl_path, 'w') as f: f.write(tcl_content)
+                self.pending_init = f"source {tcl_path}"
+                self.term_log.append("[SYS] Rebooting OpenROAD...")
+                self.reset_backend() 
+            except Exception as e: self.term_log.append(f"[ERR] File Error: {e}")
             return
 
         if step_name == "GDS":
-            if not self.ide.active_pdk or 'gds' not in self.ide.active_pdk: QMessageBox.critical(self, "Error", "No GDS defined."); return
+            if not self.active_pdk or 'gds' not in self.active_pdk: QMessageBox.critical(self, "Error", "No GDS defined."); return
             self.term_log.append("[SYS] Starting GDS Generation Flow...")
             final_def = os.path.join(results_dir, "final_routed.def").replace("\\", "/")
             self.send_command_internal(f"write_def \"{final_def}\"")
@@ -4732,10 +2975,11 @@ close $out_file
 
         cmd = ""
         if not SSAForge.ALIASES: SSAForge.load_aliases()
-        pdk_name = self.ide.active_pdk.get('name', SSAForge.DEFAULT_PDK) if self.ide.active_pdk else SSAForge.DEFAULT_PDK
-        lib_path = self.ide.active_pdk.get('lib', None) if self.ide.active_pdk else None
+        pdk_name = self.active_pdk.get('name', SSAForge.DEFAULT_PDK) if self.active_pdk else SSAForge.DEFAULT_PDK
+        lib_path = self.active_pdk.get('lib', None) if self.active_pdk else None
 
-        if step_name == "Tapcells": cmd = SSAForge.get_tap_cmd(pdk_name, lib_path) + f"; {write_cmd}"
+        if step_name == "Floorplan": cmd = f"initialize_floorplan -die_area \"0 0 400 400\" -core_area \"10 10 390 390\" -site unithd; {write_cmd}"
+        elif step_name == "Tapcells": cmd = SSAForge.get_tap_cmd(pdk_name, lib_path) + f"; {write_cmd}"
         elif step_name == "PDN": cmd = "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VDD$} -power; add_global_connection -net {VSS} -pin_pattern {^VGND$|^VSS$} -ground; set_voltage_domain -name {Core} -power {VDD} -ground {VSS}; define_pdn_grid -name {grid} -voltage_domains {Core}; add_pdn_stripe -grid {grid} -layer {met1} -width {0.48} -followpins; add_pdn_stripe -grid {grid} -layer {met4} -width {1.6} -pitch {27.2} -offset {13.6} -extend_to_core_ring; add_pdn_connect -grid {grid} -layers {met1 met4}; pdngen; " + write_cmd
         elif step_name == "IO Pins": cmd = f"place_pins -hor_layers met3 -ver_layers met4; {write_cmd}"
         elif step_name == "Place": cmd = f"global_placement -density 0.6; detailed_placement; {write_cmd}"
@@ -4755,7 +2999,7 @@ close $out_file
 
     def trigger_magic_drc(self, root, gds_path):
         if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' not found.")); return
-        pdk_tech = self.ide.active_pdk.get('tech', '')
+        pdk_tech = self.active_pdk.get('tech', '')
         if not os.path.exists(pdk_tech): self.ide.queue.put(("[BACKEND]", "[ERR] Missing Tech file.")); return
         script_content = f"drc off\ngds read {gds_path}\ndrc style drc(fast)\ndrc on\ndrc check\ndrc catchup\nset count [drc list count]\nputs \"SILIS_DRC_VIOLATIONS: $count\"\nif {{$count > 0}} {{ drc list all }}\nquit"
         script_path = os.path.join(root, "run_drc.tcl")
@@ -4780,18 +3024,14 @@ close $out_file
 
     def trigger_magic_merge(self, root, def_path):
         if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' executable not found.")); return
-        pdk_gds = self.ide.active_pdk.get('gds', ''); pdk_tech = self.ide.active_pdk.get('tech', '')
-        pdk_tlef = self.ide.active_pdk.get('tlef', ''); pdk_lef = self.ide.active_pdk.get('lef', '')   
+        pdk_gds = self.active_pdk.get('gds', ''); pdk_tech = self.active_pdk.get('tech', '')
+        pdk_tlef = self.active_pdk.get('tlef', ''); pdk_lef = self.active_pdk.get('lef', '')   
         output_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
         if not all(os.path.exists(p) for p in [pdk_gds, pdk_tech, pdk_tlef, pdk_lef]): self.ide.queue.put(("[BACKEND]", f"[ERR] Missing PDK files.")); return
-        
-        # Inject Macro GDS files into the merge script
-        macro_gds_lines = "\n".join([f"gds read {m['gds']}" for m in self.ide.active_macros])
-        
-        script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\ngds read {pdk_gds}\n{macro_gds_lines}\ndef read {def_path}\ngds write {output_gds}\nquit"
+        script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\ngds read {pdk_gds}\ndef read {def_path}\ngds write {output_gds}\nquit"
         script_path = os.path.join(root, "merge_magic.tcl")
         with open(script_path, 'w') as f: f.write(script_content)
-        self.term_log.append(f"[SYS] Magic: Merging with LEF & Macros...")
+        self.term_log.append(f"[SYS] Magic: Merging with LEF support...")
         def run_magic():
             try:
                 cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
@@ -4801,6 +3041,33 @@ close $out_file
             except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Execution Error: {e}"))
         threading.Thread(target=run_magic, daemon=True).start()
 
+    def open_pdk_selector(self):
+        dlg = PDKSelector(self.pdk_mgr, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.active_pdk = dlg.selected_config; self.term_log.append(f"[SYS] Target PDK: {self.active_pdk['name']}"); return True
+        return False
+
+    def read_stdout(self):
+        data = self.proc.readAllStandardOutput().data().decode()
+        self.term_log.append(data.strip())
+        self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
+        if self.pending_init and ("OpenROAD" in data or "openroad>" in data): self.send_command_internal(self.pending_init); self.pending_init = None
+        if self.cmd_active and "openroad>" in data: self.cmd_active = False; self.force_refresh_view()
+
+    def send_command(self): cmd = self.term_in.text(); self.term_in.clear(); self.send_command_internal(cmd)
+        
+    def send_command_internal(self, cmd):
+        self.term_log.append(f"> {cmd}")
+        if "initialize_floorplan" in cmd:
+            import re
+            m = re.search(r'-die_area\s+"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"', cmd)
+            if m:
+                x1, y1, x2, y2 = map(float, m.groups())
+                try: self.peeker.set_die_area(x1, y1, x2, y2)
+                except: pass
+        if self.proc and self.proc.state() == QProcess.ProcessState.Running: self.cmd_active = True; self.proc.write(f"{cmd}\n".encode())
+        else: self.term_log.append(f"[ERR] Backend not running. Click Reset.")
+    
     def update_view(self):
         try:
             self.peeker.show_insts = self.chk_inst.isChecked(); self.peeker.show_pins = self.chk_pins.isChecked()
@@ -4818,18 +3085,14 @@ close $out_file
         else: self.term_log.append(f"[ERR] Routed file not found at: {def_path}")
 
     def launch_native_gui(self):
-        if not self.ide.active_pdk: 
-            return
+        if not self.active_pdk: return
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
-        if not os.path.exists(def_path): 
-            return
-            
+        if not os.path.exists(def_path): return
         view_tcl = os.path.join(proj_root, "view.tcl")
-        with open(view_tcl, 'w') as f: 
-            f.write(f'read_lef "{self.ide.active_pdk["tlef"]}"\nread_lef "{self.ide.active_pdk["lef"]}"\nread_def "{def_path}"\n')
+        with open(view_tcl, 'w') as f: f.write(f'read_lef "{self.active_pdk["tlef"]}"\nread_lef "{self.active_pdk["lef"]}"\nread_def "{def_path}"\n')
         subprocess.Popen(["openroad", "-gui", view_tcl], cwd=proj_root)
-
+    
     def force_refresh_view(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
@@ -4851,15 +3114,6 @@ close $out_file
         self.term_log.append(f"[SYS] Saving Checkpoint to {db_path}...")
         self.send_command_internal(f"write_db \"{db_path}\"")
 
-    def activate_sandbox(self):
-        if hasattr(self.peeker, 'sizes_json_path') and os.path.exists(self.peeker.sizes_json_path):
-            self.peeker.enter_sandbox_mode(self.peeker.sizes_json_path)
-            self.sidebar_stack.setCurrentIndex(2) # Switch to Cart Mode
-            
-            # Populate Cart Sidebar
-            self.cart_list.clear()
-            for m in self.peeker.macro_items:
-                self.cart_list.addItem(f"✅ {m.inst_name}")
 
 
 # ================= 4. VOLARE PDK MANAGER (Full Implementation) =================
@@ -5074,11 +3328,7 @@ class SilisIDE(QMainWindow):
         self.schem_running = False 
         self.sk_timer = QTimer(); self.sk_timer.setSingleShot(True); self.sk_timer.timeout.connect(self.reset_sk)
         
-        #
-        self.pdk_mgr = PDKManager()
-        self.macro_mgr = MacroManager()
-        self.active_pdk = None
-        self.active_macros = []
+        self.pdk_mgr = PDKManager(); self.active_pdk = None
 
         # === UI LAYOUT ===
         self.stack = QStackedWidget(); self.setCentralWidget(self.stack)
@@ -5115,35 +3365,6 @@ class SilisIDE(QMainWindow):
         if event.type() == QEvent.Type.KeyPress:
             key = event.key()
             
-            # --- CONTROL SHORTCUTS ---
-            modifiers = event.modifiers()
-            if modifiers == Qt.KeyboardModifier.ControlModifier:
-                if key == Qt.Key.Key_N:
-                    self.new_file()
-                    return True
-                elif key == Qt.Key.Key_S:
-                    self.save_file()
-                    return True
-                elif key == Qt.Key.Key_P:
-                    self.open_command_palette()
-                    return True
-                elif key == Qt.Key.Key_G:
-                    self.open_goto_line()
-                    return True
-                elif key == Qt.Key.Key_F:
-                    self.open_find()
-                    return True
-                elif key == Qt.Key.Key_H:
-                    self.open_replace()
-                    return True
-                elif key == Qt.Key.Key_W:
-                    self.close_active_tab()
-                    return True
-            elif modifiers == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
-                if key == Qt.Key.Key_P:
-                    self.open_command_palette()
-                    return True
-
             # --- GLOBAL F-KEYS (Smart Toggle) ---
             if self.stack.currentIndex() == 0:
                 if key == Qt.Key.Key_F1:
@@ -5173,19 +3394,9 @@ class SilisIDE(QMainWindow):
 
             # --- SUPER KEY LOGIC (` + Key) ---
             if key == Qt.Key.Key_QuoteLeft: # Backtick `
-                if self.sk_active:
-                    # Double-press backtick -> type a backtick!
-                    focused = QApplication.focusWidget()
-                    if focused:
-                        if isinstance(focused, QLineEdit):
-                            focused.insert("`")
-                        elif isinstance(focused, (QPlainTextEdit, QTextEdit)):
-                            focused.insertPlainText("`")
-                    self.reset_sk()
-                else:
-                    self.sk_active = True
-                    self.statusBar().showMessage("SUPER KEY ACTIVE")
-                    self.sk_timer.start(1000)
+                self.sk_active = True
+                self.statusBar().showMessage("SUPER KEY ACTIVE")
+                self.sk_timer.start(1000)
                 return True 
             
             if self.sk_active:
@@ -5288,120 +3499,86 @@ class SilisIDE(QMainWindow):
         self.tab_schem.view.load_schematic(path)
 
     def run_synthesis_flow(self):
-        if not self.ensure_pdk_active(): return
-        self.save_file()
+        if not self.active_pdk: 
+            QMessageBox.warning(self, "Err", "Select PDK!"); return
         _, base = self.get_context()
-        if not base:
-            QMessageBox.warning(self, "No Design", "Open a Verilog file first — no module found in the editor.")
-            return
+        if not base: return
         root = self.prep_workspace(base)
-        
-        # Ensure active editor content is written to source/ directory
-        editor = self.tab_compile.editor.get_current_editor()
-        if editor:
-            src_file = os.path.join(root, "source", f"{base}.v")
-            with open(src_file, "w") as f:
-                f.write(editor.toPlainText())
-                
+        self.pdk_path = self.active_pdk['lib']
         self.run_synthesis_thread(root, base)
 
     def run_synthesis_thread(self, root, base):
+        # Clear the unified log before starting
         self.tab_synth.log_main.clear()
         self.tab_synth.card_status.setText("RUNNING...")
-        self.tab_synth.card_status.setStyleSheet(
-            "background:#eaeef2; color:#57606a; font-weight:bold; "
-            "padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
+        self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
-        self._synth_running = True
-        editor = self.tab_compile.editor.get_current_editor()
-        if editor and hasattr(editor, '_word_hl_timer'):
-            editor._word_hl_timer.stop()
-
+        v_net = f"netlist/{base}_netlist.v"
         src_v = glob.glob(os.path.join(root, "source", "*.v"))
         src_v = [s for s in src_v if "tb_" not in s]
         read_cmd = f"read_verilog {' '.join(src_v)}" if src_v else ""
         
-        lib = self.active_pdk['lib']
-        v_net = f"netlist/{base}_netlist.v"
-
-        ys = f"""read_liberty -lib {lib}
-{read_cmd}
-synth -top {base}
-dfflibmap -liberty {lib}
-abc -liberty {lib}
-tee -q -o reports/area.rpt stat -liberty {lib} -json
-write_verilog -noattr {v_net}
-"""
+        # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
+        # Note the 'tee -o reports/area.rpt' to save area stats to a file
+        ys = f"""
+        read_liberty -lib {self.pdk_path}
+        {read_cmd}
+        synth -top {base}
+        dfflibmap -liberty {self.pdk_path}
+        abc -liberty {self.pdk_path}
+        tee -o reports/area.rpt stat -liberty {self.pdk_path} -json
+        write_verilog -noattr {v_net}
+        """
         with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
-
-        tcl = f"""read_liberty {lib}
-read_verilog {v_net}
-link_design {base}
-read_sdc netlist/{base}.sdc
-report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
-report_power > reports/power.rpt
-exit
-"""
+        
+        # --- 2. STA SCRIPT (With Explicit File Dumps) ---
+        # Redirects output (>) to timing.rpt and power.rpt
+        tcl = f"""
+        read_liberty {self.pdk_path}
+        read_verilog {v_net}
+        link_design {base}
+        read_sdc netlist/{base}.sdc
+        report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
+        report_power > reports/power.rpt
+        exit
+        """
         with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
 
-        self._synth_log_file = open(os.path.join(root, "reports/synthesis.log"), "w")
+        def task():
+            self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
+            
+            # --- STEP 1: YOSYS ---
+            try:
+                # We pipe output to a file AND the GUI queue
+                log_path = os.path.join(root, "reports/synthesis.log")
+                with open(log_path, "w") as log_file:
+                    p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    
+                    for line in iter(p1.stdout.readline, ''):
+                        line = line.strip()
+                        if line:
+                            self.queue.put(("[YOSYS]", line)) 
+                            log_file.write(line + "\n")
+                    p1.wait()
+                    if p1.returncode != 0: raise Exception("Yosys Failed")
+            except Exception as e:
+                self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
 
-        # === STEP 1: YOSYS via QProcess ===
-        self._yosys_proc = QProcess(self)
-        self._yosys_proc.setWorkingDirectory(root)
-        self._yosys_proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            # --- STEP 2: OPENSTA ---
+            try:
+                p2 = subprocess.Popen(f"sta sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                for line in iter(p2.stdout.readline, ''):
+                    line = line.strip()
+                    if line:
+                        self.queue.put(("[STA]", line)) 
+                p2.wait()
+            except Exception as e:
+                self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
 
-        def on_yosys_output():
-            raw = bytes(self._yosys_proc.readAllStandardOutput()).decode(errors='replace')
-            self.tab_synth.log_main.appendPlainText(raw.rstrip())
-            self._synth_log_file.write(raw)
-            sb = self.tab_synth.log_main.verticalScrollBar()
-            sb.setValue(sb.maximum())
-
-        def on_yosys_done(exit_code, exit_status):
-            self._synth_log_file.flush()
-            if exit_code != 0:
-                self.tab_synth.log_main.appendPlainText(f"[ERR] Yosys exited with code {exit_code}")
-                self.tab_synth.card_status.setText("SYNTHESIS FAIL")
-                self.tab_synth.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
-                self._cleanup_synth()
-                return
-            self.tab_synth.log_main.appendPlainText("=== Yosys done — Running OpenSTA ===")
-            self._run_sta(root, base)
-
-        self._yosys_proc.readyReadStandardOutput.connect(on_yosys_output)
-        self._yosys_proc.finished.connect(on_yosys_done)
-        self.log_system("Starting Synthesis (Yosys)...")
-        self._yosys_proc.start("yosys", ["synth.ys"])
-
-    def _run_sta(self, root, base):
-        # === STEP 2: OpenSTA via QProcess ===
-        self._sta_proc = QProcess(self)
-        self._sta_proc.setWorkingDirectory(root)
-        self._sta_proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-
-        def on_sta_output():
-            raw = bytes(self._sta_proc.readAllStandardOutput()).decode(errors='replace')
-            self.tab_synth.log_main.appendPlainText(raw.rstrip())
-            self._synth_log_file.write(raw)
-            sb = self.tab_synth.log_main.verticalScrollBar()
-            sb.setValue(sb.maximum())
-
-        def on_sta_done(exit_code, exit_status):
-            self._synth_log_file.close()
-            self.tab_synth.log_main.appendPlainText("=== Synthesis & Timing Complete ===")
-            self.tab_synth.update_dashboard()
-            self._cleanup_synth()
-
-        self._sta_proc.readyReadStandardOutput.connect(on_sta_output)
-        self._sta_proc.finished.connect(on_sta_done)
-        self.log_system("Running OpenSTA...")
-        self._sta_proc.start("sta", ["sta.tcl"])
-
-    def _cleanup_synth(self):
-        self._resume_after_synthesis()
-
-
+            self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
+            self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
+        
+        threading.Thread(target=task, daemon=True).start()
 
     def run_simulation(self):
         if self.current_file: self.save_file()
@@ -5453,7 +3630,7 @@ exit
 
     def open_file_in_editor(self, path):
         if os.path.exists(path):
-            self.tab_compile.editor.open_file(path)
+            with open(path) as f: self.tab_compile.editor.setPlainText(f.read())
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
 
     def handle_terminal_input(self):
@@ -5510,90 +3687,31 @@ exit
         self.term_mode = "SIM" if self.term_mode == "SHELL" else "SHELL"
         self.tab_compile.mode_btn.setText(f"[{self.term_mode}]")
 
-    def ensure_pdk_active(self):
-        if self.active_pdk: return True
-        self.open_pdk_selector()
-        return self.active_pdk is not None
-
     def open_pdk_selector(self):
-        # Summon the new Hub instead of the old PDKSelector
-        dlg = SiliconConfigHub(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted and self.active_pdk:
-            # Update the Synthesis tab labels to show the config
-            pdk_name = self.active_pdk['name']
-            macro_count = len(self.active_macros)
-            self.tab_synth.lbl_pdk.setText(f"<b>PDK:</b> {pdk_name} | <b>Macros:</b> {macro_count}")
-            
-            # Sync to backend manager to prevent crashes
-            self.backend_widget.active_pdk = self.active_pdk
-            
-            self.log_system(f"Config Locked -> PDK: {pdk_name}, Macros: {macro_count}")
-            
-            # Auto-Discover Macros
-            if 'lib' in self.active_pdk:
-                lib_path = self.active_pdk['lib']
-                if 'libs.ref' in lib_path:
-                    libs_ref = lib_path.split('libs.ref')[0] + 'libs.ref'
-                    self.log_system("[Scanner] Starting Macro Auto-Discovery...")
-                    self.macro_scanner = MacroScannerWorker(libs_ref, self.macro_mgr)
-                    self.macro_scanner.log.connect(self.log_system)
-                    self.macro_scanner.finished.connect(lambda c: self.log_system(f"[Scanner] Finished. Found {c} macros."))
-                    self.macro_scanner.start()
-                    
+        dlg = PDKSelector(self.pdk_mgr, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.active_pdk = dlg.selected_config
+            self.tab_synth.lbl_pdk.setText(f"<b>Active PDK:</b> {self.active_pdk['name']}")
+            self.log_system(f"PDK Selected: {self.active_pdk['name']}")
             return True
-        return False 
+        return False
 
     def new_file(self): 
-        self.tab_compile.editor.new_untitled_tab()
+        self.current_file = None; self.tab_compile.editor.clear(); self.lbl_proj.setText("Untitled")
 
     def save_file(self):
-        w = self.tab_compile.editor.get_current_editor_widget()
-        if w:
-            self.tab_compile.editor.save_tab(w)
-
-    def open_command_palette(self):
-        palette = CommandPalette(self, self)
-        x = self.x() + (self.width() - palette.width()) // 2
-        y = self.y() + 80
-        palette.move(x, y)
-        palette.exec()
-
-    def open_goto_line(self):
-        e = self.tab_compile.editor.get_current_editor()
-        if not e: return
-        dlg = GotoLineDialog(e.blockCount(), self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            line = dlg.get_line()
-            cursor = e.textCursor()
-            block = e.document().findBlockByNumber(max(0, min(line - 1, e.blockCount() - 1)))
-            cursor.setPosition(block.position())
-            e.setTextCursor(cursor)
-            e.setFocus()
-
-    def open_find(self):
-        w = self.tab_compile.editor.get_current_editor_widget()
-        if w: w.find_bar.show_find()
-
-    def open_replace(self):
-        w = self.tab_compile.editor.get_current_editor_widget()
-        if w: w.find_bar.show_replace()
-
-    def close_active_tab(self):
-        self.tab_compile.editor.close_tab(self.tab_compile.editor.currentIndex())
+        if not self.current_file:
+            f, _ = QFileDialog.getSaveFileName(self, "Save", self.cwd)
+            if f: self.current_file = f
+        if self.current_file:
+            with open(self.current_file, 'w') as f: f.write(self.tab_compile.editor.toPlainText())
+            self.log_system(f"Saved {os.path.basename(self.current_file)}")
+            self.lbl_proj.setText(os.path.basename(self.current_file))
 
     def get_context(self):
-        print("DEBUG: [get_context] Called", flush=True)
-        editor = self.tab_compile.editor.get_current_editor()
-        if not editor:
-            print("DEBUG: [get_context] No active editor tab!", flush=True)
-            return None, None
-        content = editor.toPlainText()
-        print(f"DEBUG: [get_context] content length={len(content)}", flush=True)
+        content = self.tab_compile.editor.toPlainText()
         m = re.search(r'module\s+(\w+)', content)
-        if not m:
-            print("DEBUG: [get_context] No module found in editor content", flush=True)
-            return None, None
-        print(f"DEBUG: [get_context] Found module: {m.group(1)}", flush=True)
+        if not m: return None, None
         return m.group(1), m.group(1).replace("tb_", "").replace("_tb", "")
 
     def get_proj_root(self, base):
@@ -5630,64 +3748,38 @@ exit
         if os.path.exists(p):
              with open(p) as f: self.tab_synth.log_main.setPlainText(f.read())
     
+    # --- FIXED QUEUE PROCESSOR ---
+    # === REPLACE IN SilisIDE CLASS ===
     def process_queue(self):
-        synth_batch = []
-        term_batch = []
-        backend_batch = []
-        update_dash = False
-        
-        count = 0
-        # Bumped to 500 to pull data off the queue faster
-        while not self.queue.empty() and count < 500:
-            count += 1
+        while not self.queue.empty():
             item = self.queue.get()
             
             if isinstance(item, tuple): tag, content = item
             else: tag, content = "SYS", str(item)
 
+            # [NEW] Route terminal command output to the VSCode terminal widget
             if tag == "TERM_OUT":
-                term_batch.append(content)
+                self.tab_compile.terminal.append_output(content)
+
+            # [NEW] Route Backend-specific messages to Backend Terminal
             elif tag == "[BACKEND]":
-                backend_batch.append(content)
+                self.backend_widget.term_log.append(content)
+                self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
+
+            # Existing Routing...
             elif tag == "UPDATE_DASHBOARD":
-                update_dash = True
+                self.tab_synth.update_dashboard()
+                
             elif tag in ["[YOSYS]", "[STA]", "SYNTH_LOG", "STA_LOG"]:
-                synth_batch.append(content)
-            elif tag == "SYNTH_FAILED":
-                self.tab_synth.card_status.setText("SYNTHESIS FAIL")
-                self.tab_synth.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
-                self.log_system(f"[ERR] {content}", "ERR")
-                self._resume_after_synthesis()
+                self.tab_synth.log_main.append(content)
+                sb = self.tab_synth.log_main.verticalScrollBar()
+                sb.setValue(sb.maximum())
+                
             elif tag == "[SYS]" or tag == "SYS":
                 self.log_system(content)
+                
             else:
                 self.log_system(str(item))
-                
-        # Bulk append without disabling updates (maintains internal rendering optimizations)
-        if synth_batch:
-            self.tab_synth.log_main.appendPlainText("\n".join(synth_batch))
-            sb = self.tab_synth.log_main.verticalScrollBar()
-            sb.setValue(sb.maximum())
-            
-        if term_batch:
-            self.tab_compile.terminal.append_output("\n".join(term_batch))
-            
-        if backend_batch:
-            self.backend_widget.term_log.append("\n".join(backend_batch))
-            sb = self.backend_widget.term_log.verticalScrollBar()
-            sb.setValue(sb.maximum())
-            
-        if update_dash:
-            self.tab_synth.update_dashboard()
-            self._resume_after_synthesis()
-
-    def _resume_after_synthesis(self):
-        """Re-enable non-essential timers paused during synthesis."""
-        if not getattr(self, '_synth_running', False): return
-        self._synth_running = False
-        editor = self.tab_compile.editor.get_current_editor()
-        if editor and hasattr(editor, '_word_hl_timer'):
-            editor._word_hl_timer.start()
 
     def load_violation_log(self): 
         self.frontend_tabs.setCurrentIndex(3)
