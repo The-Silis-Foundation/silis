@@ -50,7 +50,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHeaderView, QAbstractItemView, QCheckBox, QGroupBox,
                              QToolButton, QStackedWidget, QButtonGroup, 
                              QGraphicsPolygonItem, QGraphicsPathItem, QScrollArea, QListWidget, QFrame, QTabWidget, QGridLayout, QListWidgetItem,
-                             QWizard, QWizardPage, QDoubleSpinBox)
+                             QWizard, QWizardPage, QDoubleSpinBox, QSpinBox)
 from PyQt6.QtCore import (Qt, QTimer, QSize, pyqtSignal, QThread, QDir, 
                           QEvent, QProcess, QRectF, QPointF, QUrl)
 from PyQt6.QtGui import (QAction, QFont, QColor, QSyntaxHighlighter, 
@@ -534,6 +534,7 @@ class DEFParser:
         self.die_rect = QRectF(0,0,0,0)
         self.comps_map = {}   
         self.comp_types = {}  
+        self.comp_masters = {} 
         self.module_map = {}  
         self.pins = []       
         self.power_rails = [] 
@@ -634,30 +635,40 @@ class DEFParser:
                             current_comp_model = parts[2]
                     
                     if current_comp_name:
+                        x, y = 0, 0
+                        is_placed = False
+                        
                         if "PLACED" in line or "FIXED" in line or "COVER" in line:
                             coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
                             if coord_match:
                                 x = int(coord_match.group(1))
                                 y = int(coord_match.group(2))
-                                
-                                w, h = std_w, std_h
-                                if current_comp_model in self.macro_sizes:
-                                    w = self.macro_sizes[current_comp_model][0] * self.dbu
-                                    h = self.macro_sizes[current_comp_model][1] * self.dbu
-                                    
-                                self.comps_map[current_comp_name] = QRectF(x, y, w, h)
-                                
-                                model_lower = current_comp_model.lower()
-                                is_tap = "tap" in model_lower or "fill" in model_lower
-                                is_clock = "clk" in model_lower and not current_comp_name.startswith("_")
-                                
-                                if is_tap: self.comp_types[current_comp_name] = "TAP"
-                                elif is_clock: self.comp_types[current_comp_name] = "CLOCK"
-                                else: self.comp_types[current_comp_name] = "STD"
-                                
-                                self.module_map[current_comp_name] = "STD_LOGIC" 
-                                self.component_count += 1
-                                current_comp_name = None
+                                is_placed = True
+                        
+                        w, h = std_w, std_h
+                        is_macro = False
+                        if current_comp_model in self.macro_sizes:
+                            w = self.macro_sizes[current_comp_model][0] * self.dbu
+                            h = self.macro_sizes[current_comp_model][1] * self.dbu
+                            is_macro = True
+                            
+                        # Only add to map if placed, OR if it's a macro (we want unplaced macros for floorplanning)
+                        if is_placed or is_macro:
+                            self.comps_map[current_comp_name] = QRectF(x, y, w, h)
+                            
+                            model_lower = current_comp_model.lower()
+                            is_tap = "tap" in model_lower or "fill" in model_lower
+                            is_clock = "clk" in model_lower and not current_comp_name.startswith("_")
+                            
+                            if is_tap: self.comp_types[current_comp_name] = "TAP"
+                            elif is_clock: self.comp_types[current_comp_name] = "CLOCK"
+                            else: self.comp_types[current_comp_name] = "STD"
+                            
+                            self.comp_masters[current_comp_name] = current_comp_model
+                            self.module_map[current_comp_name] = "STD_LOGIC" 
+                            self.component_count += 1
+                        
+                        if ";" in line: current_comp_name = None
 
                 # --- PINS ---
                 elif current_section == "PINS":
@@ -777,6 +788,7 @@ class SiliconPeeker(QGraphicsView):
         self.first_load = True
         
         self.show_insts = True
+        self.show_macros = True
         self.show_pins = True
         self.show_nets = True 
         self.show_power = True
@@ -980,6 +992,11 @@ class SiliconPeeker(QGraphicsView):
                         ctype = self.def_data.comp_types.get(name, "STD")
                         item = QGraphicsRectItem(rect)
                         
+                        is_macro = (rect.width() / self.def_data.dbu > 50)
+                        
+                        if is_macro and not self.show_macros: continue
+                        if not is_macro and not self.show_insts: continue
+
                         if ctype == "TAP":
                             item.setPen(QPen(Qt.PenStyle.NoPen)) 
                             item.setBrush(QBrush(QColor("#000000"))) 
@@ -988,10 +1005,28 @@ class SiliconPeeker(QGraphicsView):
                             item.setPen(QPen(QColor("#800000"), 0)) 
                             item.setBrush(QBrush(QColor("#D00000"))) 
                             item.setZValue(15)
-                        elif rect.width() / self.def_data.dbu > 50:
+                        elif is_macro:
                             item.setPen(QPen(Qt.GlobalColor.black, 0))
                             item.setBrush(QBrush(QColor("#4CAF50")))
                             item.setZValue(12)
+                            self.scene.addItem(item)
+                            
+                            # Add text label for macro
+                            master = self.def_data.comp_masters.get(name, "")
+                            t = self.scene.addText(f"{name}\n({master})")
+                            t.setDefaultTextColor(QColor("black"))
+                            
+                            # Scale text proportionally to fit inside the macro
+                            br = t.boundingRect()
+                            scale_x = (rect.width() * 0.9) / br.width()
+                            scale_y = (rect.height() * 0.9) / br.height()
+                            scale = min(scale_x, scale_y)
+                            t.setTransform(QTransform().scale(scale, -scale))
+                            
+                            # Re-center it properly based on the scaled bounding rect
+                            t.setPos(rect.center().x() - (br.width()*scale)/2, rect.center().y() + (br.height()*scale)/2)
+                            t.setZValue(13)
+                            continue # skip the addItem below since we already added it
                         else:
                             item.setPen(QPen(QColor("#00509d"), 0)) 
                             item.setBrush(QBrush(QColor("#4cc9f0"))) 
@@ -2730,6 +2765,7 @@ class BackendWidget(QWidget):
         def_layout = QVBoxLayout(self.def_ctrl_widget); def_layout.setContentsMargins(0,0,0,0)
         
         self.chk_inst = QCheckBox("Cells"); self.chk_inst.setChecked(True)
+        self.chk_macros = QCheckBox("Macros"); self.chk_macros.setChecked(True)
         self.chk_pins = QCheckBox("Pins"); self.chk_pins.setChecked(True)
         self.chk_nets = QCheckBox("Nets"); self.chk_nets.setChecked(False)
         self.chk_power = QCheckBox("Power"); self.chk_power.setChecked(True)
@@ -2738,7 +2774,7 @@ class BackendWidget(QWidget):
         self.btn_heat.setStyleSheet("QPushButton:checked { background-color: #ffcccc; color: red; border: 1px solid red; }")
         
         def_layout.addWidget(QLabel("<b>DEF Layers</b>"))
-        def_layout.addWidget(self.chk_inst); def_layout.addWidget(self.chk_pins)
+        def_layout.addWidget(self.chk_inst); def_layout.addWidget(self.chk_macros); def_layout.addWidget(self.chk_pins)
         def_layout.addWidget(self.chk_nets); def_layout.addWidget(self.chk_power)
         def_layout.addSpacing(10); def_layout.addWidget(QLabel("<b>Overlay</b>"))
         def_layout.addWidget(self.btn_heat); def_layout.addStretch()
@@ -2826,6 +2862,7 @@ class BackendWidget(QWidget):
 
         # --- 3. CONNECTIONS ---
         self.chk_inst.toggled.connect(self.update_view)
+        self.chk_macros.toggled.connect(self.update_view)
         self.chk_pins.toggled.connect(self.update_view)
         self.chk_nets.toggled.connect(self.update_view)
         self.chk_power.toggled.connect(self.update_view)
@@ -3154,6 +3191,7 @@ class BackendWidget(QWidget):
     def update_view(self):
         try:
             self.peeker.show_insts = self.chk_inst.isChecked(); self.peeker.show_pins = self.chk_pins.isChecked()
+            self.peeker.show_macros = self.chk_macros.isChecked()
             self.peeker.show_nets = self.chk_nets.isChecked(); self.peeker.show_power = self.chk_power.isChecked()
             if hasattr(self, 'btn_heat'): self.peeker.show_heatmap = self.btn_heat.isChecked()
             self.peeker.redraw()
@@ -3997,6 +4035,7 @@ class SilisProjectWizard(QWizard):
             macros_list = []
             for m_name, (stub_code, auto_gen) in p5.selected_macros.items():
                 macros_list.append(m_name)
+                
                 if auto_gen:
                     stub_file = os.path.join(loc, "source", f"{m_name}_stub.v")
                     with open(stub_file, 'w') as f:
@@ -4178,10 +4217,18 @@ class MacroItem(QGraphicsRectItem):
         self.setBrush(QBrush(QColor("#4CAF50")))
         self.setPen(QPen(Qt.GlobalColor.black))
         
-        self.text = QGraphicsTextItem(name, self)
+        self.text = QGraphicsTextItem(f"{self.inst_name}\n({name})", self)
         self.text.setDefaultTextColor(Qt.GlobalColor.white)
         self.text.setTransform(QTransform.fromScale(1, -1))
-        self.text.setPos(width/2 - self.text.boundingRect().width()/2, height/2 + self.text.boundingRect().height()/2)
+        # Center text
+        br = self.text.boundingRect()
+        self.text.setPos(width/2 - br.width()/2, height/2 + br.height()/2)
+
+    def set_inst_name(self, inst_name):
+        self.inst_name = inst_name
+        self.text.setPlainText(f"{self.inst_name}\n({self.name})")
+        br = self.text.boundingRect()
+        self.text.setPos(self.w/2 - br.width()/2, self.h/2 + br.height()/2)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
@@ -4352,15 +4399,44 @@ class InteractiveFloorplannerWidget(QDialog):
         core_item.setZValue(-9)
         self.floorplan_initialized = True
         self.tabs.setEnabled(True)
+        
+        # [NEW] Auto-discover and populate macros from Verilog (via temp.def)
+        proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+        def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
+        
+        if os.path.exists(def_abs_path):
+            parser = DEFParser(def_abs_path, self.parent().ide)
+            for inst_name, rect in parser.comps_map.items():
+                if rect.width() / parser.dbu > 50: # It's a macro
+                    master_name = parser.comp_masters.get(inst_name, "")
+                    w = rect.width() / parser.dbu
+                    h = rect.height() / parser.dbu
+                    m_item = MacroItem(master_name, w, h, self.core_rect, self)
+                    m_item.set_inst_name(inst_name)
+                    # Use existing placement if any, otherwise center it
+                    x = rect.x() / parser.dbu
+                    y = rect.y() / parser.dbu
+                    if x == 0 and y == 0:
+                        x = self.core_rect.center().x()
+                        y = self.core_rect.center().y()
+                    m_item.setPos(x, y)
+                    self.scene.addItem(m_item)
+                    m_item.setPos(m_item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, m_item.pos()))
+        
         self.view.fitInView(self.die_rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def on_macro_dropped(self, name, pos):
         if not self.floorplan_initialized: return
+        
+        # Count existing macros of this type to generate a unique instance name
+        count = 0
         for item in self.scene.items():
             if isinstance(item, MacroItem) and item.name == name:
-                return
+                count += 1
+                
         w, h = self.macro_sizes.get(name, (100.0, 100.0))
         m_item = MacroItem(name, w, h, self.core_rect, self)
+        m_item.set_inst_name(f"{name}_inst_{count}")
         m_item.setPos(pos.x(), pos.y())
         self.scene.addItem(m_item)
         m_item.setPos(m_item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, m_item.pos()))
@@ -4373,7 +4449,7 @@ class InteractiveFloorplannerWidget(QDialog):
     def on_inst_name_changed(self):
         items = self.scene.selectedItems()
         if items and isinstance(items[0], MacroItem):
-            items[0].inst_name = self.txt_inst_name.text()
+            items[0].set_inst_name(self.txt_inst_name.text())
 
     def on_spinbox_changed(self):
         items = self.scene.selectedItems()
@@ -4404,9 +4480,16 @@ class InteractiveFloorplannerWidget(QDialog):
         core_x1 = self.core_rect.x(); core_y1 = self.core_rect.y()
         core_x2 = core_x1 + self.core_rect.width(); core_y2 = core_y1 + self.core_rect.height()
         tcl = f"initialize_floorplan -die_area \"0 0 {die_w} {die_h}\" -core_area \"{core_x1} {core_y1} {core_x2} {core_y2}\" -site unithd\n"
+        tcl += "set block [::ord::get_db_block]\n"
+        tcl += "set dbu [[$block getTech] getDbUnitsPerMicron]\n"
         for item in self.scene.items():
             if isinstance(item, MacroItem):
-                tcl += f"place_inst -name {item.inst_name} -origin {{{item.pos().x()} {item.pos().y()}}} -orientation R0 -status FIRM\n"
+                tcl += f"set inst [$block findInst {{{item.inst_name}}}]\n"
+                tcl += f"if {{$inst != \"\"}} {{\n"
+                tcl += f"    $inst setPlacementStatus FIRM\n"
+                tcl += f"    $inst setOrient R0\n"
+                tcl += f"    $inst setLocation [expr int(round({item.pos().x()} * $dbu))] [expr int(round({item.pos().y()} * $dbu))]\n"
+                tcl += f"}}\n"
         
         proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
         def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
