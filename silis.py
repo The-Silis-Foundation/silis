@@ -3474,14 +3474,69 @@ class Page5SiliconTarget(QWizardPage):
             self.pdk_combo.addItems([cfg['name'] for cfg in self.pdk_mgr.configs])
         else:
             self.pdk_combo.addItems(["sky130_fd_sc_hd"])
+        
+        pdk_layout = QHBoxLayout()
+        pdk_layout.addWidget(self.pdk_combo)
+        btn_add = QPushButton("Add Custom PDK...")
+        btn_add.clicked.connect(self.add_custom_pdk)
+        pdk_layout.addWidget(btn_add)
+        
         layout.addWidget(QLabel("Active PDK:"))
-        layout.addWidget(self.pdk_combo)
+        layout.addLayout(pdk_layout)
 
         layout.addWidget(QLabel("Macro IP (Select blocks for this project):"))
         self.macro_list = QListWidget()
         self.macro_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self.macro_list.addItems(["SRAM_1Kx32", "SRAM_2Kx32"]) 
         layout.addWidget(self.macro_list)
+        
+        self.pdk_combo.currentIndexChanged.connect(self.discover_macros)
+        self.discover_macros()
+
+    def add_custom_pdk(self):
+        dlg = PDKSelector(self.pdk_mgr, self)
+        dlg.exec()
+        self.pdk_mgr = PDKManager()
+        self.pdk_combo.blockSignals(True)
+        self.pdk_combo.clear()
+        if self.pdk_mgr.configs:
+            self.pdk_combo.addItems([cfg['name'] for cfg in self.pdk_mgr.configs])
+        else:
+            self.pdk_combo.addItems(["sky130_fd_sc_hd"])
+        self.pdk_combo.blockSignals(False)
+        self.discover_macros()
+
+    def discover_macros(self):
+        self.macro_list.clear()
+        sel_name = self.pdk_combo.currentText()
+        cfg = next((c for c in self.pdk_mgr.configs if c['name'] == sel_name), None)
+        if not cfg: return
+        lib_path = cfg.get('lib', '')
+        if "libs.ref" not in lib_path: return
+        
+        try:
+            volare_base = lib_path.split("libs.ref")[0]
+            stdcell_name = lib_path.split("libs.ref/")[1].split("/")[0]
+            
+            # Auto-link missing tech files for this PDK config if they are missing
+            needs_save = False
+            if not cfg.get('tlef'):
+                tlefs = glob.glob(os.path.join(volare_base, "libs.ref", stdcell_name, "techlef", "*__nom.tlef"))
+                if tlefs: cfg['tlef'] = tlefs[0]; needs_save = True
+            if not cfg.get('gds'):
+                gdss = glob.glob(os.path.join(volare_base, "libs.ref", stdcell_name, "gds", "*.gds"))
+                if gdss: cfg['gds'] = gdss[0]; needs_save = True
+            if not cfg.get('tech'):
+                techs = glob.glob(os.path.join(volare_base, "libs.tech", "magic", "*.tech"))
+                if techs: cfg['tech'] = techs[0]; needs_save = True
+            if needs_save: self.pdk_mgr.update_config(cfg)
+
+            # Discover macros
+            search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
+            for lef in glob.glob(search_path):
+                if stdcell_name not in lef:
+                    self.macro_list.addItem(os.path.basename(lef).replace('.lef', ''))
+        except Exception as e:
+            pass
 
     def get_pdk(self):
         return self.pdk_combo.currentText()
