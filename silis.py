@@ -633,11 +633,11 @@ class DEFParser:
                         if len(parts) >= 3:
                             current_comp_name = parts[1]
                             current_comp_model = parts[2]
+                            is_placed = False
+                            is_macro = False
+                            x, y = 0, 0
                     
                     if current_comp_name:
-                        x, y = 0, 0
-                        is_placed = False
-                        
                         if "PLACED" in line or "FIXED" in line or "COVER" in line:
                             coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
                             if coord_match:
@@ -646,7 +646,6 @@ class DEFParser:
                                 is_placed = True
                         
                         w, h = std_w, std_h
-                        is_macro = False
                         if current_comp_model in self.macro_sizes:
                             w = self.macro_sizes[current_comp_model][0] * self.dbu
                             h = self.macro_sizes[current_comp_model][1] * self.dbu
@@ -3016,10 +3015,11 @@ class BackendWidget(QWidget):
                 if reply == QMessageBox.StandardButton.Yes: self.load_checkpoint(); return
             if not self.active_pdk: 
                  if not self.open_pdk_selector(): return
-            tcl_path = os.path.join(proj_root, "init_pdk.tcl")
+            tcl_path = os.path.join(proj_root, "init_pdk.tcl").replace("\\", "/")
             ctx = self.ide.get_context()[0] or "top"
-            netlist_path = os.path.join(proj_root, "netlist", f"{ctx}_netlist.v")
-            if not os.path.exists(netlist_path): netlist_path = self.ide.current_file or "design.v"
+            base = self.ide.get_context()[1] or "top"
+            netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v").replace("\\", "/")
+            if not os.path.exists(netlist_path): netlist_path = (self.ide.current_file or "design.v").replace("\\", "/")
             sdc_files = glob.glob(os.path.join(proj_root, "source", "*.sdc"))
             if sdc_files:
                 sdc_path = sdc_files[0]
@@ -3041,7 +3041,7 @@ class BackendWidget(QWidget):
                     if name in macros:
                         tcl_content += f"""read_lef "{lef}"\n"""
                         
-            tcl_content += f"""read_liberty "{self.active_pdk['lib']}"\n"""
+            tcl_content += f"""read_liberty "{self.active_pdk['lib']}\"\n"""
             if macros:
                 for lib in glob.glob(lib_search):
                     name = os.path.basename(lib).replace('.lib', '')
@@ -3049,7 +3049,24 @@ class BackendWidget(QWidget):
                     if any(m in name for m in macros):
                         tcl_content += f"""read_liberty "{lib}"\n"""
                         
-            tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}" """
+            tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}"\n"""
+            tcl_content += f"""
+set macros_json "\\{{\\n  \\"macros\\": \\{{\\n"
+set first 1
+foreach inst [[::ord::get_db_block] getInsts] {{
+    if {{ [[$inst getMaster] isBlock] }} {{
+        if {{ !$first }} {{ append macros_json ",\\n" }}
+        append macros_json "    \\"[$inst getName]\\": \\"[[$inst getMaster] getName]\\""
+        set first 0
+    }}
+}}
+append macros_json "\\n  \\}}\\n\\}}"
+set reports_dir "{os.path.join(proj_root, 'reports').replace(chr(92), '/')}"
+file mkdir $reports_dir
+set fp [open "$reports_dir/{base}_sizes.json" w]
+puts $fp $macros_json
+close $fp
+"""
             try:
                 with open(tcl_path, 'w') as f: f.write(tcl_content)
                 self.pending_init = f"source {tcl_path}"
@@ -4437,10 +4454,14 @@ class InteractiveFloorplannerWidget(QDialog):
         self.floorplan_initialized = True
         self.tabs.setEnabled(True)
         
-        # [NEW] Auto-discover and populate macros from Verilog (via temp.def)
+        # Auto-discover and populate macros
         proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+        base = self.parent().ide.get_context()[1]
         def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
         
+        macros_spawned = set()
+        
+        # 1. Try to load from temp.def
         if os.path.exists(def_abs_path):
             parser = DEFParser(def_abs_path, self.parent().ide)
             for inst_name, rect in parser.comps_map.items():
@@ -4450,12 +4471,30 @@ class InteractiveFloorplannerWidget(QDialog):
                     h = rect.height() / parser.dbu
                     m_item = MacroItem(master_name, w, h, self.core_rect, self)
                     m_item.set_inst_name(inst_name)
-                    # Use existing placement if any, otherwise center it
+                    
                     x = rect.x() / parser.dbu
                     y = rect.y() / parser.dbu
+                    
                     if x == 0 and y == 0:
                         x = self.core_rect.center().x()
                         y = self.core_rect.center().y()
+                        
+                    def clamp(cx, cy):
+                        max_x = self.core_rect.width() - w
+                        max_y = self.core_rect.height() - h
+                        if cx < self.core_rect.x(): cx = self.core_rect.x()
+                        if cy < self.core_rect.y(): cy = self.core_rect.y()
+                        if cx > self.core_rect.x() + max_x: cx = self.core_rect.x() + max_x
+                        if cy > self.core_rect.y() + max_y: cy = self.core_rect.y() + max_y
+                        return cx, cy
+
+                    x, y = clamp(x, y)
+                    # Cascade if another macro is already at this exact position
+                    while any(isinstance(i, MacroItem) and abs(i.pos().x() - x) < 1 and abs(i.pos().y() - y) < 1 for i in self.scene.items()):
+                        x += 50
+                        y += 50
+                        x, y = clamp(x, y)
+                        
                     m_item.setPos(x, y)
                     self.scene.addItem(m_item)
                     m_item.setPos(m_item.itemChange(QGraphicsItem.GraphicsItemChange.ItemPositionChange, m_item.pos()))
