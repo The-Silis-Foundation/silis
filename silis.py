@@ -3056,7 +3056,9 @@ set first 1
 foreach inst [[::ord::get_db_block] getInsts] {{
     if {{ [[$inst getMaster] isBlock] }} {{
         if {{ !$first }} {{ append macros_json ",\\n" }}
-        append macros_json "    \\"[$inst getName]\\": \\"[[$inst getMaster] getName]\\""
+        set inst_name [$inst getName]
+        set inst_name [string map [list \\\\ \\\\\\\\ \\" \\\\"] $inst_name]
+        append macros_json "    \\"$inst_name\\": \\"[[$inst getMaster] getName]\\""
         set first 0
     }}
 }}
@@ -4563,17 +4565,12 @@ class InteractiveFloorplannerWidget(QDialog):
         core_x1 = self.core_rect.x(); core_y1 = self.core_rect.y()
         core_x2 = core_x1 + self.core_rect.width(); core_y2 = core_y1 + self.core_rect.height()
         tcl = f"initialize_floorplan -die_area \"0 0 {die_w} {die_h}\" -core_area \"{core_x1} {core_y1} {core_x2} {core_y2}\" -site unithd\n"
-        tcl += "set block [::ord::get_db_block]\n"
-        tcl += "set dbu [[$block getTech] getDbUnitsPerMicron]\n"
         for item in self.scene.items():
             if isinstance(item, MacroItem):
-                tcl += f"set inst [$block findInst {{{item.inst_name}}}]\n"
-                tcl += f"if {{$inst != \"NULL\" && $inst != \"\"}} {{\n"
-                tcl += f"    $inst setPlacementStatus NONE\n"
-                tcl += f"    $inst setLocation [expr int(round({item.pos().x()} * $dbu))] [expr int(round({item.pos().y()} * $dbu))]\n"
-                tcl += f"    $inst setOrient R0\n"
-                tcl += f"    $inst setPlacementStatus FIRM\n"
-                tcl += f"    catch {{set_placement_padding -instances {{{item.inst_name}}} -left 10 -right 10}}\n"
+                tcl += f"catch {{\n"
+                tcl += f"    place_inst -name {{{item.inst_name}}} -origin {{{item.pos().x()} {item.pos().y()}}} -status FIRM -orientation R0\n"
+                tcl += f"    add_macro_placement_blockage -halo {{10.0 10.0}}\n"
+                tcl += f"    set_placement_padding -instances {{{item.inst_name}}} -left 10 -top 10 -right 10 -bottom 10\n"
                 tcl += f"}}\n"
         
         proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
