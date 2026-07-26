@@ -1,142 +1,206 @@
 import os
-import subprocess
-import shutil
 from PyQt6.QtWidgets import *
 from PyQt6.QtSvgWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
+from schematicviewer.blockdiagram import parse_and_draw_json, SchematicBlock
 
 class SilisSchematic(QGraphicsView):
+    module_clicked = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         
-        # High Quality Rendering Attributes
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         
-        # Navigation
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         
-        # Clean UI
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-    def load_schematic(self, path):
+    def load_svg(self, path):
         self.scene.clear()
-        if os.path.exists(path) and path.endswith(".svg"):
-            # Render SVG
-            item = QGraphicsSvgItem(path)
-            self.scene.addItem(item)
-            # Auto-Fit to screen on load
-            self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if not (os.path.exists(path) and path.endswith(".svg")): return
+        item = QGraphicsSvgItem(path)
+        self.scene.addItem(item)
+        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def load_json(self, path, module, mode):
+        self.scene.clear()
+        if not (os.path.exists(path) and path.endswith(".json")): return
+        parse_and_draw_json(self.scene, path, module, mode)
+        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.pos())
+        if isinstance(item, SchematicBlock):
+            module = item.data(0)
+            if module and module != "BOUNDARY":
+                self.module_clicked.emit(module)
+                return
+        super().mousePressEvent(event)
 
     def wheelEvent(self, event):
-        # Smooth Zoom
         factor = 1.15 if event.angleDelta().y() > 0 else 0.85
         self.scale(factor, factor)
 
     def keyPressEvent(self, event):
-        key = event.key()
-        if key == Qt.Key.Key_0 or key == Qt.Key.Key_F:
-            # 'F' or '0' to Reset View
+        if event.key() == Qt.Key.Key_0 or event.key() == Qt.Key.Key_F:
             self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
         else:
             super().keyPressEvent(event)
-            
-    def contextMenuEvent(self, event):
-        # Right Click Menu
-        menu = QMenu(self)
-        reset_act = QAction("Fit to View", self)
-        reset_act.triggered.connect(lambda: self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio))
-        menu.addAction(reset_act)
-        menu.exec(event.globalPos())
 
 class SchematicTab(QWidget):
     def __init__(self, ide):
         super().__init__()
-        self.ide = ide; lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0)
+        self.ide = ide
+        self.worker = None
+        self.history_stack = []
+        self.current_idx = -1
+        
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0,0,0,0)
+        
         tb = QHBoxLayout()
-        self.btn_gen = QPushButton("Generate Logic View"); self.btn_gen.clicked.connect(self.ide.generate_schematic)
-        btn_fit = QPushButton("Fit"); btn_fit.clicked.connect(lambda: self.view.fitInView(self.view.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio))
-        tb.addWidget(self.btn_gen); tb.addWidget(btn_fit); tb.addStretch()
-        self.view = SilisSchematic(); lay.addLayout(tb); lay.addWidget(self.view)
+        self.btn_back = QPushButton("< Back")
+        self.btn_forward = QPushButton("Forward >")
+        self.btn_mode = QPushButton("View: Block")
+        self.btn_home = QPushButton("Top Level")
+        self.btn_fit = QPushButton("Fit")
+        
+        self.btn_back.clicked.connect(self.go_back)
+        self.btn_forward.clicked.connect(self.go_forward)
+        self.btn_mode.clicked.connect(self.toggle_mode)
+        self.btn_home.clicked.connect(self.go_home)
+        self.btn_fit.clicked.connect(lambda: self.view.fitInView(self.view.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio))
+        
+        tb.addWidget(self.btn_back)
+        tb.addWidget(self.btn_forward)
+        tb.addWidget(self.btn_mode)
+        tb.addWidget(self.btn_home)
+        tb.addWidget(self.btn_fit)
+        tb.addStretch()
+        
+        self.view = SilisSchematic()
+        self.view.module_clicked.connect(self.on_module_clicked)
+        
+        lay.addLayout(tb)
+        lay.addWidget(self.view)
+        self.update_ui_state()
 
+    def update_ui_state(self):
+        self.btn_back.setEnabled(self.current_idx > 0)
+        self.btn_forward.setEnabled(self.current_idx < len(self.history_stack) - 1)
+        if 0 <= self.current_idx < len(self.history_stack):
+            mode = self.history_stack[self.current_idx]["mode"]
+            self.btn_mode.setText("View: Gate-Level" if mode == "gate" else "View: Block")
 
-class SchematicWorker(QThread):
-    finished = pyqtSignal(str); log = pyqtSignal(str, str)
-    
-    def __init__(self, root, base, engine, src_files):
-        super().__init__()
-        self.root = root
-        self.base = base
-        self.src_files = src_files
+    def go_home(self):
+        self.history_stack.clear()
+        self.current_idx = -1
+        _, base = self.ide.get_context()
+        if base:
+            self.on_module_clicked(base, force_mode="top")
+        else:
+            self.ide.log_system("No Top Module found", "ERR")
 
-    def run(self):
-        # 1. Check for Graphviz (The Painter)
-        if not shutil.which("dot"):
-            self.log.emit("Graphviz ('dot') not found!", "ERR")
-            self.log.emit("Run: sudo apt install graphviz", "TIP")
+    def go_back(self):
+        if self.current_idx > 0:
+            self.current_idx -= 1
+            self.load_from_history()
+
+    def go_forward(self):
+        if self.current_idx < len(self.history_stack) - 1:
+            self.current_idx += 1
+            self.load_from_history()
+            
+    def load_from_history(self):
+        entry = self.history_stack[self.current_idx]
+        self.update_ui_state()
+        self.load_from_path(entry["out_path"], entry["module"], entry["mode"])
+
+    def load_from_path(self, path, module, mode):
+        if not os.path.exists(path):
+            self.invoke_engine(module, mode)
             return
+        if path.endswith(".svg"):
+            self.view.load_svg(path)
+        elif path.endswith(".json"):
+            self.view.load_json(path, module, mode)
 
-        # Prepare paths
-        read_cmd = "".join([f"read_verilog {s}; " for s in self.src_files])
-        dot_base = os.path.join(self.root, self.base) # Yosys adds .dot automatically
-        dot_file = dot_base + ".dot"
-        svg_file = dot_base + ".svg"
-        
-        if os.path.exists(dot_file): os.remove(dot_file)
+    def toggle_mode(self):
+        if 0 <= self.current_idx < len(self.history_stack):
+            entry = self.history_stack[self.current_idx]
+            new_mode = "gate" if entry["mode"] in ["top", "block"] else "block"
+            self.history_stack = self.history_stack[:self.current_idx]
+            self.current_idx -= 1
+            self.on_module_clicked(entry["module"], force_mode=new_mode)
 
-        # === STRATEGY 1: High-Level RTL (Best for reading) ===
-        # 'proc' converts processes to logic. 'memory' handles arrays.
-        # We explicitly use -prefix to control the output filename.
-        cmd_rtl = f"yosys -p '{read_cmd} hierarchy -check -top {self.base}; proc; opt; show -colors 2 -width -stretch -format dot -prefix {dot_base}'"
-        
-        # === STRATEGY 2: Structural (Fallback if logic is too complex) ===
-        # No optimization, just raw connectivity.
-        cmd_raw = f"yosys -p '{read_cmd} hierarchy -auto-top; proc; show -colors 2 -width -stretch -format dot -prefix {dot_base}'"
-
-        try:
-            self.log.emit("Generating logic graph...", "SYS")
-            
-            # Try elegant RTL view first
-            res = subprocess.run(cmd_rtl, shell=True, cwd=self.root, capture_output=True, text=True)
-            
-            # If RTL view failed (or produced empty dot), try raw view
-            if not os.path.exists(dot_file):
-                self.log.emit("Complex render failed. Trying structural view...", "WARN")
-                subprocess.run(cmd_raw, shell=True, cwd=self.root, capture_output=True, text=True)
-
-            # 3. Convert DOT to SVG (The Visualizer)
-            if os.path.exists(dot_file):
-                self.log.emit("Rendering SVG...", "SYS")
-                # -Grankdir=LR makes it flow Left-to-Right (Standard Schematic style)
-                subprocess.run(f"dot -Tsvg {dot_file} -o {svg_file} -Grankdir=LR", shell=True, cwd=self.root)
-                
-                if os.path.exists(svg_file):
-                    self.finished.emit(svg_file)
-                    self.log.emit("Schematic Ready.", "SYS")
+    def on_module_clicked(self, module_name, force_mode=None):
+        if force_mode:
+            mode = force_mode
+        else:
+            if 0 <= self.current_idx < len(self.history_stack):
+                curr_mode = self.history_stack[self.current_idx]["mode"]
+                if curr_mode == "top":
+                    mode = "block"
+                elif curr_mode == "block":
+                    mode = "gate"
                 else:
-                    self.log.emit("Graphviz failed to convert DOT to SVG.", "ERR")
+                    mode = "block"
             else:
-                self.log.emit("Yosys failed to generate graph. Check syntax.", "ERR")
-                self.log.emit(f"Yosys Stderr: {res.stderr[:200]}...", "DBG")
+                mode = "block"
+                
+        self.history_stack = self.history_stack[:self.current_idx + 1]
+        self.invoke_engine(module_name, mode)
+        
+    def invoke_engine(self, module_name, mode):
+        from schematicviewer.dotschemmaker import YosysStructuralWorker
+        import glob
+        
+        proj_root, base = self.ide.get_context()
+        if not proj_root: return
+        
+        root = self.ide.prep_workspace(base) if base else proj_root
+        
+        all_src = glob.glob(os.path.join(root, "source", "*.v")) + glob.glob(os.path.join(root, "source", "*.sv"))
+        src = [f for f in all_src if not any(x in os.path.basename(f).lower() for x in ["tb_", "_tb", "test_"])]
+        
+        if not src:
+            self.ide.log_system("No synthesis sources found.", "ERR")
+            return
+            
+        pdk_lib = None
+        if mode == "gate" and hasattr(self.ide, 'active_pdk') and self.ide.active_pdk:
+            pdk_lib = self.ide.active_pdk.get("lib")
+                
+        self.ide.schem_running = True
+        self.btn_home.setEnabled(False)
+        self.btn_home.setText("Crunching...")
+        
+        self.worker = YosysStructuralWorker(root, src, module_name, mode, pdk_lib)
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.log.connect(self.ide.log_system)
+        self.worker.start()
 
-        except Exception as e:
-            self.log.emit(f"Schematic Engine Crash: {e}", "ERR")
+    def on_worker_finished(self, out_path, module, mode):
+        self.ide.schem_running = False
+        self.btn_home.setEnabled(True)
+        self.btn_home.setText("Top Level")
+        
+        self.history_stack.append({"module": module, "mode": mode, "out_path": out_path})
+        self.current_idx = len(self.history_stack) - 1
+        self.update_ui_state()
+        self.load_from_path(out_path, module, mode)
 
-
-
-
-
-if __name__ == "__main__":
-    QImageReader.setAllocationLimit(0)
-    app = QApplication(sys.argv)
-    w = SilisIDE()
-    w.show()
-    sys.exit(app.exec())
+    def invalidate_cache(self):
+        self.history_stack.clear()
+        self.current_idx = -1
+        self.view.scene.clear()
 

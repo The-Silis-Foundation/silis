@@ -3,17 +3,10 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-def clean_cell_name(name, c_type):
+def clean_instance_name(name):
     if "/" in name or "\\" in name:
         parts = name.replace("\\", "/").split("/")
-        last_part = parts[-1]
-        if "$" in last_part:
-            last_part = last_part.split("$")[0]
-        op = name.split("$")[1] if name.startswith("$") and len(name.split("$")) > 1 else c_type
-        return f"{op} ({last_part})"
-    if name.startswith("$"):
-        parts = [p for p in name.split("$") if p]
-        return parts[0] if parts else name
+        return parts[-1]
     return name
 
 class SchematicPort(QGraphicsRectItem):
@@ -48,19 +41,21 @@ class SchematicBlock(QGraphicsRectItem):
         self.raw_name = name
         self.type_name = type_name
         self.is_top = is_top
-        self.clean_name = clean_cell_name(name, type_name)
+        self.short_id = clean_instance_name(name)
         
         self.setBrush(QColor("#282c34"))
         self.setPen(QPen(QColor("#61afef") if is_top else QColor("#98c379"), 2))
-        
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setData(0, type_name if type_name != "unknown" else self.clean_name) 
+        self.setData(0, type_name if type_name != "unknown" else self.short_id) 
         
-        title_text = f"{self.clean_name}\n({type_name})" if self.clean_name != type_name and not is_top else self.clean_name
+        if self.short_id != type_name and not is_top:
+            title_text = f"ID: {self.short_id}\nType: {type_name}"
+        else:
+            title_text = self.short_id
+            
         self.title = QGraphicsTextItem(title_text, self)
-        self.title.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        self.title.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
         self.title.setDefaultTextColor(QColor("#e5c07b"))
-        
         self.ports = {} 
         
     def add_port(self, name, direction, is_left):
@@ -70,7 +65,6 @@ class SchematicBlock(QGraphicsRectItem):
     def layout_ports(self):
         left_ports = [p for p in self.ports.values() if p.is_left]
         right_ports = [p for p in self.ports.values() if not p.is_left]
-        
         max_ports = max(len(left_ports), len(right_ports))
         height = max(60, max_ports * 20 + 40)
         width = max(160, self.title.boundingRect().width() + 40)
@@ -82,23 +76,10 @@ class SchematicBlock(QGraphicsRectItem):
         for p in left_ports:
             p.setPos(-5, ly)
             ly += 20
-            
         ry = 35
         for p in right_ports:
             p.setPos(width - 5, ry)
             ry += 20
-
-def path_collides_with_blocks(src, sink, mid_x, blocks):
-    r1 = QRectF(src, QPointF(mid_x, src.y())).normalized().adjusted(-10, -10, 10, 10)
-    r2 = QRectF(QPointF(mid_x, src.y()), QPointF(mid_x, sink.y())).normalized().adjusted(-10, -10, 10, 10)
-    r3 = QRectF(QPointF(mid_x, sink.y()), sink).normalized().adjusted(-10, -10, 10, 10)
-    
-    for b in blocks:
-        brect = b.sceneBoundingRect().adjusted(-5, -5, 5, 5)
-        if brect.intersects(r1) or brect.intersects(r2) or brect.intersects(r3):
-            if not brect.contains(src) and not brect.contains(sink):
-                return True
-    return False
 
 def parse_and_draw_json(scene, json_path, target_module, mode):
     scene.clear()
@@ -107,9 +88,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             data = json.load(f)
             
         modules = data.get("modules", {})
-        if target_module not in modules:
-            return
-            
+        if target_module not in modules: return
         mod = modules[target_module]
         
         if mode == "top":
@@ -150,7 +129,6 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                 blocks.append(block)
                 scene.addItem(block)
             
-            # 2. Multi-Row Grid Layout (Stops horizontal explosion and squarifies diagram)
             in_boundary.setPos(0, 0)
             
             num_blocks = len(blocks)
@@ -160,22 +138,19 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             max_w_in_col = 0
             
             for i, b in enumerate(blocks):
-                y_pos = (row_idx - (max_rows // 2)) * 240
+                y_pos = (row_idx - (max_rows // 2)) * 260
                 b.setPos(col_x, y_pos)
                 max_w_in_col = max(max_w_in_col, b.boundingRect().width())
                 
                 row_idx += 1
                 if row_idx >= max_rows:
                     row_idx = 0
-                    col_x += max_w_in_col + 180
+                    col_x += max_w_in_col + 200
                     max_w_in_col = 0
                     
-            if row_idx != 0:
-                col_x += max_w_in_col + 180
-                
-            out_boundary.setPos(col_x + 50, 0)
+            if row_idx != 0: col_x += max_w_in_col + 200
+            out_boundary.setPos(col_x + 100, 0)
             
-            # 3. Routing (Net mapping with collision avoidance)
             all_blocks = [in_boundary, out_boundary] + blocks
             bit_sources = {} 
             bit_sinks = {}   
@@ -185,8 +160,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                 bits = p_data.get("bits", [])
                 for b in bits:
                     if type(b) is int:
-                        if dir == "input":
-                            bit_sources[b] = in_boundary.ports[p_name].get_anchor()
+                        if dir == "input": bit_sources[b] = in_boundary.ports[p_name].get_anchor()
                         else:
                             if b not in bit_sinks: bit_sinks[b] = []
                             bit_sinks[b].append(out_boundary.ports[p_name].get_anchor())
@@ -201,56 +175,84 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                         anchor = b.ports[p_name].get_anchor()
                         for bit in bits:
                             if type(bit) is int:
-                                if dir == "output":
-                                    bit_sources[bit] = anchor
+                                if dir == "output": bit_sources[bit] = anchor
                                 else:
                                     if bit not in bit_sinks: bit_sinks[bit] = []
                                     bit_sinks[bit].append(anchor)
             
-            # Draw wires & highlight junctions
+            # Precompute safe highway boundaries for collision avoidance
+            min_y = min([b.sceneBoundingRect().top() for b in all_blocks])
+            max_y = max([b.sceneBoundingRect().bottom() for b in all_blocks])
+            
             net_idx = 0
             for bit, src in bit_sources.items():
                 sinks = bit_sinks.get(bit, [])
                 net_idx += 1
                 
-                # Solder dot on source pin
-                src_dot = QGraphicsEllipseItem(src.x() - 3, src.y() - 3, 6, 6)
+                src_dot = QGraphicsEllipseItem(src.x() - 4, src.y() - 4, 8, 8)
                 src_dot.setBrush(QColor("#98c379")) 
                 src_dot.setPen(QPen(Qt.PenStyle.NoPen))
-                src_dot.setZValue(2)
+                src_dot.setZValue(5)
                 scene.addItem(src_dot)
                 
-                # Highlight junctions if fanout > 1 (Solder Dots)
+                # Trunk routing for fanout > 1
+                trunk_x = src.x() + 20 + (net_idx % 12) * 8
+                
                 if len(sinks) > 1:
-                    j_dot = QGraphicsEllipseItem(src.x() - 5, src.y() - 5, 10, 10)
+                    j_dot = QGraphicsEllipseItem(trunk_x - 5, src.y() - 5, 10, 10)
                     j_dot.setBrush(QColor("#e5c07b")) 
                     j_dot.setPen(QPen(QColor("#ffffff"), 1.5))
-                    j_dot.setZValue(3)
+                    j_dot.setZValue(10)
                     scene.addItem(j_dot)
+                    
+                    trunk_path = QPainterPath(src)
+                    trunk_path.lineTo(trunk_x, src.y())
+                    line = QGraphicsPathItem(trunk_path)
+                    line.setPen(QPen(QColor("#d19a66"), 2))
+                    line.setZValue(-1) 
+                    scene.addItem(line)
 
-                for sink in sinks:
-                    sink_dot = QGraphicsEllipseItem(sink.x() - 3, sink.y() - 3, 6, 6)
+                for sink_idx, sink in enumerate(sinks):
+                    sink_dot = QGraphicsEllipseItem(sink.x() - 4, sink.y() - 4, 8, 8)
                     sink_dot.setBrush(QColor("#98c379"))
                     sink_dot.setPen(QPen(Qt.PenStyle.NoPen))
-                    sink_dot.setZValue(2)
+                    sink_dot.setZValue(5)
                     scene.addItem(sink_dot)
                     
-                    path = QPainterPath(src)
-                    mid_x = (src.x() + sink.x()) / 2
+                    start_pt = QPointF(trunk_x, src.y()) if len(sinks) > 1 else src
+                    path = QPainterPath(start_pt)
                     
-                    # If direct path overlaps a block, use an overhead/underground highway
-                    if path_collides_with_blocks(src, sink, mid_x, all_blocks):
-                        highway_y = -350 - (net_idx % 8) * 15 if (net_idx % 2 == 0) else 350 + (net_idx % 8) * 15
-                        path.lineTo(src.x() + 20, src.y())
-                        path.lineTo(src.x() + 20, highway_y)
-                        path.lineTo(sink.x() - 20, highway_y)
-                        path.lineTo(sink.x() - 20, sink.y())
+                    # Vertical track for this specific sink branch
+                    vertical_track_x = ((start_pt.x() + sink.x()) / 2) + ((net_idx % 8) - 4) * 12 + (sink_idx * 6)
+                    
+                    def collides(r_x1, r_y1, r_x2, r_y2):
+                        r = QRectF(QPointF(r_x1, r_y1), QPointF(r_x2, r_y2)).normalized().adjusted(-15, -15, 15, 15)
+                        for b in all_blocks:
+                            brect = b.sceneBoundingRect()
+                            if brect.intersects(r):
+                                if not brect.contains(src) and not brect.contains(sink):
+                                    return True
+                        return False
+
+                    if not collides(start_pt.x(), start_pt.y(), vertical_track_x, start_pt.y()) and \
+                       not collides(vertical_track_x, start_pt.y(), vertical_track_x, sink.y()) and \
+                       not collides(vertical_track_x, sink.y(), sink.x(), sink.y()):
+                        
+                        path.lineTo(vertical_track_x, start_pt.y())
+                        path.lineTo(vertical_track_x, sink.y())
                         path.lineTo(sink)
                     else:
-                        path.lineTo(mid_x, src.y())
-                        path.lineTo(mid_x, sink.y())
+                        # Safe Highway Route above or below all blocks
+                        highway_y = min_y - 40 - (net_idx % 12) * 15 if (net_idx % 2 == 0) else max_y + 40 + (net_idx % 12) * 15
+                        acc_x1 = trunk_x + 10 + (sink_idx * 5) if len(sinks) > 1 else src.x() + 20 + (net_idx % 5) * 8
+                        acc_x2 = sink.x() - 20 - (sink_idx * 5)
+                        
+                        path.lineTo(acc_x1, start_pt.y())
+                        path.lineTo(acc_x1, highway_y)
+                        path.lineTo(acc_x2, highway_y)
+                        path.lineTo(acc_x2, sink.y())
                         path.lineTo(sink)
-                    
+                        
                     line = QGraphicsPathItem(path)
                     line.setPen(QPen(QColor("#d19a66"), 2))
                     line.setZValue(-1) 
