@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 # [SYS] Ensure PyQt6-QScintilla can find PyQt6-Qt6 libs
 qt6_lib_path = "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
@@ -62,10 +63,9 @@ THEMES = {
     }
 }
 
+THEMES["Custom"] = THEMES["Catppuccin Mocha"].copy()
 if USER_SETTINGS.get("custom_theme"):
-    THEMES["Custom"] = USER_SETTINGS["custom_theme"]
-else:
-    THEMES["Custom"] = THEMES["Catppuccin Mocha"].copy()
+    THEMES["Custom"].update(USER_SETTINGS["custom_theme"])
 
 class ScintillaEditor(QsciScintilla):
     def __init__(self, is_minimap=False, font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
@@ -111,13 +111,13 @@ class ScintillaEditor(QsciScintilla):
             self.setMarginWidth(0, "0000")
             self.setCaretWidth(2)
             self.setCaretLineVisible(True)
-            self.setCaretLineBackgroundColor(QColor("#282828"))
+            self.setCaretLineBackgroundColor(sel_bg)
             
             # Folding
             self.setFolding(QsciScintilla.FoldStyle.PlainFoldStyle)
             self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
             self.setMarginWidth(1, 12)
-            self.setFoldMarginColors(QColor("#1E1E1E"), QColor("#1E1E1E"))
+            self.setFoldMarginColors(margin_bg, margin_bg)
             
             # Auto-completion & Indentation
             self.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)
@@ -125,6 +125,12 @@ class ScintillaEditor(QsciScintilla):
             self.setAutoIndent(True)
             self.setIndentationsUseTabs(False)
             self.setTabWidth(4)
+            
+            # Zoom Shortcuts
+            from PyQt6.QtGui import QKeySequence, QShortcut
+            QShortcut(QKeySequence("Ctrl+="), self).activated.connect(self.zoomIn)
+            QShortcut(QKeySequence("Ctrl++"), self).activated.connect(self.zoomIn)
+            QShortcut(QKeySequence("Ctrl+-"), self).activated.connect(self.zoomOut)
 
     def set_lexer(self, ext):
         lexer = None
@@ -150,8 +156,13 @@ class ScintillaEditor(QsciScintilla):
                 lexer.setColor(QColor(self.theme["kw"]), QsciLexerVerilog.Keyword)
                 lexer.setFont(font_bold, QsciLexerVerilog.Keyword)
                 lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVerilog.KeywordSet2)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVerilog.DeclareInputPort)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVerilog.DeclareOutputPort)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVerilog.DeclareInputOutputPort)
                 lexer.setColor(QColor(self.theme["str"]), QsciLexerVerilog.String)
                 lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.Comment)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.CommentLine)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.CommentBang)
                 lexer.setColor(QColor(self.theme["num"]), QsciLexerVerilog.Number)
                 lexer.setColor(QColor(self.theme["ident"]), QsciLexerVerilog.Identifier)
             
@@ -206,28 +217,15 @@ class VSCodeEditor(QWidget):
         return self.editor.text()
 
 class VSCodeEditorTabs(QTabWidget):
-    font_family = "Consolas"
-    font_size = 11
-    theme_name = "VS Code Dark+"
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.font_family = USER_SETTINGS.get("font_family", "Consolas")
+        self.font_size = USER_SETTINGS.get("font_size", 11)
+        self.theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
         self.setTabsClosable(True)
         self.setDocumentMode(True)
-        self.setStyleSheet("""
-            QTabWidget::pane { border: 0; }
-            QTabBar::tab {
-                background: #2D2D2D;
-                color: #969696;
-                padding: 8px 16px;
-                border: none;
-                border-right: 1px solid #1E1E1E;
-            }
-            QTabBar::tab:selected {
-                background: #1E1E1E;
-                color: #FFFFFF;
-                border-top: 1px solid #007ACC;
-            }
-        """)
+        self.update_stylesheet()
+
         self.tabCloseRequested.connect(self.close_tab)
         self.files = {} # path -> VSCodeEditor
 
@@ -251,6 +249,7 @@ class VSCodeEditorTabs(QTabWidget):
         self.font_family = font_family
         self.font_size = font_size
         self.theme_name = theme_name
+        self.update_stylesheet()
         
         # Update existing tabs (by re-initializing them or just updating the active one)
         # For simplicity, we just reload all open files.
@@ -262,6 +261,24 @@ class VSCodeEditorTabs(QTabWidget):
             self.open_file(path)
         if current_idx >= 0 and current_idx < self.count():
             self.setCurrentIndex(current_idx)
+        
+    def update_stylesheet(self):
+        theme = THEMES.get(self.theme_name, THEMES["Catppuccin Mocha"])
+        self.setStyleSheet(f"""
+            QTabWidget::pane {{ border: 0; }}
+            QTabBar::tab {{
+                background: {theme.get('margin_bg', '#2D2D2D')};
+                color: {theme.get('margin_fg', '#969696')};
+                padding: 8px 16px;
+                border: none;
+                border-right: 1px solid {theme.get('bg', '#1E1E1E')};
+            }}
+            QTabBar::tab:selected {{
+                background: {theme.get('bg', '#1E1E1E')};
+                color: {theme.get('fg', '#FFFFFF')};
+                border-top: 1px solid {theme.get('kw', '#007ACC')};
+            }}
+        """)
 
     def close_tab(self, index):
         widget = self.widget(index)
@@ -1793,7 +1810,8 @@ class VSCodeTerminalWidget(QWidget):
         self._update_prompt()
         
         # Apply UI Settings
-        self.update_appearance(USER_SETTINGS.get('font_family', 'Consolas'), USER_SETTINGS.get('font_size', 12), THEMES["Custom"])
+        current_theme = USER_SETTINGS.get('theme_name', 'Catppuccin Mocha')
+        self.update_appearance(USER_SETTINGS.get('font_family', 'Consolas'), USER_SETTINGS.get('font_size', 12), THEMES.get(current_theme, THEMES['Catppuccin Mocha']))
 
     def update_appearance(self, font_family, font_size, theme):
         self.setStyleSheet(f"background-color: {theme['bg']}; color: {theme['fg']};")
@@ -3806,7 +3824,19 @@ class SettingsDialog(QDialog):
             l.addWidget(e)
             l.addWidget(lbl)
             l.addWidget(btn)
-            form_app.addRow(f"Custom {key.upper()}:", w)
+            
+            desc = {
+                "bg": "Background",
+                "fg": "Foreground (Text)",
+                "sel": "Selection (sel)",
+                "kw": "Keyword 1 (kw - module, endmodule)",
+                "kw2": "Keyword 2 (kw2 - input, output)",
+                "str": "Strings (str - \"text\")",
+                "comment": "Comments (comment - // text)",
+                "num": "Numbers (num - 1, 2, 3)",
+                "ident": "Identifiers (ident - wire_name)"
+            }
+            form_app.addRow(f"{desc.get(key, key)}:", w)
         
         self.tabs.addTab(t_app, "Appearance")
         
