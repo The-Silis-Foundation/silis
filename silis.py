@@ -1,4 +1,299 @@
+import os
+import sys
+
+# [SYS] Ensure PyQt6-QScintilla can find PyQt6-Qt6 libs
+qt6_lib_path = "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
+current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+if qt6_lib_path not in current_ld:
+    os.environ["LD_LIBRARY_PATH"] = f"{qt6_lib_path}:{current_ld}".strip(":")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
 # =============================PEAK!===============================
+
+from PyQt6.QtWidgets import QWidget, QFontComboBox, QSpinBox, QComboBox, QHBoxLayout, QVBoxLayout, QTabWidget, QTabBar, QDialog, QLineEdit, QListWidget, QListWidgetItem
+from PyQt6.QtGui import QColor, QFont, QFontDatabase
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.Qsci import QsciScintilla, QsciLexerVerilog, QsciLexerTCL
+
+
+THEMES = {
+    "VS Code Dark+": {
+        "bg": "#1E1E1E", "fg": "#D4D4D4", "sel": "#264F78", "margin_bg": "#1E1E1E", "margin_fg": "#858585",
+        "kw": "#569CD6", "str": "#CE9178", "comment": "#6A9955"
+    },
+    "Monokai": {
+        "bg": "#272822", "fg": "#F8F8F2", "sel": "#49483E", "margin_bg": "#272822", "margin_fg": "#90908A",
+        "kw": "#F92672", "str": "#E6DB74", "comment": "#75715E"
+    },
+    "One Dark Pro": {
+        "bg": "#282C34", "fg": "#ABB2BF", "sel": "#3E4451", "margin_bg": "#282C34", "margin_fg": "#4B5263",
+        "kw": "#C678DD", "str": "#98C379", "comment": "#5C6370"
+    },
+    "Solarized Light": {
+        "bg": "#FDF6E3", "fg": "#657B83", "sel": "#EEE8D5", "margin_bg": "#FDF6E3", "margin_fg": "#93A1A1",
+        "kw": "#859900", "str": "#2AA198", "comment": "#93A1A1"
+    }
+}
+
+class ScintillaEditor(QsciScintilla):
+    def __init__(self, is_minimap=False, font_family="Consolas", font_size=11, theme_name="VS Code Dark+"):
+        super().__init__()
+        
+        # Base setup
+        self.setUtf8(True)
+        self.setEolMode(QsciScintilla.EolMode.EolUnix)
+        
+        # Font
+        self.font_family = font_family
+        font = QFont(font_family, 2 if is_minimap else font_size)
+        font.setFixedPitch(True)
+        self.setFont(font)
+        
+        self.theme = THEMES.get(theme_name, THEMES["VS Code Dark+"])
+        self.bg_color = bg_color = QColor(self.theme["bg"])
+        self.fg_color = fg_color = QColor(self.theme["fg"])
+        caret_color = QColor(self.theme["fg"])
+        sel_bg = QColor(self.theme["sel"])
+        margin_bg = QColor(self.theme["margin_bg"])
+        margin_fg = QColor(self.theme["margin_fg"])
+        
+        # General styling
+        self.setPaper(bg_color)
+        self.setColor(fg_color)
+        self.setCaretForegroundColor(caret_color)
+        self.setSelectionBackgroundColor(sel_bg)
+        
+        # Line numbers
+        self.setMarginsBackgroundColor(margin_bg)
+        self.setMarginsForegroundColor(margin_fg)
+        self.setMarginsFont(font)
+        
+        if is_minimap:
+            self.setMarginWidth(0, 0)
+            self.setReadOnly(True)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setCaretWidth(0)
+        else:
+            self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
+            self.setMarginWidth(0, "0000")
+            self.setCaretWidth(2)
+            self.setCaretLineVisible(True)
+            self.setCaretLineBackgroundColor(QColor("#282828"))
+            
+            # Folding
+            self.setFolding(QsciScintilla.FoldStyle.PlainFoldStyle)
+            self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
+            self.setMarginWidth(1, 12)
+            self.setFoldMarginColors(QColor("#1E1E1E"), QColor("#1E1E1E"))
+            
+            # Auto-completion & Indentation
+            self.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)
+            self.setAutoCompletionThreshold(2)
+            self.setAutoIndent(True)
+            self.setIndentationsUseTabs(False)
+            self.setTabWidth(4)
+
+    def set_lexer(self, ext):
+        lexer = None
+        if ext in ['.v', '.sv', '.vh']:
+            lexer = QsciLexerVerilog(self)
+        elif ext in ['.tcl', '.sdc']:
+            lexer = QsciLexerTCL(self)
+            
+        if lexer:
+            font = QFont(self.font_family, 11)
+            font.setFixedPitch(True)
+            lexer.setDefaultFont(font)
+            lexer.setDefaultPaper(self.bg_color)
+            lexer.setDefaultColor(self.fg_color)
+            
+            # Customize Verilog colors manually
+            if isinstance(lexer, QsciLexerVerilog):
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerVerilog.Keyword) # Blue
+                lexer.setColor(QColor("#4EC9B0"), QsciLexerVerilog.KeywordSet2) # Cyan
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerVerilog.String) # Orange
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.Comment) # Green
+                lexer.setColor(QColor("#B5CEA8"), QsciLexerVerilog.Number) # Light Green
+                lexer.setColor(QColor("#DCDCAA"), QsciLexerVerilog.Identifier) # Yellow-ish
+            
+            # Customize TCL colors manually
+            if isinstance(lexer, QsciLexerTCL):
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerTCL.TCLKeyword)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerTCL.QuotedString)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerTCL.Comment)
+                
+            self.setLexer(lexer)
+
+
+class VSCodeEditor(QWidget):
+    def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="VS Code Dark+"):
+        super().__init__(parent)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        
+        # Load JetBrains Mono
+        font_id = QFontDatabase.addApplicationFont(os.path.join(os.path.dirname(__file__), "fonts", "JetBrainsMono-Regular.ttf"))
+        font_family = "Consolas"
+        if font_id != -1:
+            font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+            
+        self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
+        self.minimap = ScintillaEditor(is_minimap=True, font_family=font_family, font_size=font_size, theme_name=theme_name)
+        
+        self.editor.set_lexer(ext)
+        self.minimap.set_lexer(ext)
+        
+        self.layout.addWidget(self.editor)
+        self.layout.addWidget(self.minimap)
+        
+        self.minimap.setFixedWidth(100)
+        
+        # Sync minimap
+        self.editor.textChanged.connect(self.sync_minimap_text)
+        self.editor.verticalScrollBar().valueChanged.connect(self.sync_minimap_scroll)
+        
+    def sync_minimap_text(self):
+        self.minimap.setText(self.editor.text())
+        
+    def sync_minimap_scroll(self, val):
+        self.minimap.verticalScrollBar().setValue(val)
+        
+    def setPlainText(self, text):
+        self.editor.setText(text)
+        
+    def toPlainText(self):
+        return self.editor.text()
+
+class VSCodeEditorTabs(QTabWidget):
+    font_family = "Consolas"
+    font_size = 11
+    theme_name = "VS Code Dark+"
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTabsClosable(True)
+        self.setDocumentMode(True)
+        self.setStyleSheet("""
+            QTabWidget::pane { border: 0; }
+            QTabBar::tab {
+                background: #2D2D2D;
+                color: #969696;
+                padding: 8px 16px;
+                border: none;
+                border-right: 1px solid #1E1E1E;
+            }
+            QTabBar::tab:selected {
+                background: #1E1E1E;
+                color: #FFFFFF;
+                border-top: 1px solid #007ACC;
+            }
+        """)
+        self.tabCloseRequested.connect(self.close_tab)
+        self.files = {} # path -> VSCodeEditor
+
+    def open_file(self, path):
+        if path in self.files:
+            self.setCurrentWidget(self.files[path])
+            return
+            
+        ext = os.path.splitext(path)[1]
+        editor = VSCodeEditor(ext=ext, font_family=self.font_family, font_size=self.font_size, theme_name=self.theme_name)
+        with open(path, 'r') as f:
+            editor.setPlainText(f.read())
+            
+        self.files[path] = editor
+        idx = self.addTab(editor, os.path.basename(path))
+        self.setTabToolTip(idx, path)
+        self.setCurrentIndex(idx)
+
+    
+    def update_appearance(self, font_family, font_size, theme_name):
+        self.font_family = font_family
+        self.font_size = font_size
+        self.theme_name = theme_name
+        
+        # Update existing tabs (by re-initializing them or just updating the active one)
+        # For simplicity, we just reload all open files.
+        open_paths = list(self.files.keys())
+        current_idx = self.currentIndex()
+        for i in range(self.count()-1, -1, -1):
+            self.close_tab(i)
+        for path in open_paths:
+            self.open_file(path)
+        if current_idx >= 0 and current_idx < self.count():
+            self.setCurrentIndex(current_idx)
+
+    def close_tab(self, index):
+        widget = self.widget(index)
+        for path, ed in list(self.files.items()):
+            if ed == widget:
+                del self.files[path]
+                break
+        self.removeTab(index)
+        widget.deleteLater()
+        
+    def current_editor(self):
+        return self.currentWidget()
+        
+    def setPlainText(self, text):
+        ed = self.current_editor()
+        if ed: ed.setPlainText(text)
+        
+    def toPlainText(self):
+        ed = self.current_editor()
+        return ed.toPlainText() if ed else ""
+
+class CommandPalette(QDialog):
+    def __init__(self, parent, commands):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup)
+        self.setStyleSheet("""
+            QDialog { background: #252526; border: 1px solid #454545; border-radius: 6px; }
+            QLineEdit { background: #3C3C3C; color: #CCCCCC; padding: 6px; border: 1px solid #007ACC; font-size: 14px; }
+            QListWidget { background: #252526; color: #CCCCCC; border: none; font-size: 13px; }
+            QListWidget::item:selected { background: #094771; }
+        """)
+        self.setFixedSize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Type a command...")
+        layout.addWidget(self.input)
+        
+        self.list = QListWidget()
+        layout.addWidget(self.list)
+        
+        self.commands = commands
+        self.populate_list(self.commands)
+        
+        self.input.textChanged.connect(self.filter_list)
+        self.list.itemActivated.connect(self.accept)
+        self.input.returnPressed.connect(self.on_return)
+        
+    def populate_list(self, items):
+        self.list.clear()
+        for name, _ in items:
+            self.list.addItem(name)
+        if self.list.count() > 0:
+            self.list.setCurrentRow(0)
+            
+    def filter_list(self, text):
+        filtered = [cmd for cmd in self.commands if text.lower() in cmd[0].lower()]
+        self.populate_list(filtered)
+        
+    def on_return(self):
+        if self.list.count() > 0:
+            self.accept()
+            
+    def get_selected(self):
+        if self.list.currentItem():
+            name = self.list.currentItem().text()
+            for cmd_name, func in self.commands:
+                if cmd_name == name: return func
+        return None
 
 class HeaderFactory:
     """Central factory for the ASCII branding."""
@@ -24,6 +319,7 @@ os.environ['QT_QPA_PLATFORM'] = 'xcb'
 import subprocess
 import threading
 import queue
+
 import glob
 import re
 import shutil
@@ -957,14 +1253,14 @@ class SiliconPeeker(QGraphicsView):
                         item.setZValue(-5)
                         self.scene.addItem(item)
                     
-                    thin_width = d.width() / 1200.0
-                    for width, points in self.def_data.power_routes:
+                    if self.def_data.power_routes:
                         path = QPainterPath()
-                        path.moveTo(points[0])
-                        for p in points[1:]: path.lineTo(p)
+                        for width, points in self.def_data.power_routes:
+                            if not points: continue
+                            path.moveTo(points[0])
+                            for p in points[1:]: path.lineTo(p)
                         
-                        pen = QPen(QColor("#ffaa00"), thin_width)
-                        pen.setCapStyle(Qt.PenCapStyle.FlatCap) 
+                        pen = QPen(QColor("#ffaa00"), 0)
                         item = QGraphicsPathItem(path)
                         item.setPen(pen)
                         item.setZValue(-5)
@@ -1823,8 +2119,8 @@ class CompileTab(QWidget):
         # Code
         self.code_container = QWidget()
         c_lay = QVBoxLayout(self.code_container); c_lay.setContentsMargins(0,0,0,0)
-        self.editor = CodeEditor()
-        c_lay.addWidget(QLabel("SOURCE CODE")); c_lay.addWidget(self.editor)
+        self.editor = VSCodeEditorTabs()
+        c_lay.addWidget(self.editor)
         self.right_split.addWidget(self.code_container)
         
         # ── VS Code-style terminal ──────────────────────────────────────────
@@ -1836,8 +2132,8 @@ class CompileTab(QWidget):
         self.right_split.addWidget(self.terminal)
         
         self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 4)
-        self.right_split.setStretchFactor(0, 3); self.right_split.setStretchFactor(1, 1)
-
+        self.right_split.setStretchFactor(0, 8); self.right_split.setStretchFactor(1, 1)
+        self.right_split.setSizes([8000, 2000])
 # === TAB 2: WAVEFORM ===
 # === TAB 2: WAVEFORM ENGINE (Refined) ===
 
@@ -2565,7 +2861,7 @@ class SynthesisTab(QWidget):
 import os
 import subprocess
 import time
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+from PyQt6.QtWidgets import QWidget, QFontComboBox, QSpinBox, QComboBox, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt, QTimer, QPoint
 
 class GDS3DPort(QWidget):
@@ -2633,7 +2929,16 @@ class GDS3DPort(QWidget):
         except AttributeError:
             proj_root = os.getcwd() 
             
-        gds_path = os.path.join(proj_root, "results", "design.gds")
+        design_name = "design"
+        def_path = os.path.join(proj_root, "results", "temp.def")
+        if os.path.exists(def_path):
+            with open(def_path, 'r') as f:
+                for line in f:
+                    if line.startswith("DESIGN"):
+                        design_name = line.split()[1]
+                        break
+                        
+        gds_path = os.path.join(proj_root, "results", f"{design_name}.gds")
         process_file = os.path.expanduser("~/GDS3D/techfiles/sky130.txt")
         
         if not os.path.exists(gds_path) or not os.path.exists(process_file):
@@ -2757,7 +3062,6 @@ class BackendWidget(QWidget):
         # --- 1. INITIALIZE WIDGETS ---
         self.peeker = SiliconPeeker()
         self.peeker.ide = self.ide
-        self.gds_viewer = GDSViewerWidget()
         self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
         
         self.def_ctrl_widget = QWidget()
@@ -2778,16 +3082,7 @@ class BackendWidget(QWidget):
         def_layout.addSpacing(10); def_layout.addWidget(QLabel("<b>Overlay</b>"))
         def_layout.addWidget(self.btn_heat); def_layout.addStretch()
 
-        self.gds_ctrl_widget = QWidget()
-        self.gds_ctrl_widget.setVisible(False)
-        gds_layout = QVBoxLayout(self.gds_ctrl_widget); gds_layout.setContentsMargins(0,0,0,0)
-        
-        self.layer_list = QListWidget()
-        self.layer_list.setStyleSheet("QListWidget { font-size: 10px; border: none; }")
-        self.layer_list.itemChanged.connect(self.on_layer_toggle)
-        
-        gds_layout.addWidget(QLabel("<b>GDS Layers</b>"))
-        gds_layout.addWidget(self.layer_list)
+
 
         # [UPDATE] Added Magic GUI Button
         self.btn_gui = QPushButton("Native GUI (OpenROAD)")
@@ -2835,7 +3130,6 @@ class BackendWidget(QWidget):
         sidebar = QFrame(); sidebar.setFixedWidth(140); sidebar.setStyleSheet("border-right: 1px solid gray;")
         s_lay = QVBoxLayout(sidebar); s_lay.setContentsMargins(5,10,5,10)
         s_lay.addWidget(self.def_ctrl_widget)
-        s_lay.addWidget(self.gds_ctrl_widget)
         
         # [UPDATE] Add buttons to sidebar
         s_lay.addWidget(self.btn_gui)
@@ -2847,7 +3141,6 @@ class BackendWidget(QWidget):
         # [NEW] Center Tabs mapped correctly
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.viz_tabs.addTab(self.peeker, "Live Floorplan (DEF)")
-        self.viz_tabs.addTab(self.gds_viewer, "Final Chip (GDS)")
         self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
         h_lay.addWidget(self.viz_tabs)
         
@@ -2941,43 +3234,11 @@ class BackendWidget(QWidget):
         if index == 0:
             # Tab 0: DEF Live Floorplan
             self.def_ctrl_widget.setVisible(True)
-            self.gds_ctrl_widget.setVisible(False)
             
         elif index == 1:
-            # Tab 1: 2D GDS Viewer
+            # Tab 1: 3D GDS Viewer
             self.def_ctrl_widget.setVisible(False)
-            self.gds_ctrl_widget.setVisible(True)
-            self.view_final_gds() # Load the 2D GDS
-            
-        elif index == 2:
-            # Tab 2: 3D GDS Viewer
-            self.def_ctrl_widget.setVisible(False)
-            self.gds_ctrl_widget.setVisible(False)
             # The sidebar is now completely hidden for the 3D view to maximize screen space!
-
-    def populate_gds_layers(self):
-        self.layer_list.clear()
-        layers = self.gds_viewer.get_layers()
-        for layer, datatype in layers:
-            item = QListWidgetItem(f"{layer}/{datatype}")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole, (layer, datatype))
-            self.layer_list.addItem(item)
-
-    def on_layer_toggle(self, item):
-        layer, datatype = item.data(Qt.ItemDataRole.UserRole)
-        visible = (item.checkState() == Qt.CheckState.Checked)
-        self.gds_viewer.set_layer_visible(layer, datatype, visible)
-
-    def view_final_gds(self):
-        proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
-        gds_path = os.path.join(proj_root, "results", "design.gds")
-        if os.path.exists(gds_path):
-            if self.gds_viewer.loaded_file != gds_path:
-                self.term_log.append(f"[SYS] Loading GDS: {gds_path}...")
-                self.gds_viewer.load_gds(gds_path)
-                self.populate_gds_layers()
         else:
             self.term_log.append(f"[ERR] GDS not found. Run 'GDS' step first.")
 
@@ -3080,7 +3341,7 @@ close $fp
         if step_name == "GDS":
             if not self.active_pdk or 'gds' not in self.active_pdk: QMessageBox.critical(self, "Error", "No GDS defined."); return
             self.term_log.append("[SYS] Starting GDS Generation Flow...")
-            final_def = os.path.join(results_dir, "final_routed.def").replace("\\", "/")
+            final_def = os.path.join(results_dir, "temp.def").replace("\\", "/")
             self.send_command_internal(f"write_def \"{final_def}\"")
             QTimer.singleShot(2000, lambda: self.trigger_magic_merge(proj_root, final_def))
             return
@@ -3165,7 +3426,16 @@ close $fp
         for gds in macro_gds_paths:
             script_content += f"gds read {gds}\n"
             
-        script_content += f"def read {def_path}\nload {self.ide.get_context()[0] or 'design'}\ngds write {output_gds}\nquit -noprompt"
+        design_name = "design"
+        if os.path.exists(def_path):
+            with open(def_path, 'r') as f:
+                for line in f:
+                    if line.startswith("DESIGN"):
+                        design_name = line.split()[1]
+                        break
+                        
+        output_gds = os.path.join(root, "results", f"{design_name}.gds").replace("\\", "/")
+        script_content += f"def read {def_path}\nload {design_name}\ngds write {output_gds}\nquit -noprompt"
         script_path = os.path.join(root, "merge_magic.tcl")
         with open(script_path, 'w') as f: f.write(script_content)
         self.term_log.append(f"[SYS] Magic: Merging with LEF support...")
@@ -3439,7 +3709,27 @@ class SettingsDialog(QDialog):
             e = QLineEdit(key); e.setMaxLength(1); self.bind_edits[name] = e
             form.addRow(name.replace("_", " ").title() + ":", e)
             
+            
         self.tabs.addTab(t_gen, "General Settings")
+        
+        # --- TAB 1.5: Appearance ---
+        t_app = QWidget(); form_app = QFormLayout(t_app)
+        
+        self.cb_font = QFontComboBox()
+        self.cb_font.setCurrentFont(QFont(self.ide.tab_compile.editor.font_family))
+        form_app.addRow("Editor Font:", self.cb_font)
+        
+        self.spin_size = QSpinBox()
+        self.spin_size.setRange(6, 36)
+        self.spin_size.setValue(self.ide.tab_compile.editor.font_size)
+        form_app.addRow("Font Size:", self.spin_size)
+        
+        self.cb_theme = QComboBox()
+        self.cb_theme.addItems(["VS Code Dark+", "Monokai", "One Dark Pro", "Solarized Light"])
+        self.cb_theme.setCurrentText(self.ide.tab_compile.editor.theme_name)
+        form_app.addRow("Color Theme:", self.cb_theme)
+        
+        self.tabs.addTab(t_app, "Appearance")
         
         # --- TAB 2: Volare Manager ---
         self.volare_wid = VolareManagerWidget(self)
@@ -3456,6 +3746,23 @@ class SettingsDialog(QDialog):
         self.ide.pdk_path = self.e_pdk.text()
         for name, e in self.bind_edits.items():
             self.ide.key_map[name] = e.text().lower()
+            
+        # Apply Appearance
+        font_family = self.cb_font.currentFont().family()
+        font_size = self.spin_size.value()
+        theme_name = self.cb_theme.currentText()
+        
+        # Update Editor
+        if hasattr(self.ide.tab_compile, 'editor'):
+            self.ide.tab_compile.editor.update_appearance(font_family, font_size, theme_name)
+            
+        # Update Terminal
+        if hasattr(self.ide.tab_compile, 'terminal'):
+            term_font = QFont(font_family, font_size)
+            term_font.setFixedPitch(True)
+            self.ide.tab_compile.terminal.term_log.setFont(term_font)
+            self.ide.tab_compile.terminal.term_input.setFont(term_font)
+            
         self.accept()
 
 
@@ -4655,14 +4962,41 @@ class SilisIDE(QMainWindow):
             if top_mod:
                 for f_path in self.project_config.get("rtl_files", []):
                     if top_mod in os.path.basename(f_path):
-                        if hasattr(self.tab_compile, 'open_file_in_editor'):
-                            self.tab_compile.open_file_in_editor(f_path)
+                        abs_path = os.path.join(self.cwd, f_path) if not os.path.isabs(f_path) else f_path
+                        self.open_file_in_editor(abs_path)
                         break
 
     # === UX: SMART SHORTCUTS ===
     def eventFilter(self, source, event):
         if event.type() == QEvent.Type.KeyPress:
             key = event.key()
+            modifiers = event.modifiers()
+            
+            # --- COMMAND PALETTE ---
+            if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and (modifiers & Qt.KeyboardModifier.ShiftModifier):
+                commands = [
+                    ("View: Toggle Fullscreen", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen()),
+                    ("View: Open Settings", self.open_settings),
+                    ("Go to: Compile Tab", lambda: self.frontend_tabs.setCurrentIndex(0)),
+                    ("Go to: Waveform Tab", lambda: self.frontend_tabs.setCurrentIndex(1)),
+                    ("Go to: Schematic Tab", lambda: self.frontend_tabs.setCurrentIndex(2)),
+                    ("Go to: Synthesis Dashboard", lambda: self.frontend_tabs.setCurrentIndex(3)),
+                    ("Backend: Reset Flow", self.backend_widget.reset_backend),
+                ]
+                pal = CommandPalette(self, commands)
+                pal.move(self.geometry().center() - pal.rect().center())
+                if pal.exec():
+                    func = pal.get_selected()
+                    if func: func()
+                return True
+            
+            # --- FULLSCREEN TOGGLE ---
+            if key == Qt.Key.Key_F11:
+                if self.isFullScreen():
+                    self.showNormal()
+                else:
+                    self.showFullScreen()
+                return True
             
             # --- GLOBAL F-KEYS (Smart Toggle) ---
             if self.stack.currentIndex() == 0:
@@ -4931,7 +5265,7 @@ class SilisIDE(QMainWindow):
 
     def open_file_in_editor(self, path):
         if os.path.exists(path):
-            with open(path) as f: self.tab_compile.editor.setPlainText(f.read())
+            self.tab_compile.editor.open_file(path)
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
 
     def handle_terminal_input(self):
