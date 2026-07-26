@@ -11,7 +11,7 @@ if qt6_lib_path not in current_ld:
 
 # =============================PEAK!===============================
 
-from PyQt6.QtWidgets import QWidget, QFontComboBox, QSpinBox, QComboBox, QHBoxLayout, QVBoxLayout, QTabWidget, QTabBar, QDialog, QLineEdit, QListWidget, QListWidgetItem, QColorDialog, QPushButton
+from PyQt6.QtWidgets import QSplitter, QWidget, QFontComboBox, QSpinBox, QComboBox, QHBoxLayout, QVBoxLayout, QTabWidget, QTabBar, QDialog, QLineEdit, QListWidget, QListWidgetItem, QColorDialog, QPushButton
 from PyQt6.QtGui import QColor, QFont, QFontDatabase
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.Qsci import QsciScintilla, QsciLexerVerilog, QsciLexerTCL
@@ -179,7 +179,7 @@ class ScintillaEditor(QsciScintilla):
 class VSCodeEditor(QWidget):
     def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
         super().__init__(parent)
-        self.layout = QHBoxLayout(self)
+        self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
@@ -190,25 +190,8 @@ class VSCodeEditor(QWidget):
                 font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
                 
         self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
-        self.minimap = ScintillaEditor(is_minimap=True, font_family=font_family, font_size=font_size, theme_name=theme_name)
-        
         self.editor.set_lexer(ext)
-        self.minimap.set_lexer(ext)
-        
         self.layout.addWidget(self.editor)
-        self.layout.addWidget(self.minimap)
-        
-        self.minimap.setFixedWidth(100)
-        
-        # Sync minimap
-        self.editor.textChanged.connect(self.sync_minimap_text)
-        self.editor.verticalScrollBar().valueChanged.connect(self.sync_minimap_scroll)
-        
-    def sync_minimap_text(self):
-        self.minimap.setText(self.editor.text())
-        
-    def sync_minimap_scroll(self, val):
-        self.minimap.verticalScrollBar().setValue(val)
         
     def setPlainText(self, text):
         self.editor.setText(text)
@@ -291,6 +274,13 @@ class VSCodeEditorTabs(QTabWidget):
         
     def current_editor(self):
         return self.currentWidget()
+
+    def current_file_path(self):
+        widget = self.currentWidget()
+        for path, ed in list(self.files.items()):
+            if ed == widget: return path
+        return None
+
         
     def setPlainText(self, text):
         ed = self.current_editor()
@@ -2994,19 +2984,14 @@ class GDS3DPort(QWidget):
 
         try:
             proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+            results_dir = os.path.join(proj_root, "results")
         except AttributeError:
-            proj_root = os.getcwd() 
+            results_dir = os.getcwd() 
             
-        design_name = "design"
-        def_path = os.path.join(proj_root, "results", "temp.def")
-        if os.path.exists(def_path):
-            with open(def_path, 'r') as f:
-                for line in f:
-                    if line.startswith("DESIGN"):
-                        design_name = line.split()[1]
-                        break
-                        
-        gds_path = os.path.join(proj_root, "results", f"{design_name}.gds")
+        gds_path, _ = QFileDialog.getOpenFileName(self, "Select GDS File for 3D Viewer", results_dir, "GDSII Files (*.gds);;All Files (*)")
+        
+        if not gds_path:
+            return # User canceled
         process_file = os.path.expanduser("~/GDS3D/techfiles/sky130.txt")
         
         if not os.path.exists(gds_path) or not os.path.exists(process_file):
@@ -3783,6 +3768,10 @@ class SettingsDialog(QDialog):
             e = QLineEdit(key); e.setMaxLength(1); self.bind_edits[name] = e
             form.addRow(name.replace("_", " ").title() + ":", e)
             
+        # External Editor
+        self.e_ext_edit = QLineEdit(USER_SETTINGS.get("external_editor", ""))
+        form.addRow("External Editor Command:", self.e_ext_edit)
+            
             
         self.tabs.addTab(t_gen, "General Settings")
         
@@ -3869,6 +3858,7 @@ class SettingsDialog(QDialog):
         USER_SETTINGS["font_size"] = font_size
         USER_SETTINGS["theme_name"] = theme_name
         USER_SETTINGS["custom_theme"] = THEMES["Custom"]
+        USER_SETTINGS["external_editor"] = self.e_ext_edit.text()
         save_user_settings(USER_SETTINGS)
 
         
@@ -3979,11 +3969,13 @@ class Page2Sources(QWizardPage):
             self.list_widget.addItem(f)
 
     def create_file(self):
-        name, _ = QFileDialog.getSaveFileName(self, "Create New RTL File", "", "Verilog (*.v *.sv)")
-        if name:
-            with open(name, 'w') as f:
-                f.write("// New RTL File\n")
-            self.list_widget.addItem(name)
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Create New RTL File", "Enter filename (e.g. module.v):")
+        if ok and name.strip():
+            name = name.strip()
+            if not (name.endswith('.v') or name.endswith('.sv')):
+                name += '.v'
+            self.list_widget.addItem(f"[NEW] {name}")
 
     def get_files(self):
         return [self.list_widget.item(i).text() for i in range(self.list_widget.count())]
@@ -3999,9 +3991,23 @@ class Page3Constraints(QWizardPage):
         layout.addWidget(QLabel("Constraints (.sdc) (Drag and Drop supported):"))
         layout.addWidget(self.list_widget)
 
+        btn_layout = QHBoxLayout()
         add_btn = QPushButton("[+] Add .sdc File")
         add_btn.clicked.connect(self.add_files)
-        layout.addWidget(add_btn)
+        new_btn = QPushButton("[+] Create New File")
+        new_btn.clicked.connect(self.create_file)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(new_btn)
+        layout.addLayout(btn_layout)
+
+    def create_file(self):
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Create New SDC File", "Enter filename (e.g. timing.sdc):")
+        if ok and name.strip():
+            name = name.strip()
+            if not name.endswith('.sdc'):
+                name += '.sdc'
+            self.list_widget.addItem(f"[NEW] {name}")
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select SDC Files", "", "SDC (*.sdc);;All Files (*)")
@@ -4022,9 +4028,23 @@ class Page4Testbenches(QWizardPage):
         layout.addWidget(QLabel("Testbenches (Drag and Drop supported):"))
         layout.addWidget(self.list_widget)
 
+        btn_layout = QHBoxLayout()
         add_btn = QPushButton("[+] Add Testbench")
         add_btn.clicked.connect(self.add_files)
-        layout.addWidget(add_btn)
+        new_btn = QPushButton("[+] Create New File")
+        new_btn.clicked.connect(self.create_file)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(new_btn)
+        layout.addLayout(btn_layout)
+
+    def create_file(self):
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Create New Testbench File", "Enter filename (e.g. tb_module.v):")
+        if ok and name.strip():
+            name = name.strip()
+            if not (name.endswith('.v') or name.endswith('.sv')):
+                name += '.v'
+            self.list_widget.addItem(f"[NEW] {name}")
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select Testbench Files", "", "Verilog (*.v *.sv);;All Files (*)")
@@ -4461,10 +4481,22 @@ class SilisProjectWizard(QWizard):
             os.makedirs(os.path.join(loc, "reports"), exist_ok=True)
             os.makedirs(os.path.join(loc, "results"), exist_ok=True)
 
-            def route_files(files, dest_dir):
+            def route_files(files, dest_dir, prefix=""):
                 routed = []
                 for f in files:
+                    if f.startswith("[NEW] "):
+                        basename = f[6:]
+                        if prefix and not basename.startswith(prefix):
+                            basename = prefix + basename
+                        dest = os.path.join(loc, dest_dir, basename)
+                        with open(dest, 'w') as out:
+                            out.write(f"// New File: {basename}\n")
+                        routed.append(dest)
+                        continue
+                        
                     basename = os.path.basename(f)
+                    if prefix and not basename.startswith(prefix):
+                        basename = prefix + basename
                     dest = os.path.join(loc, dest_dir, basename)
                     if copy_src and os.path.abspath(f) != os.path.abspath(dest):
                         shutil.copy2(f, dest)
@@ -4486,7 +4518,7 @@ class SilisProjectWizard(QWizard):
                     rtl_files.append(stub_file)
 
             sdc_files = route_files(p3.get_files(), "source")
-            tb_files = route_files(p4.get_files(), "source")
+            tb_files = route_files(p4.get_files(), "source", prefix="tb_")
             
             auto_sdc = False
             if not sdc_files:
@@ -5144,10 +5176,27 @@ class SilisIDE(QMainWindow):
 
             # --- SUPER KEY LOGIC (` + Key) ---
             if key == Qt.Key.Key_QuoteLeft: # Backtick `
-                self.sk_active = True
-                self.statusBar().showMessage("SUPER KEY ACTIVE")
-                self.sk_timer.start(1000)
-                return True 
+                if getattr(self, '_ignore_next_sk', False):
+                    self._ignore_next_sk = False
+                    return False
+                if self.sk_active:
+                    self.reset_sk()
+                    focused = QApplication.focusWidget()
+                    if focused:
+                        self._ignore_next_sk = True
+                        if hasattr(focused, 'SendScintilla'):
+                            focused.SendScintilla(QsciScintilla.SCI_ADDTEXT, b'`')
+                        elif hasattr(focused, 'insert'):
+                            focused.insert("`")
+                        elif hasattr(focused, 'insertPlainText'):
+                            focused.insertPlainText("`")
+                    return True
+                else:
+                    self.sk_active = True
+                    self.statusBar().showMessage("SUPER KEY ACTIVE")
+                    self.show_sk_overlays()
+                    self.sk_timer.start(1000)
+                    return True 
             
             if self.sk_active:
                 txt = event.text().lower()
@@ -5168,6 +5217,15 @@ class SilisIDE(QMainWindow):
                     self.tab_compile.term_input.setFocus()
                 elif txt == self.key_map["term_toggle"]: 
                     self.toggle_term_mode()
+                elif txt == 'e':
+                    cmd = USER_SETTINGS.get("external_editor", "")
+                    path = self.tab_compile.editor.current_file_path()
+                    if cmd and path:
+                        import subprocess
+                        subprocess.Popen(f"{cmd} {path}", shell=True)
+                    else:
+                        QMessageBox.warning(self, "Error", "No external editor configured or no active file.")
+
                 
                 self.reset_sk(); return True
                 
@@ -5197,7 +5255,29 @@ class SilisIDE(QMainWindow):
         
         event.accept()
 
-    def reset_sk(self): self.sk_active = False; self.statusBar().clearMessage()
+    def reset_sk(self):
+        self.sk_active = False
+        self.statusBar().clearMessage()
+        if hasattr(self, 'sk_overlays'):
+            for lbl in self.sk_overlays:
+                lbl.deleteLater()
+            self.sk_overlays = []
+
+    def show_sk_overlays(self):
+        self.sk_overlays = []
+        def create_overlay(parent, text):
+            lbl = QLabel(text, parent)
+            lbl.setStyleSheet("background: rgba(0, 122, 204, 0.9); color: white; font-weight: bold; font-size: 24px; padding: 10px; border-radius: 5px;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.resize(100, 50)
+            lbl.move(parent.width()//2 - 50, parent.height()//2 - 25)
+            lbl.show()
+            self.sk_overlays.append(lbl)
+            
+        if self.stack.currentIndex() == 0 and self.frontend_tabs.currentIndex() == 0:
+            create_overlay(self.tab_compile.explorer, f"[{self.key_map.get('focus_explorer', 'x').upper()}]")
+            create_overlay(self.tab_compile.editor, f"[{self.key_map.get('focus_editor', 'c').upper()}]")
+            create_overlay(self.tab_compile.terminal, f"[{self.key_map.get('focus_terminal', 'v').upper()}]")
 
     def switch_world(self, index):
         self.stack.setCurrentIndex(index)
