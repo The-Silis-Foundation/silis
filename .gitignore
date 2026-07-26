@@ -1,3 +1,6 @@
 testprojects/
 testing/
 PLANS.md  
+__pycache__/
+*.pyc
+*.pyo
