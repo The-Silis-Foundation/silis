@@ -10,33 +10,65 @@ if qt6_lib_path not in current_ld:
 
 # =============================PEAK!===============================
 
-from PyQt6.QtWidgets import QWidget, QFontComboBox, QSpinBox, QComboBox, QHBoxLayout, QVBoxLayout, QTabWidget, QTabBar, QDialog, QLineEdit, QListWidget, QListWidgetItem
+from PyQt6.QtWidgets import QWidget, QFontComboBox, QSpinBox, QComboBox, QHBoxLayout, QVBoxLayout, QTabWidget, QTabBar, QDialog, QLineEdit, QListWidget, QListWidgetItem, QColorDialog, QPushButton
 from PyQt6.QtGui import QColor, QFont, QFontDatabase
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.Qsci import QsciScintilla, QsciLexerVerilog, QsciLexerTCL
 
 
+
+# --- Global User Settings ---
+USER_SETTINGS_FILE = os.path.expanduser("~/.silis_ui_settings.json")
+def load_user_settings():
+    if os.path.exists(USER_SETTINGS_FILE):
+        try:
+            with open(USER_SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "font_family": "Consolas",
+        "font_size": 11,
+        "theme_name": "Catppuccin Mocha",
+        "custom_theme": {}
+    }
+
+def save_user_settings(settings):
+    try:
+        with open(USER_SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=4)
+    except Exception:
+        pass
+
+USER_SETTINGS = load_user_settings()
+
+
 THEMES = {
-    "VS Code Dark+": {
-        "bg": "#1E1E1E", "fg": "#D4D4D4", "sel": "#264F78", "margin_bg": "#1E1E1E", "margin_fg": "#858585",
-        "kw": "#569CD6", "str": "#CE9178", "comment": "#6A9955"
+    "Catppuccin Mocha": {
+        "bg": "#1e1e2e", "fg": "#cdd6f4", "sel": "#585b70", "margin_bg": "#181825", "margin_fg": "#a6adc8",
+        "kw": "#cba6f7", "kw2": "#f38ba8", "str": "#a6e3a1", "comment": "#6c7086", "num": "#fab387", "ident": "#89b4fa"
     },
-    "Monokai": {
-        "bg": "#272822", "fg": "#F8F8F2", "sel": "#49483E", "margin_bg": "#272822", "margin_fg": "#90908A",
-        "kw": "#F92672", "str": "#E6DB74", "comment": "#75715E"
+    "Tokyo Night": {
+        "bg": "#1a1b26", "fg": "#c0caf5", "sel": "#283457", "margin_bg": "#16161e", "margin_fg": "#3b4261",
+        "kw": "#bb9af7", "kw2": "#f7768e", "str": "#9ece6a", "comment": "#565f89", "num": "#ff9e64", "ident": "#7aa2f7"
     },
-    "One Dark Pro": {
-        "bg": "#282C34", "fg": "#ABB2BF", "sel": "#3E4451", "margin_bg": "#282C34", "margin_fg": "#4B5263",
-        "kw": "#C678DD", "str": "#98C379", "comment": "#5C6370"
+    "Nord": {
+        "bg": "#2e3440", "fg": "#d8dee9", "sel": "#434c5e", "margin_bg": "#2e3440", "margin_fg": "#4c566a",
+        "kw": "#81a1c1", "kw2": "#bf616a", "str": "#a3be8c", "comment": "#4c566a", "num": "#b48ead", "ident": "#88c0d0"
     },
-    "Solarized Light": {
-        "bg": "#FDF6E3", "fg": "#657B83", "sel": "#EEE8D5", "margin_bg": "#FDF6E3", "margin_fg": "#93A1A1",
-        "kw": "#859900", "str": "#2AA198", "comment": "#93A1A1"
+    "Dracula": {
+        "bg": "#282a36", "fg": "#f8f8f2", "sel": "#44475a", "margin_bg": "#282a36", "margin_fg": "#6272a4",
+        "kw": "#ff79c6", "kw2": "#bd93f9", "str": "#f1fa8c", "comment": "#6272a4", "num": "#bd93f9", "ident": "#8be9fd"
     }
 }
 
+if USER_SETTINGS.get("custom_theme"):
+    THEMES["Custom"] = USER_SETTINGS["custom_theme"]
+else:
+    THEMES["Custom"] = THEMES["Catppuccin Mocha"].copy()
+
 class ScintillaEditor(QsciScintilla):
-    def __init__(self, is_minimap=False, font_family="Consolas", font_size=11, theme_name="VS Code Dark+"):
+    def __init__(self, is_minimap=False, font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
         super().__init__()
         
         # Base setup
@@ -45,11 +77,11 @@ class ScintillaEditor(QsciScintilla):
         
         # Font
         self.font_family = font_family
-        font = QFont(font_family, 2 if is_minimap else font_size)
+        self.font_size_pt = 2 if is_minimap else font_size
+        font = QFont(font_family, self.font_size_pt)
         font.setFixedPitch(True)
         self.setFont(font)
-        
-        self.theme = THEMES.get(theme_name, THEMES["VS Code Dark+"])
+        self.theme = THEMES.get(theme_name, THEMES["Catppuccin Mocha"])
         self.bg_color = bg_color = QColor(self.theme["bg"])
         self.fg_color = fg_color = QColor(self.theme["fg"])
         caret_color = QColor(self.theme["fg"])
@@ -102,24 +134,31 @@ class ScintillaEditor(QsciScintilla):
             lexer = QsciLexerTCL(self)
             
         if lexer:
-            font = QFont(self.font_family, 11)
+            font = QFont(self.font_family, self.font_size_pt)
             font.setFixedPitch(True)
             lexer.setDefaultFont(font)
             lexer.setDefaultPaper(self.bg_color)
             lexer.setDefaultColor(self.fg_color)
             
+            # Bold font for keywords
+            font_bold = QFont(self.font_family, self.font_size_pt)
+            font_bold.setFixedPitch(True)
+            font_bold.setBold(True)
+
             # Customize Verilog colors manually
             if isinstance(lexer, QsciLexerVerilog):
-                lexer.setColor(QColor(self.theme["kw"]), QsciLexerVerilog.Keyword) # Blue
-                lexer.setColor(QColor("#4EC9B0"), QsciLexerVerilog.KeywordSet2) # Cyan
-                lexer.setColor(QColor(self.theme["str"]), QsciLexerVerilog.String) # Orange
-                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.Comment) # Green
-                lexer.setColor(QColor("#B5CEA8"), QsciLexerVerilog.Number) # Light Green
-                lexer.setColor(QColor("#DCDCAA"), QsciLexerVerilog.Identifier) # Yellow-ish
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerVerilog.Keyword)
+                lexer.setFont(font_bold, QsciLexerVerilog.Keyword)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVerilog.KeywordSet2)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerVerilog.String)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVerilog.Comment)
+                lexer.setColor(QColor(self.theme["num"]), QsciLexerVerilog.Number)
+                lexer.setColor(QColor(self.theme["ident"]), QsciLexerVerilog.Identifier)
             
             # Customize TCL colors manually
             if isinstance(lexer, QsciLexerTCL):
                 lexer.setColor(QColor(self.theme["kw"]), QsciLexerTCL.TCLKeyword)
+                lexer.setFont(font_bold, QsciLexerTCL.TCLKeyword)
                 lexer.setColor(QColor(self.theme["str"]), QsciLexerTCL.QuotedString)
                 lexer.setColor(QColor(self.theme["comment"]), QsciLexerTCL.Comment)
                 
@@ -127,18 +166,18 @@ class ScintillaEditor(QsciScintilla):
 
 
 class VSCodeEditor(QWidget):
-    def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="VS Code Dark+"):
+    def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
         super().__init__(parent)
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        # Load JetBrains Mono
-        font_id = QFontDatabase.addApplicationFont(os.path.join(os.path.dirname(__file__), "fonts", "JetBrainsMono-Regular.ttf"))
-        font_family = "Consolas"
-        if font_id != -1:
-            font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
-            
+        # Fallback to JetBrains Mono if not specifically overridden and available
+        if font_family == "Consolas":
+            font_id = QFontDatabase.addApplicationFont(os.path.join(os.path.dirname(__file__), "fonts", "JetBrainsMono-Regular.ttf"))
+            if font_id != -1:
+                font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+                
         self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
         self.minimap = ScintillaEditor(is_minimap=True, font_family=font_family, font_size=font_size, theme_name=theme_name)
         
@@ -1752,6 +1791,17 @@ class VSCodeTerminalWidget(QWidget):
 
         lay.addWidget(inp_widget)
         self._update_prompt()
+        
+        # Apply UI Settings
+        self.update_appearance(USER_SETTINGS.get('font_family', 'Consolas'), USER_SETTINGS.get('font_size', 12), THEMES["Custom"])
+
+    def update_appearance(self, font_family, font_size, theme):
+        self.setStyleSheet(f"background-color: {theme['bg']}; color: {theme['fg']};")
+        self.term_log.setStyleSheet(f"QTextEdit {{ background: {theme['bg']}; color: {theme['fg']}; font-family: '{font_family}', monospace; font-size: {font_size}pt; border: none; padding: 4px; }}")
+        self.term_input.setStyleSheet(f"QLineEdit {{ background: {theme['bg']}; color: {theme['fg']}; font-family: '{font_family}', monospace; font-size: {font_size}pt; border: none; padding: 2px; }}")
+        self._popup.setStyleSheet(f"QListWidget {{ background: {theme['bg']}; color: {theme['fg']}; font-family: '{font_family}', monospace; font-size: {font_size}pt; border: 1px solid {theme['sel']}; padding: 2px; }} QListWidget::item:selected {{ background: {theme['sel']}; color: {theme['fg']}; }} QListWidget::item:hover {{ background: {theme['sel']}; }}")
+        self.mode_btn.setStyleSheet(f"QPushButton {{ background: {theme['sel']}; color: {theme['fg']}; border: none; font-family: '{font_family}'; font-size: {font_size-1}pt; padding: 3px 6px; border-radius: 3px; }} QPushButton:hover {{ background: {theme['kw']}; }}")
+        self._prompt_lbl.setStyleSheet(f"color: {theme['kw']}; font-family: '{font_family}'; font-size: {font_size}pt; padding: 0 4px;")
 
     # --------------------------------------------------------- prompt -------
     def _update_prompt(self):
@@ -3683,6 +3733,12 @@ class VolareManagerWidget(QWidget):
 
 
 class SettingsDialog(QDialog):
+    def _pick_color(self, line_edit, lbl):
+        c = QColorDialog.getColor(QColor(line_edit.text() if line_edit.text() else "#FFFFFF"), self)
+        if c.isValid():
+            line_edit.setText(c.name())
+            lbl.setStyleSheet(f"background-color: {c.name()}; border: 1px solid #555; border-radius: 2px;")
+
     def __init__(self, parent_ide):
         super().__init__(parent_ide)
         self.ide = parent_ide
@@ -3724,10 +3780,33 @@ class SettingsDialog(QDialog):
         self.spin_size.setValue(self.ide.tab_compile.editor.font_size)
         form_app.addRow("Font Size:", self.spin_size)
         
+
         self.cb_theme = QComboBox()
-        self.cb_theme.addItems(["VS Code Dark+", "Monokai", "One Dark Pro", "Solarized Light"])
+        self.cb_theme.addItems(list(THEMES.keys()))
         self.cb_theme.setCurrentText(self.ide.tab_compile.editor.theme_name)
         form_app.addRow("Color Theme:", self.cb_theme)
+        
+        self.custom_colors = {}
+        for key in ["bg", "fg", "sel", "kw", "kw2", "str", "comment", "num", "ident"]:
+            c_val = THEMES["Custom"].get(key, "")
+            e = QLineEdit(c_val)
+            self.custom_colors[key] = e
+            
+            lbl = QLabel()
+            lbl.setFixedSize(20, 20)
+            if QColor(c_val).isValid():
+                lbl.setStyleSheet(f"background-color: {c_val}; border: 1px solid #555; border-radius: 2px;")
+                
+            btn = QPushButton("Pick Color")
+            btn.clicked.connect(lambda checked, _e=e, _l=lbl: self._pick_color(_e, _l))
+            
+            w = QWidget()
+            l = QHBoxLayout(w)
+            l.setContentsMargins(0, 0, 0, 0)
+            l.addWidget(e)
+            l.addWidget(lbl)
+            l.addWidget(btn)
+            form_app.addRow(f"Custom {key.upper()}:", w)
         
         self.tabs.addTab(t_app, "Appearance")
         
@@ -3747,10 +3826,21 @@ class SettingsDialog(QDialog):
         for name, e in self.bind_edits.items():
             self.ide.key_map[name] = e.text().lower()
             
+
         # Apply Appearance
         font_family = self.cb_font.currentFont().family()
         font_size = self.spin_size.value()
         theme_name = self.cb_theme.currentText()
+        
+        for k, e in self.custom_colors.items():
+            THEMES["Custom"][k] = e.text()
+            
+        USER_SETTINGS["font_family"] = font_family
+        USER_SETTINGS["font_size"] = font_size
+        USER_SETTINGS["theme_name"] = theme_name
+        USER_SETTINGS["custom_theme"] = THEMES["Custom"]
+        save_user_settings(USER_SETTINGS)
+
         
         # Update Editor
         if hasattr(self.ide.tab_compile, 'editor'):
@@ -3758,10 +3848,7 @@ class SettingsDialog(QDialog):
             
         # Update Terminal
         if hasattr(self.ide.tab_compile, 'terminal'):
-            term_font = QFont(font_family, font_size)
-            term_font.setFixedPitch(True)
-            self.ide.tab_compile.terminal.term_log.setFont(term_font)
-            self.ide.tab_compile.terminal.term_input.setFont(term_font)
+            self.ide.tab_compile.terminal.update_appearance(font_family, font_size, THEMES[theme_name])
             
         self.accept()
 
