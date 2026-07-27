@@ -81,7 +81,7 @@ class SchematicBlock(QGraphicsRectItem):
             p.setPos(width - 5, ry)
             ry += 20
 
-def parse_and_draw_json(scene, json_path, target_module, mode):
+def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=400):
     scene.clear()
     try:
         with open(json_path, 'r') as f:
@@ -150,11 +150,11 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                 row_idx += 1
                 if row_idx >= max_rows:
                     row_idx = 0
-                    col_x += max_w_in_col + 400
+                    col_x += max_w_in_col + channel_spacing
                     col_y = 0
                     max_w_in_col = 0
                     
-            if row_idx != 0: col_x += max_w_in_col + 400
+            if row_idx != 0: col_x += max_w_in_col + channel_spacing
             
             in_boundary.setPos(0, 0)
             out_boundary.setPos(col_x + 100, 0)
@@ -406,6 +406,51 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             
             junctions = set()
             v_crossings = {}
+            if len(blocks) > 500:
+                import ctypes, os
+                class CSegment(ctypes.Structure):
+                    _fields_ = [("uid", ctypes.c_int), ("is_h", ctypes.c_int), 
+                                ("x1", ctypes.c_int), ("x2", ctypes.c_int), 
+                                ("y1", ctypes.c_int), ("y2", ctypes.c_int),
+                                ("x_min", ctypes.c_int), ("x_max", ctypes.c_int),
+                                ("y_min", ctypes.c_int), ("y_max", ctypes.c_int)]
+                class CRect(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_int), ("top", ctypes.c_int), 
+                                ("right", ctypes.c_int), ("bottom", ctypes.c_int)]
+                try:
+                    fast_router = ctypes.CDLL(os.path.join(os.path.dirname(__file__), "fast_router.so"))
+                    fast_router.space_out_channels_v.restype = ctypes.c_int
+                    fast_router.space_out_channels_h.restype = ctypes.c_int
+                    c_segs = (CSegment * len(segments))()
+                    for idx, s in enumerate(segments):
+                        c_segs[idx].uid = s['uid']
+                        c_segs[idx].is_h = 1 if s['type'] == 'H' else 0
+                        c_segs[idx].x1 = int(s.get('x1', s.get('x', 0)))
+                        c_segs[idx].x2 = int(s.get('x2', s.get('x', 0)))
+                        c_segs[idx].y1 = int(s.get('y1', s.get('y', 0)))
+                        c_segs[idx].y2 = int(s.get('y2', s.get('y', 0)))
+                        c_segs[idx].x_min = min(c_segs[idx].x1, c_segs[idx].x2)
+                        c_segs[idx].x_max = max(c_segs[idx].x1, c_segs[idx].x2)
+                        c_segs[idx].y_min = min(c_segs[idx].y1, c_segs[idx].y2)
+                        c_segs[idx].y_max = max(c_segs[idx].y1, c_segs[idx].y2)
+                    c_rects = (CRect * len(all_blocks))()
+                    for idx, b in enumerate(all_blocks):
+                        br = b.sceneBoundingRect()
+                        c_rects[idx].left = int(br.left())
+                        c_rects[idx].top = int(br.top())
+                        c_rects[idx].right = int(br.right())
+                        c_rects[idx].bottom = int(br.bottom())
+                    fail_v = fast_router.space_out_channels_v(c_segs, len(segments), c_rects, len(all_blocks))
+                    fail_h = fast_router.space_out_channels_h(c_segs, len(segments), c_rects, len(all_blocks))
+                    if fail_v or fail_h:
+                        print(f"[ROUTER] Collision detected! Re-routing with spacing {channel_spacing + 400}...")
+                        return parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing + 400)
+                    for idx, s in enumerate(segments):
+                        if s['type'] == 'H': s['y'] = c_segs[idx].y1
+                        else: s['x'] = c_segs[idx].x1
+                except Exception as e:
+                    print(f"Failed to run C router: {e}")
+
             if len(blocks) <= 500:
                 for h in h_segs:
                     for v in v_segs:

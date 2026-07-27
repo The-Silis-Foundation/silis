@@ -63,7 +63,8 @@ int check_keepout_h(int ty, int x_min, int x_max, Rect* rects, int num_rects) {
     return 0;
 }
 
-void space_out_channels_v(Segment* segs, int num_segs, Rect* rects, int num_rects) {
+int space_out_channels_v(Segment* segs, int num_segs, Rect* rects, int num_rects) {
+    int failure = 0;
     for (int iter = 0; iter < 3; iter++) {
         for (int i = 0; i < num_segs; i++) {
             for (int j = i + 1; j < num_segs; j++) {
@@ -79,7 +80,7 @@ void space_out_channels_v(Segment* segs, int num_segs, Rect* rects, int num_rect
                         int old_x = segs[j].x1;
                         int safe_x = old_x;
                         
-                        for (int step = 1; step < 40; step++) {
+                        for (int step = 1; step < 200; step++) {
                             int shift = (step % 2 != 0) ? ((step / 2) + 1) * 16 : -(step / 2) * 16;
                             int tx = old_x + shift;
                             
@@ -90,6 +91,7 @@ void space_out_channels_v(Segment* segs, int num_segs, Rect* rects, int num_rect
                                 }
                             }
                         }
+                        if (safe_x == old_x) failure = 1;
                         segs[j].x1 = safe_x;
                         segs[j].x2 = safe_x;
                     }
@@ -97,9 +99,11 @@ void space_out_channels_v(Segment* segs, int num_segs, Rect* rects, int num_rect
             }
         }
     }
+    return failure;
 }
 
-void space_out_channels_h(Segment* segs, int num_segs, Rect* rects, int num_rects) {
+int space_out_channels_h(Segment* segs, int num_segs, Rect* rects, int num_rects) {
+    int failure = 0;
     for (int iter = 0; iter < 3; iter++) {
         for (int i = 0; i < num_segs; i++) {
             for (int j = i + 1; j < num_segs; j++) {
@@ -115,7 +119,7 @@ void space_out_channels_h(Segment* segs, int num_segs, Rect* rects, int num_rect
                         int old_y = segs[j].y1;
                         int safe_y = old_y;
                         
-                        for (int step = 1; step < 40; step++) {
+                        for (int step = 1; step < 200; step++) {
                             int shift = (step % 2 != 0) ? ((step / 2) + 1) * 20 : -(step / 2) * 20;
                             int ty = old_y + shift;
                             
@@ -126,6 +130,7 @@ void space_out_channels_h(Segment* segs, int num_segs, Rect* rects, int num_rect
                                 }
                             }
                         }
+                        if (safe_y == old_y) failure = 1;
                         segs[j].y1 = safe_y;
                         segs[j].y2 = safe_y;
                     }
@@ -133,4 +138,5 @@ void space_out_channels_h(Segment* segs, int num_segs, Rect* rects, int num_rect
             }
         }
     }
+    return failure;
 }
