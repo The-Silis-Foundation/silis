@@ -179,84 +179,221 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                                 else:
                                     if bit not in bit_sinks: bit_sinks[bit] = []
                                     bit_sinks[bit].append(anchor)
-            
-            # Precompute safe highway boundaries for collision avoidance
+                        # Precompute safe highway boundaries for collision avoidance
             min_y = min([b.sceneBoundingRect().top() for b in all_blocks])
             max_y = max([b.sceneBoundingRect().bottom() for b in all_blocks])
             
-            net_idx = 0
+            # --- STEP 1: Bus Bundling ---
+            route_groups = {} # key: (src, tuple(sinks)), value: list of bits
             for bit, src in bit_sources.items():
-                sinks = bit_sinks.get(bit, [])
-                net_idx += 1
+                sinks = tuple(bit_sinks.get(bit, []))
+                src_key = (src.x(), src.y())
+                sink_keys = tuple(sorted([(s.x(), s.y()) for s in sinks]))
+                route_key = (src_key, sink_keys)
+                if route_key not in route_groups:
+                    route_groups[route_key] = []
+                route_groups[route_key].append(bit)
                 
-                src_dot = QGraphicsEllipseItem(src.x() - 4, src.y() - 4, 8, 8)
+            # --- STEP 2: UID Assignment & Segment Generation ---
+            uid = 0
+            segments = []
+            
+            for (src_key, sink_keys), bits in route_groups.items():
+                uid += 1
+                src = QPointF(src_key[0], src_key[1])
+                sinks = [QPointF(sk[0], sk[1]) for sk in sink_keys]
+                
+                # Draw Pin Dots and Bus Labels
+                src_dot = QGraphicsEllipseItem(src.x() - 3, src.y() - 3, 6, 6)
                 src_dot.setBrush(QColor("#98c379")) 
                 src_dot.setPen(QPen(Qt.PenStyle.NoPen))
                 src_dot.setZValue(5)
                 scene.addItem(src_dot)
                 
-                # Trunk routing for fanout > 1
-                trunk_x = src.x() + 20 + (net_idx % 12) * 8
+                lbl = QGraphicsTextItem(f"[{len(bits)}]")
+                lbl.setFont(QFont("Consolas", 7))
+                lbl.setDefaultTextColor(QColor("#abb2bf"))
+                lbl.setPos(src.x() + 5, src.y() - 15)
+                lbl.setZValue(5)
+                scene.addItem(lbl)
                 
-                if len(sinks) > 1:
-                    j_dot = QGraphicsEllipseItem(trunk_x - 5, src.y() - 5, 10, 10)
-                    j_dot.setBrush(QColor("#e5c07b")) 
-                    j_dot.setPen(QPen(QColor("#ffffff"), 1.5))
-                    j_dot.setZValue(10)
-                    scene.addItem(j_dot)
-                    
-                    trunk_path = QPainterPath(src)
-                    trunk_path.lineTo(trunk_x, src.y())
-                    line = QGraphicsPathItem(trunk_path)
-                    line.setPen(QPen(QColor("#d19a66"), 2))
-                    line.setZValue(-1) 
-                    scene.addItem(line)
-
+                trunk_x = src.x() + 20 + (uid % 12) * 8
+                t_r = QRectF(QPointF(src.x(), src.y()), QPointF(trunk_x, src.y())).normalized().adjusted(0, -10, 10, 10)
+                for b in all_blocks:
+                    br = b.sceneBoundingRect()
+                    if br.intersects(t_r) and not br.contains(src):
+                        trunk_x = min(trunk_x, br.left() - 20)
+                        
+                segments.append({'uid': uid, 'type': 'H', 'x1': src.x(), 'x2': trunk_x, 'y': src.y()})
+                
                 for sink_idx, sink in enumerate(sinks):
-                    sink_dot = QGraphicsEllipseItem(sink.x() - 4, sink.y() - 4, 8, 8)
-                    sink_dot.setBrush(QColor("#98c379"))
+                    sink_dot = QGraphicsEllipseItem(sink.x() - 3, sink.y() - 3, 6, 6)
+                    sink_dot.setBrush(QColor("#98c379")) 
                     sink_dot.setPen(QPen(Qt.PenStyle.NoPen))
                     sink_dot.setZValue(5)
                     scene.addItem(sink_dot)
                     
-                    start_pt = QPointF(trunk_x, src.y()) if len(sinks) > 1 else src
-                    path = QPainterPath(start_pt)
-                    
-                    # Vertical track for this specific sink branch
-                    vertical_track_x = ((start_pt.x() + sink.x()) / 2) + ((net_idx % 8) - 4) * 12 + (sink_idx * 6)
+                    vt_x = ((trunk_x + sink.x()) / 2) + ((uid % 8) - 4) * 12 + (sink_idx * 6)
                     
                     def collides(r_x1, r_y1, r_x2, r_y2):
                         r = QRectF(QPointF(r_x1, r_y1), QPointF(r_x2, r_y2)).normalized().adjusted(-15, -15, 15, 15)
                         for b in all_blocks:
-                            brect = b.sceneBoundingRect()
-                            if brect.intersects(r):
-                                if not brect.contains(src) and not brect.contains(sink):
-                                    return True
+                            if b.sceneBoundingRect().intersects(r) and not b.sceneBoundingRect().contains(src) and not b.sceneBoundingRect().contains(sink):
+                                return True
                         return False
-
-                    if not collides(start_pt.x(), start_pt.y(), vertical_track_x, start_pt.y()) and \
-                       not collides(vertical_track_x, start_pt.y(), vertical_track_x, sink.y()) and \
-                       not collides(vertical_track_x, sink.y(), sink.x(), sink.y()):
                         
-                        path.lineTo(vertical_track_x, start_pt.y())
-                        path.lineTo(vertical_track_x, sink.y())
-                        path.lineTo(sink)
+                    if not collides(trunk_x, src.y(), vt_x, src.y()) and not collides(vt_x, src.y(), vt_x, sink.y()) and not collides(vt_x, sink.y(), sink.x(), sink.y()):
+                        segments.append({'uid': uid, 'type': 'H', 'x1': trunk_x, 'x2': vt_x, 'y': src.y()})
+                        segments.append({'uid': uid, 'type': 'V', 'x': vt_x, 'y1': src.y(), 'y2': sink.y()})
+                        segments.append({'uid': uid, 'type': 'H', 'x1': vt_x, 'x2': sink.x(), 'y': sink.y()})
                     else:
-                        # Safe Highway Route above or below all blocks
-                        highway_y = min_y - 40 - (net_idx % 12) * 15 if (net_idx % 2 == 0) else max_y + 40 + (net_idx % 12) * 15
-                        acc_x1 = trunk_x + 10 + (sink_idx * 5) if len(sinks) > 1 else src.x() + 20 + (net_idx % 5) * 8
+                        acc_x1 = trunk_x + 10 + (sink_idx * 5)
                         acc_x2 = sink.x() - 20 - (sink_idx * 5)
                         
-                        path.lineTo(acc_x1, start_pt.y())
-                        path.lineTo(acc_x1, highway_y)
-                        path.lineTo(acc_x2, highway_y)
-                        path.lineTo(acc_x2, sink.y())
-                        path.lineTo(sink)
+                        highway_up = min_y - 60 - (uid % 15)*20
+                        highway_down = max_y + 60 + (uid % 15)*20
                         
+                        def collides_v(x, y1, y2, ignore_pt):
+                            r = QRectF(QPointF(x, y1), QPointF(x, y2)).normalized().adjusted(-20, -20, 20, 20)
+                            for b in all_blocks:
+                                br = b.sceneBoundingRect()
+                                if br.intersects(r) and not br.contains(ignore_pt): return True
+                            return False
+                            
+                        chosen_highway = highway_down
+                        for _ in range(25):
+                            up_safe = not collides_v(acc_x1, src.y(), highway_up, src) and not collides_v(acc_x2, sink.y(), highway_up, sink)
+                            down_safe = not collides_v(acc_x1, src.y(), highway_down, src) and not collides_v(acc_x2, sink.y(), highway_down, sink)
+                            
+                            if up_safe:
+                                chosen_highway = highway_up
+                                break
+                            elif down_safe:
+                                chosen_highway = highway_down
+                                break
+                            else:
+                                acc_x1 += 30
+                                acc_x2 -= 30
+                                
+                        segments.append({'uid': uid, 'type': 'H', 'x1': trunk_x, 'x2': acc_x1, 'y': src.y()})
+                        segments.append({'uid': uid, 'type': 'V', 'x': acc_x1, 'y1': src.y(), 'y2': chosen_highway})
+                        segments.append({'uid': uid, 'type': 'H', 'x1': acc_x1, 'x2': acc_x2, 'y': chosen_highway})
+                        segments.append({'uid': uid, 'type': 'V', 'x': acc_x2, 'y1': chosen_highway, 'y2': sink.y()})
+                        segments.append({'uid': uid, 'type': 'H', 'x1': acc_x2, 'x2': sink.x(), 'y': sink.y()})
+                        
+            # --- POST-PROCESSING: Space out parallel overlapping lines (Different UIDs) ---
+            v_segs_all = [s for s in segments if s['type'] == 'V']
+            for _ in range(3):
+                for i in range(len(v_segs_all)):
+                    for j in range(i+1, len(v_segs_all)):
+                        v1, v2 = v_segs_all[i], v_segs_all[j]
+                        if v1['uid'] == v2['uid']: continue 
+                        
+                        y1_min, y1_max = min(v1['y1'], v1['y2']), max(v1['y1'], v1['y2'])
+                        y2_min, y2_max = min(v2['y1'], v2['y2']), max(v2['y1'], v2['y2'])
+                        
+                        if abs(v1['x'] - v2['x']) < 6:
+                            if max(y1_min, y2_min) < min(y1_max, y2_max):
+                                shift = 16
+                                old_x = v2['x']
+                                v2['x'] += shift
+                                for h in segments:
+                                    if h['type'] == 'H' and h['uid'] == v2['uid']:
+                                        if h['x1'] == old_x: h['x1'] = v2['x']
+                                        elif h['x2'] == old_x: h['x2'] = v2['x']
+
+            h_segs_all = [s for s in segments if s['type'] == 'H']
+            for _ in range(3):
+                for i in range(len(h_segs_all)):
+                    for j in range(i+1, len(h_segs_all)):
+                        h1, h2 = h_segs_all[i], h_segs_all[j]
+                        if h1['uid'] == h2['uid']: continue 
+                        
+                        x1_min, x1_max = min(h1['x1'], h1['x2']), max(h1['x1'], h1['x2'])
+                        x2_min, x2_max = min(h2['x1'], h2['x2']), max(h2['x1'], h2['x2'])
+                        
+                        if abs(h1['y'] - h2['y']) < 6:
+                            if max(x1_min, x2_min) < min(x1_max, x2_max):
+                                shift = 20
+                                old_y = h2['y']
+                                h2['y'] += shift
+                                for v in segments:
+                                    if v['type'] == 'V' and v['uid'] == h2['uid']:
+                                        if v['y1'] == old_y: v['y1'] = h2['y']
+                                        elif v['y2'] == old_y: v['y2'] = h2['y']
+
+            # --- STEP 3: Intersection Math (Junctions vs Crossings) ---
+            for seg in segments:
+                if seg['type'] == 'H':
+                    seg['x_min'] = min(seg['x1'], seg['x2'])
+                    seg['x_max'] = max(seg['x1'], seg['x2'])
+                else:
+                    seg['y_min'] = min(seg['y1'], seg['y2'])
+                    seg['y_max'] = max(seg['y1'], seg['y2'])
+                    
+            h_segs = [s for s in segments if s['type'] == 'H']
+            v_segs = [s for s in segments if s['type'] == 'V']
+            
+            junctions = set()
+            v_crossings = {}
+            
+            for h in h_segs:
+                for v in v_segs:
+                    if h['x_min'] <= v['x'] <= h['x_max'] and v['y_min'] <= h['y'] <= v['y_max']:
+                        ix, iy = v['x'], h['y']
+                        if h['uid'] == v['uid']:
+                            # Same UID = Junction! (Ignore corners)
+                            if not (ix == h['x1'] or ix == h['x2']) or not (iy == v['y1'] or iy == v['y2']):
+                                junctions.add((ix, iy))
+                        else:
+                            # Different UID = Crossing!
+                            v_idx = id(v)
+                            if v_idx not in v_crossings: v_crossings[v_idx] = []
+                            v_crossings[v_idx].append(iy)
+                            
+            # --- STEP 4: Drawing ---
+            for seg in segments:
+                if seg['type'] == 'H':
+                    path = QPainterPath(QPointF(seg['x1'], seg['y']))
+                    path.lineTo(seg['x2'], seg['y'])
                     line = QGraphicsPathItem(path)
                     line.setPen(QPen(QColor("#d19a66"), 2))
-                    line.setZValue(-1) 
+                    line.setZValue(-1)
                     scene.addItem(line)
+                else:
+                    cross_ys = v_crossings.get(id(seg), [])
+                    start_y, end_y = seg['y1'], seg['y2']
+                    direction = 1 if end_y > start_y else -1
+                    cross_ys.sort(key=lambda y: y * direction)
+                    
+                    path = QPainterPath(QPointF(seg['x'], start_y))
+                    for cy in cross_ys:
+                        if abs(cy - start_y) < 5 or abs(cy - end_y) < 5: continue
+                        hop_start = cy - (4 * direction)
+                        hop_end = cy + (4 * direction)
+                        
+                        path.lineTo(seg['x'], hop_start)
+                        path.moveTo(seg['x'], hop_end)
+                        
+                        gap_path = QPainterPath(QPointF(seg['x'], hop_start))
+                        gap_path.lineTo(seg['x'], hop_end)
+                        gap_line = QGraphicsPathItem(gap_path)
+                        gap_line.setPen(QPen(QColor("#e06c75"), 2.5))
+                        gap_line.setZValue(5)
+                        scene.addItem(gap_line)
+                        
+                    path.lineTo(seg['x'], end_y)
+                    line = QGraphicsPathItem(path)
+                    line.setPen(QPen(QColor("#d19a66"), 2))
+                    line.setZValue(-1)
+                    scene.addItem(line)
+                    
+            for jx, jy in junctions:
+                j_rect = QGraphicsRectItem(jx - 3, jy - 3, 6, 6)
+                j_rect.setBrush(QColor("#c678dd"))
+                j_rect.setPen(QPen(Qt.PenStyle.NoPen))
+                j_rect.setZValue(10)
+                scene.addItem(j_rect)
                     
     except Exception as e:
         print(f"Block Diagram Parse Error: {e}")
