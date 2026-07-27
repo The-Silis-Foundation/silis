@@ -99,7 +99,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             block.layout_ports()
             scene.addItem(block)
             
-        elif mode == "block":
+        elif mode in ("block", "gate"):
             cells = mod.get("cells", {})
             ports = mod.get("ports", {})
             
@@ -115,8 +115,10 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                     
             in_boundary.layout_ports()
             out_boundary.layout_ports()
-            scene.addItem(in_boundary)
-            scene.addItem(out_boundary)
+            if mode != "gate":
+                scene.addItem(in_boundary)
+            if mode != "gate":
+                scene.addItem(out_boundary)
             
             blocks = []
             for cell_name, cell_data in cells.items():
@@ -127,7 +129,8 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                     block.add_port(p_name, p_dir, is_left=(p_dir=="input"))
                 block.layout_ports()
                 blocks.append(block)
-                scene.addItem(block)
+                if mode != "gate":
+                    scene.addItem(block)
             
             in_boundary.setPos(0, 0)
             
@@ -213,6 +216,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                 segments = []
                 
                 def is_keepout_collision(x1, y1, x2, y2, ignore_pt=None, halo=20):
+                    if len(blocks) > 500: return False
                     sx1, sx2 = min(x1, x2), max(x1, x2)
                     sy1, sy2 = min(y1, y2), max(y1, y2)
                     
@@ -238,6 +242,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                     trunk_x = max(src.x() + 15, src.x() + 20 + (uid % 12) * 8)
                     t_r = QRectF(QPointF(src.x(), src.y()), QPointF(trunk_x, src.y())).normalized().adjusted(0, -10, 10, 10)
                     for b in all_blocks:
+                        if len(blocks) > 500: break
                         br = b.sceneBoundingRect()
                         if br.intersects(t_r) and not br.contains(src):
                             trunk_x = max(src.x() + 15, br.left() - 20)
@@ -297,7 +302,9 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                             segments.append({'uid': uid, 'type': 'H', 'x1': acc_x2, 'x2': sink.x(), 'y': sink.y(), 'is_pin': True})
                 
                 # --- COLLISION DETECTION & SHOVE LOGIC ---
+                if len(blocks) > 500: continue
                 # --- COLLISION DETECTION & SHOVE LOGIC ---
+                if len(blocks) > 500: continue
                 violation = False
                 for b in blocks:
                     br = b.sceneBoundingRect().adjusted(-5, -5, 5, 5)
@@ -328,61 +335,62 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                         break
 
             # --- POST-PROCESSING: Space out parallel overlapping channel lines ---
-            v_segs_all = [s for s in segments if s['type'] == 'V']
-            for _ in range(3):
-                for i in range(len(v_segs_all)):
-                    for j in range(i+1, len(v_segs_all)):
-                        v1, v2 = v_segs_all[i], v_segs_all[j]
-                        if v1['uid'] == v2['uid']: continue 
-                        
-                        y1_min, y1_max = min(v1['y1'], v1['y2']), max(v1['y1'], v1['y2'])
-                        y2_min, y2_max = min(v2['y1'], v2['y2']), max(v2['y1'], v2['y2'])
-                        
-                        if abs(v1['x'] - v2['x']) < 6:
-                            if max(y1_min, y2_min) < min(y1_max, y2_max):
-                                old_x = v2['x']
-                                safe_x = old_x
-                                for step in range(1, 40):
-                                    test_shift = (step // 2 + 1) * 16 if step % 2 != 0 else -(step // 2) * 16
-                                    tx = old_x + test_shift
-                                    if not is_keepout_collision(tx, y2_min, tx, y2_max, None, 15):
-                                        if abs(tx - v1['x']) >= 6:
-                                            safe_x = tx
-                                            break
-                                            
-                                v2['x'] = safe_x
-                                for h in segments:
-                                    if h['type'] == 'H' and h['uid'] == v2['uid']:
-                                        if h['x1'] == old_x: h['x1'] = v2['x']
-                                        elif h['x2'] == old_x: h['x2'] = v2['x']
+            if len(blocks) <= 500:
+                v_segs_all = [s for s in segments if s['type'] == 'V']
+                for _ in range(3):
+                    for i in range(len(v_segs_all)):
+                        for j in range(i+1, len(v_segs_all)):
+                            v1, v2 = v_segs_all[i], v_segs_all[j]
+                            if v1['uid'] == v2['uid']: continue 
+                            
+                            y1_min, y1_max = min(v1['y1'], v1['y2']), max(v1['y1'], v1['y2'])
+                            y2_min, y2_max = min(v2['y1'], v2['y2']), max(v2['y1'], v2['y2'])
+                            
+                            if abs(v1['x'] - v2['x']) < 6:
+                                if max(y1_min, y2_min) < min(y1_max, y2_max):
+                                    old_x = v2['x']
+                                    safe_x = old_x
+                                    for step in range(1, 40):
+                                        test_shift = (step // 2 + 1) * 16 if step % 2 != 0 else -(step // 2) * 16
+                                        tx = old_x + test_shift
+                                        if not is_keepout_collision(tx, y2_min, tx, y2_max, None, 15):
+                                            if abs(tx - v1['x']) >= 6:
+                                                safe_x = tx
+                                                break
+                                                
+                                    v2['x'] = safe_x
+                                    for h in segments:
+                                        if h['type'] == 'H' and h['uid'] == v2['uid']:
+                                            if h['x1'] == old_x: h['x1'] = v2['x']
+                                            elif h['x2'] == old_x: h['x2'] = v2['x']
 
-            h_segs_all = [s for s in segments if s['type'] == 'H' and not s.get('is_pin', False)]
-            for _ in range(3):
-                for i in range(len(h_segs_all)):
-                    for j in range(i+1, len(h_segs_all)):
-                        h1, h2 = h_segs_all[i], h_segs_all[j]
-                        if h1['uid'] == h2['uid']: continue 
-                        
-                        x1_min, x1_max = min(h1['x1'], h1['x2']), max(h1['x1'], h1['x2'])
-                        x2_min, x2_max = min(h2['x1'], h2['x2']), max(h2['x1'], h2['x2'])
-                        
-                        if abs(h1['y'] - h2['y']) < 6:
-                            if max(x1_min, x2_min) < min(x1_max, x2_max):
-                                old_y = h2['y']
-                                safe_y = old_y
-                                for step in range(1, 40):
-                                    test_shift = (step // 2 + 1) * 20 if step % 2 != 0 else -(step // 2) * 20
-                                    ty = old_y + test_shift
-                                    if not is_keepout_collision(x2_min, ty, x2_max, ty, None, 15):
-                                        if abs(ty - h1['y']) >= 6:
-                                            safe_y = ty
-                                            break
-                                            
-                                h2['y'] = safe_y
-                                for v in segments:
-                                    if v['type'] == 'V' and v['uid'] == h2['uid']:
-                                        if v['y1'] == old_y: v['y1'] = h2['y']
-                                        elif v['y2'] == old_y: v['y2'] = h2['y']
+                h_segs_all = [s for s in segments if s['type'] == 'H' and not s.get('is_pin', False)]
+                for _ in range(3):
+                    for i in range(len(h_segs_all)):
+                        for j in range(i+1, len(h_segs_all)):
+                            h1, h2 = h_segs_all[i], h_segs_all[j]
+                            if h1['uid'] == h2['uid']: continue 
+                            
+                            x1_min, x1_max = min(h1['x1'], h1['x2']), max(h1['x1'], h1['x2'])
+                            x2_min, x2_max = min(h2['x1'], h2['x2']), max(h2['x1'], h2['x2'])
+                            
+                            if abs(h1['y'] - h2['y']) < 6:
+                                if max(x1_min, x2_min) < min(x1_max, x2_max):
+                                    old_y = h2['y']
+                                    safe_y = old_y
+                                    for step in range(1, 40):
+                                        test_shift = (step // 2 + 1) * 20 if step % 2 != 0 else -(step // 2) * 20
+                                        ty = old_y + test_shift
+                                        if not is_keepout_collision(x2_min, ty, x2_max, ty, None, 15):
+                                            if abs(ty - h1['y']) >= 6:
+                                                safe_y = ty
+                                                break
+                                                
+                                    h2['y'] = safe_y
+                                    for v in segments:
+                                        if v['type'] == 'V' and v['uid'] == h2['uid']:
+                                            if v['y1'] == old_y: v['y1'] = h2['y']
+                                            elif v['y2'] == old_y: v['y2'] = h2['y']
 
             # --- STEP 3: Intersection & Junction Node Math ---
             for seg in segments:
@@ -398,22 +406,91 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             
             junctions = set()
             v_crossings = {}
-            for h in h_segs:
-                for v in v_segs:
-                    ix, iy = v['x'], h['y']
-                    if h['x_min'] <= ix <= h['x_max'] and v['y_min'] <= iy <= v['y_max']:
-                        if h['uid'] == v['uid']:
-                            # Same UID = Junction (if it's not a pure corner)
-                            if not (ix == h['x1'] or ix == h['x2']) or not (iy == v['y1'] or iy == v['y2']):
-                                junctions.add((ix, iy))
-                        else:
-                            # Different UID = Crossing (only if strictly inside)
-                            if h['x_min'] < ix < h['x_max'] and v['y_min'] < iy < v['y_max']:
-                                v_idx = id(v)
-                                if v_idx not in v_crossings: v_crossings[v_idx] = []
-                                v_crossings[v_idx].append(iy)
+            if len(blocks) <= 500:
+                for h in h_segs:
+                    for v in v_segs:
+                        ix, iy = v['x'], h['y']
+                        if h['x_min'] <= ix <= h['x_max'] and v['y_min'] <= iy <= v['y_max']:
+                            if h['uid'] == v['uid']:
+                                # Same UID = Junction (if it's not a pure corner)
+                                if not (ix == h['x1'] or ix == h['x2']) or not (iy == v['y1'] or iy == v['y2']):
+                                    junctions.add((ix, iy))
+                            else:
+                                # Different UID = Crossing (only if strictly inside)
+                                if h['x_min'] < ix < h['x_max'] and v['y_min'] < iy < v['y_max']:
+                                    v_idx = id(v)
+                                    if v_idx not in v_crossings: v_crossings[v_idx] = []
+                                    v_crossings[v_idx].append(iy)
                             
             # --- STEP 4: Render Graphics ---
+
+            if mode == "gate":
+                import xml.sax.saxutils as saxutils
+                import os
+                try:
+                    with open(os.path.expanduser("~/.silis_ui_settings.json")) as f:
+                        COLORS = json.load(f)
+                except:
+                    COLORS = {}
+                c_bg = COLORS.get("block", {}).get("background", "#282c34")
+                c_stroke = COLORS.get("nodes", {}).get("stroke", "#3e4451")
+                c_text_pri = COLORS.get("text", {}).get("primary", "#e6ebf2")
+                c_text_sec = COLORS.get("text", {}).get("secondary", "#abb2bf")
+                c_port_in = COLORS.get("port", {}).get("input", "#61afef")
+                c_port_out = COLORS.get("port", {}).get("output", "#e06c75")
+                c_wire = COLORS.get("routing", {}).get("wire", "#d19a66")
+                c_bus = COLORS.get("routing", {}).get("bus", "#e5c07b")
+                c_dot = COLORS.get("routing", {}).get("pin_dot", "#98c379")
+                c_junc = COLORS.get("routing", {}).get("junction", "#c678dd")
+                
+                svg_w = int(col_x + max_w_in_col + 500)
+                svg_h = int(max_y + 1000)
+                svg_out = [f'<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+                           f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" viewBox="0 0 {svg_w} {svg_h}" style="background-color: {c_bg}">']
+                
+                for seg in segments:
+                    is_bus = uid_is_bus.get(seg['uid'], False)
+                    color = c_bus if is_bus else c_wire
+                    width = 3.5 if is_bus else 2.0
+                    if seg['type'] == 'H':
+                        svg_out.append(f'<line x1="{seg["x1"]}" y1="{seg["y"]}" x2="{seg["x2"]}" y2="{seg["y"]}" stroke="{color}" stroke-width="{width}" stroke-linecap="round"/>')
+                    else:
+                        svg_out.append(f'<line x1="{seg["x"]}" y1="{seg["y1"]}" x2="{seg["x"]}" y2="{seg["y2"]}" stroke="{color}" stroke-width="{width}" stroke-linecap="round"/>')
+                        
+                for src_key, data in _src_map.items():
+                    svg_out.append(f'<circle cx="{src_key[0]}" cy="{src_key[1]}" r="3" fill="{c_dot}"/>')
+                    svg_out.append(f'<text x="{src_key[0]+5}" y="{src_key[1]-10}" fill="{c_text_sec}" font-family="Consolas" font-size="10">[{len(data["bits"])}]</text>')
+                    for s in data['sinks']:
+                        svg_out.append(f'<circle cx="{s[0]}" cy="{s[1]}" r="3" fill="{c_dot}"/>')
+                        
+                for jx, jy in junctions:
+                    svg_out.append(f'<rect x="{jx-3}" y="{jy-3}" width="6" height="6" fill="{c_junc}"/>')
+                    
+                for b in all_blocks:
+                    bx, by = b.pos().x(), b.pos().y()
+                    bw, bh = b.boundingRect().width(), b.boundingRect().height()
+                    
+                    svg_out.append(f'<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" fill="{c_bg}" stroke="{c_stroke}" stroke-width="2"/>')
+                    svg_out.append(f'<text x="{bx+bw/2}" y="{by+20}" fill="{c_text_pri}" font-family="Consolas" font-size="12" font-weight="bold" text-anchor="middle">{saxutils.escape(b.short_id)}</text>')
+                    
+                    for p_name, p in b.ports.items():
+                        px, py = p.pos().x(), p.pos().y()
+                        p_col = c_port_in if p.direction == "input" else c_port_out
+                        svg_out.append(f'<rect x="{bx+px}" y="{by+py}" width="10" height="10" fill="{p_col}"/>')
+                        
+                        lbl_x = bx + px + (15 if p.is_left else -5)
+                        anchor = "start" if p.is_left else "end"
+                        svg_out.append(f'<text x="{lbl_x}" y="{by+py+8}" fill="{c_text_sec}" font-family="Consolas" font-size="10" text-anchor="{anchor}">{saxutils.escape(p.name)}</text>')
+                
+                svg_out.append('</svg>')
+                svg_path = json_path.replace(".json", "_fast.svg")
+                with open(svg_path, 'w') as f:
+                    f.write("\n".join(svg_out))
+                    
+                from PyQt6.QtSvgWidgets import QGraphicsSvgItem
+                svg_item = QGraphicsSvgItem(svg_path)
+                scene.addItem(svg_item)
+                return
             # Render pin dots and labels based on the FINAL bit_sources
             _src_map_f = {}
             for bit, src in bit_sources.items():

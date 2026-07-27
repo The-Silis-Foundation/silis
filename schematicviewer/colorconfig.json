@@ -1,0 +1,20 @@
+{
+    "port": {
+        "input": "#61afef",
+        "output": "#e06c75",
+        "text": "#abb2bf"
+    },
+    "block": {
+        "background": "#282c34",
+        "border_top": "#61afef",
+        "border_normal": "#98c379",
+        "text": "#e5c07b"
+    },
+    "routing": {
+        "pin_dot": "#98c379",
+        "wire": "#d19a66",
+        "bus": "#e5c07b",
+        "crossing_hop": "#e06c75",
+        "junction": "#c678dd"
+    }
+}

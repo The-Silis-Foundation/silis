@@ -41,29 +41,23 @@ class YosysStructuralWorker(QThread):
                     self.log.emit("Yosys failed to generate JSON netlist.", "ERR")
                     
             elif self.mode == "gate":
-                if not shutil.which("dot"):
-                    self.log.emit("Graphviz ('dot') not found for Gate-Level render!", "ERR")
+                json_file = out_prefix + ".json"
+                if os.path.exists(json_file): os.remove(json_file)
+                
+                # Do not attempt to extract structural layout for PDK leaf cells
+                if self.target_module.startswith("sky130_") or self.target_module.startswith("\\sky130_") or "sc_hd" in self.target_module:
+                    self.log.emit(f"Skipping schematic for leaf cell: {self.target_module}", "SYS")
                     return
                 
-                dot_file = out_prefix + ".dot"
-                svg_file = out_prefix + ".svg"
-                if os.path.exists(dot_file): os.remove(dot_file)
-                
                 lib_cmd = f"-liberty {self.pdk_lib}" if self.pdk_lib else ""
-                yosys_script = f"{read_cmd} hierarchy -top {self.target_module}; synth; dfflibmap {lib_cmd}; abc {lib_cmd}; show -notitle -colors 2 -width -stretch -format dot -prefix {out_prefix}"
+                yosys_script = f"{read_cmd} hierarchy -top {self.target_module}; synth; dfflibmap {lib_cmd}; abc {lib_cmd}; write_json {json_file}"
                 
                 self.log.emit(f"Synthesizing GATE view for {self.target_module}...", "SYS")
                 subprocess.run(f"yosys -p '{yosys_script}'", shell=True, cwd=self.root, capture_output=True, text=True)
                 
-                if os.path.exists(dot_file):
-                    self.log.emit("Squarifying and Rendering SVG...", "SYS")
-                    # Use unflatten to break up massive horizontal parallel structures and force a squarer aspect ratio
-                    subprocess.run(f"unflatten -f -l 4 -c 4 {dot_file} | dot -Tsvg -o {svg_file} -Gsplines=ortho", shell=True, cwd=self.root)
-                    if os.path.exists(svg_file):
-                        self.finished.emit(svg_file, self.target_module, self.mode)
-                        self.log.emit(f"Gate Schematic Ready ({self.target_module}).", "SYS")
-                    else:
-                        self.log.emit("Graphviz failed to convert DOT to SVG.", "ERR")
+                if os.path.exists(json_file):
+                    self.finished.emit(json_file, self.target_module, self.mode)
+                    self.log.emit(f"Gate Schematic Ready ({self.target_module}).", "SYS")
                 else:
                     self.log.emit("Yosys failed to generate Gate graph.", "ERR")
                     
