@@ -196,17 +196,20 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                 min_y = min([b.sceneBoundingRect().top() for b in all_blocks])
                 max_y = max([b.sceneBoundingRect().bottom() for b in all_blocks])
                 
-                route_groups = {} 
+                _src_map = {}
                 for bit, src in bit_sources.items():
-                    sinks = tuple(bit_sinks.get(bit, []))
                     src_key = (src.x(), src.y())
-                    sink_keys = tuple(sorted([(s.x(), s.y()) for s in sinks]))
-                    route_key = (src_key, sink_keys)
-                    if route_key not in route_groups:
-                        route_groups[route_key] = []
-                    route_groups[route_key].append(bit)
+                    if src_key not in _src_map: _src_map[src_key] = {'sinks': set(), 'bits': []}
+                    _src_map[src_key]['bits'].append(bit)
+                    for s in bit_sinks.get(bit, []): _src_map[src_key]['sinks'].add((s.x(), s.y()))
+                    
+                route_groups = {}
+                for src_key, data in _src_map.items():
+                    sink_keys = tuple(sorted(list(data['sinks'])))
+                    route_groups[(src_key, sink_keys)] = data['bits']
                     
                 uid = 0
+                uid_is_bus = {}
                 segments = []
                 
                 def is_keepout_collision(x1, y1, x2, y2, ignore_pt=None, halo=20):
@@ -228,6 +231,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
 
                 for (src_key, sink_keys), bits in route_groups.items():
                     uid += 1
+                    uid_is_bus[uid] = len(bits) > 1
                     src = QPointF(src_key[0], src_key[1])
                     sinks = [QPointF(sk[0], sk[1]) for sk in sink_keys]
                     
@@ -247,7 +251,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                         direct_success = False
                         if max_vtx > min_vtx:
                             ideal_vtx = (trunk_x + sink.x()) / 2
-                            offset = ((uid % 8) - 4) * 12 + (sink_idx * 6)
+                            offset = ((uid % 8) - 4) * 16 + (sink_idx * 16)
                             vt_x = max(min_vtx, min(max_vtx, ideal_vtx + offset))
                             
                             c1 = is_keepout_collision(trunk_x, src.y(), vt_x, src.y(), src, 15)
@@ -261,8 +265,8 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                                 direct_success = True
 
                         if not direct_success:
-                            acc_x1 = max(src.x() + 15, trunk_x + 10 + (sink_idx * 5))
-                            acc_x2 = sink.x() - 20 - (sink_idx * 5)
+                            acc_x1 = max(src.x() + 15, trunk_x + 10 + (sink_idx * 16))
+                            acc_x2 = sink.x() - 20 - (sink_idx * 16)
                             if acc_x2 >= sink.x() - 15:
                                 acc_x2 = sink.x() - 15
                             
@@ -392,45 +396,36 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
             h_segs = [s for s in segments if s['type'] == 'H']
             v_segs = [s for s in segments if s['type'] == 'V']
             
-            point_degree = {}
-            for seg in segments:
-                uid = seg['uid']
-                if seg['type'] == 'H':
-                    y = seg['y']
-                    for x in (seg['x1'], seg['x2']):
-                        key = (uid, round(x, 1), round(y, 1))
-                        point_degree[key] = point_degree.get(key, 0) + 1
-                else:
-                    x = seg['x']
-                    for y in (seg['y1'], seg['y2']):
-                        key = (uid, round(x, 1), round(y, 1))
-                        point_degree[key] = point_degree.get(key, 0) + 1
-
             junctions = set()
-            for (uid, x, y), deg in point_degree.items():
-                if deg >= 3:
-                    junctions.add((x, y))
-
             v_crossings = {}
             for h in h_segs:
                 for v in v_segs:
-                    if h['uid'] != v['uid']:
-                        if h['x_min'] < v['x'] < h['x_max'] and v['y_min'] < h['y'] < v['y_max']:
-                            v_idx = id(v)
-                            if v_idx not in v_crossings: v_crossings[v_idx] = []
-                            v_crossings[v_idx].append(h['y'])
+                    ix, iy = v['x'], h['y']
+                    if h['x_min'] <= ix <= h['x_max'] and v['y_min'] <= iy <= v['y_max']:
+                        if h['uid'] == v['uid']:
+                            # Same UID = Junction (if it's not a pure corner)
+                            if not (ix == h['x1'] or ix == h['x2']) or not (iy == v['y1'] or iy == v['y2']):
+                                junctions.add((ix, iy))
+                        else:
+                            # Different UID = Crossing (only if strictly inside)
+                            if h['x_min'] < ix < h['x_max'] and v['y_min'] < iy < v['y_max']:
+                                v_idx = id(v)
+                                if v_idx not in v_crossings: v_crossings[v_idx] = []
+                                v_crossings[v_idx].append(iy)
                             
             # --- STEP 4: Render Graphics ---
             # Render pin dots and labels based on the FINAL bit_sources
-            route_groups_final = {} 
+            _src_map_f = {}
             for bit, src in bit_sources.items():
-                sinks = tuple(bit_sinks.get(bit, []))
                 src_key = (src.x(), src.y())
-                sink_keys = tuple(sorted([(s.x(), s.y()) for s in sinks]))
-                route_key = (src_key, sink_keys)
-                if route_key not in route_groups_final:
-                    route_groups_final[route_key] = []
-                route_groups_final[route_key].append(bit)
+                if src_key not in _src_map_f: _src_map_f[src_key] = {'sinks': set(), 'bits': []}
+                _src_map_f[src_key]['bits'].append(bit)
+                for s in bit_sinks.get(bit, []): _src_map_f[src_key]['sinks'].add((s.x(), s.y()))
+                
+            route_groups_final = {}
+            for src_key, data in _src_map_f.items():
+                sink_keys = tuple(sorted(list(data['sinks'])))
+                route_groups_final[(src_key, sink_keys)] = data['bits']
 
             for (src_key, sink_keys), bits in route_groups_final.items():
                 src = QPointF(src_key[0], src_key[1])
@@ -457,11 +452,15 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                     scene.addItem(sink_dot)
 
             for seg in segments:
+                is_bus = uid_is_bus.get(seg['uid'], False)
+                base_color = "#e5c07b" if is_bus else "#d19a66"
+                thickness = 3.5 if is_bus else 2.0
+                
                 if seg['type'] == 'H':
                     path = QPainterPath(QPointF(seg['x1'], seg['y']))
                     path.lineTo(seg['x2'], seg['y'])
                     line = QGraphicsPathItem(path)
-                    line.setPen(QPen(QColor("#d19a66"), 2))
+                    line.setPen(QPen(QColor(base_color), thickness))
                     line.setZValue(-1)
                     scene.addItem(line)
                 else:
@@ -482,13 +481,13 @@ def parse_and_draw_json(scene, json_path, target_module, mode):
                         gap_path = QPainterPath(QPointF(seg['x'], hop_start))
                         gap_path.lineTo(seg['x'], hop_end)
                         gap_line = QGraphicsPathItem(gap_path)
-                        gap_line.setPen(QPen(QColor("#e06c75"), 2.5))
+                        gap_line.setPen(QPen(QColor("#e06c75"), thickness + 0.5))
                         gap_line.setZValue(5)
                         scene.addItem(gap_line)
                         
                     path.lineTo(seg['x'], end_y)
                     line = QGraphicsPathItem(path)
-                    line.setPen(QPen(QColor("#d19a66"), 2))
+                    line.setPen(QPen(QColor(base_color), thickness))
                     line.setZValue(-1)
                     scene.addItem(line)
                     
