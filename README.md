@@ -3,20 +3,19 @@
 <div align="center">
 
 <pre>
- :::::::: ::::::::::: :::        :::  :::::::: 
-:+:    :+:    :+:     :+:        :+: :+:    :+: 
-+:+           +:+     +:+        +:+ +:+        
-+#++:++#++    +#+     +#+        +#+ +#++:++#++ 
-       +#+    +#+     +#+        +#+        +#+ 
-#+#    #+#    #+#     #+#        #+# #+#    #+# 
- ######## ########### ########## ###  ########  
+███████╗ ██╗ ██╗      ██╗ ███████╗
+██╔════╝ ██║ ██║      ██║ ██╔════╝
+███████╗ ██║ ██║      ██║ ███████╗
+╚════██║ ██║ ██║      ██║ ╚════██║
+███████║ ██║ ███████╗ ██║ ███████║
+╚══════╝ ╚═╝ ╚══════╝ ╚═╝ ╚══════╝
 </pre>
 
 </div>
 
 # SILIS — Silicon Scaffold
 
-### The Ultimate Keyboard-First, UX-First RTL to GDSII IDE
+### The Ultimate RTL to GDSII IDE
 
 <h4>
   <a href="#-features">Features</a>
@@ -41,16 +40,16 @@
 
 **Silis** is an **Integrated Development Environment (IDE)** for the RTL to GDSII flow built around speed, aesthetics, and raw efficiency. 
 
-By integrating powerful open-source EDA tools—including **Icarus Verilog**, **Yosys**, **OpenROAD**, **Netgen**, and **KLayout**—Silis bridges the gap between hardware definition and physical silicon. It wraps complex EDA flows in a **keyboard-first, UX-first** interface, making silicon design *easier for beginners* and *blisteringly fast for experts*. 
+By integrating powerful open-source EDA tools—including **Icarus Verilog**, **Yosys**, **OpenROAD**, **Netgen**, and **KLayout**—Silis bridges the gap between hardware definition and physical silicon. It wraps complex EDA flows in an intuitive interface, making silicon design easier for beginners and blisteringly fast for experts. 
 
 ---
 
-## ✨ Features
+## Features
 
-- 🖥️ **Pseudo-Terminal UI**: A fully integrated custom terminal with ghost auto-fill suggestions and command autocompletion to accelerate your workflow.
-- ⚡ **Blazing Fast C++ Renderers**: Seamless Pybind11 integration pushing thousands of standard cells, macros, and power rails into Qt6 at 60 FPS without breaking a sweat!
-- 🧩 **Built-in PDK Manager**: Integrated with Volare for zero-friction PDK downloading, corner selection, and configuration switching.
-- 👁️ **Visual Insights**:
+- **Pseudo-Terminal UI**: A fully integrated custom terminal with ghost auto-fill suggestions and command autocompletion to accelerate your workflow.
+- **Blazing Fast C++ Renderers**: Seamless Pybind11 integration pushing thousands of standard cells, macros, and power rails into Qt6 at 60 FPS without breaking a sweat!
+- **Built-in PDK Manager**: Integrated with Volare for zero-friction PDK downloading, corner selection, and configuration switching.
+- **Visual Insights**:
   - **Signal Peeker**: Built-in VCD waveform viewer.
   - **Schematic Viewer**: High-speed, C++ optimized JSON structural parsing of your Yosys logic netlists!
   - **Fast Layout Viewer**: A stunningly fast DEF visualizer mapping abstract chip structures, macros, pins, and heatmaps.
@@ -58,7 +57,7 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 
 ---
 
-## 🚀 What's Working Right Now?
+## What's Working Right Now?
 
 - [x] **Verilog Compilation**: One-click (`F1`) Icarus Verilog compilation.
 - [x] **Simulation**: Drop your dump VCD in your testbench, and Signal Peeker auto-detects and loads the waveform!
@@ -72,7 +71,7 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 
 ---
 
-## 🏗️ Project Structure
+## Project Structure
 
 Clean separation of concerns for active development:
 
@@ -83,11 +82,11 @@ Clean separation of concerns for active development:
 
 ---
 
-## ⚡ Development Status
+## Development Status
 
 **Current status**: Early development, experimental features only.
 
-> ⚠️ *Silis is evolving quickly. While the core features work flawlessly, breaking changes may occur in the `experimental` branch.*
+> *Silis is evolving quickly. While the core features work flawlessly, breaking changes may occur in the `experimental` branch.*
 
 ### Quick Links
 - [Stable Release: POCPNRV25](https://github.com/The-Silis-Foundation/silis/blob/main/experimental/POCPNRV25)
@@ -95,7 +94,7 @@ Clean separation of concerns for active development:
 
 ---
 
-## 🛡️ License & Contributions
+## License & Contributions
 
 **Silis** is proudly open-source under the **GNU Affero General Public License v3.0 (AGPL v3)**. 
 
