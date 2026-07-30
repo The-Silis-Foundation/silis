@@ -4,3 +4,19 @@ PLANS.md
 __pycache__/
 *.pyc
 *.pyo
+
+# C++ and Pybind11 build artifacts
+build/
+*.so
+*.o
+*.a
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# IDE and Project files
+.vscode/
+.idea/
+.DS_Store
+node_modules/

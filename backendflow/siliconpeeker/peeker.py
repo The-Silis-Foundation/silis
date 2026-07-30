@@ -5,6 +5,14 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from config import THEMES, USER_SETTINGS
+from PyQt6 import sip
+import sys
+
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fast_viewer", "build"))
+try:
+    import fast_layout_viewer
+except ImportError:
+    fast_layout_viewer = None
 
 
 class DEFParser:
@@ -541,3 +549,94 @@ class SiliconPeeker(QGraphicsView):
                 item.setBrush(brush)
                 item.setZValue(20)
                 self.scene.addItem(item)
+
+
+class FastSiliconPeeker(QWidget):
+    def __init__(self, ide=None, parent=None):
+        super().__init__(parent)
+        self.ide = ide
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0,0,0,0)
+        
+        self.def_data = None
+        self.current_def_path = None
+        self.last_mtime = 0
+        self.first_load = True
+        
+        self.show_insts = True
+        self.show_macros = True
+        self.show_pins = True
+        self.show_nets = True
+        self.show_power = True
+        
+        if fast_layout_viewer:
+            self.core = fast_layout_viewer.FastLayoutViewerCore()
+            ptr = self.core.get_ptr()
+            self.native_widget = sip.wrapinstance(ptr, QWidget)
+            self.layout.addWidget(self.native_widget)
+        else:
+            self.layout.addWidget(QLabel("FastLayoutViewer C++ extension not found!"))
+            self.core = None
+
+        self.auto_refresh_timer = QTimer(self)
+        self.auto_refresh_timer.timeout.connect(self.check_refresh)
+        self.auto_refresh_timer.start(1000)
+
+    def check_refresh(self):
+        if self.current_def_path and os.path.exists(self.current_def_path):
+            mtime = os.path.getmtime(self.current_def_path)
+            if mtime > self.last_mtime:
+                self.last_mtime = mtime
+                self.def_data = DEFParser(self.current_def_path, getattr(self, 'ide', None))
+                self.redraw()
+
+    def load_def_file(self, path):
+        self.current_def_path = path
+        if os.path.exists(path):
+            self.last_mtime = os.path.getmtime(path)
+            self.def_data = DEFParser(path, getattr(self, 'ide', None))
+            self.redraw()
+
+    def set_die_area(self, x1, y1, x2, y2):
+        if self.core:
+            self.core.set_core(x1, y1, x2 - x1, y2 - y1)
+
+    def redraw(self):
+        if not self.core or not self.def_data: return
+        self.core.clear()
+        
+        d = self.def_data.die_rect
+        self.core.set_core(d.x(), d.y(), d.width(), d.height())
+        
+        std_x, std_y, std_w, std_h = [], [], [], []
+        mac_x, mac_y, mac_w, mac_h = [], [], [], []
+        pin_x, pin_y, pin_w, pin_h = [], [], [], []
+        pwr_x, pwr_y, pwr_w, pwr_h = [], [], [], []
+        
+        for name, rect in self.def_data.comps_map.items():
+            is_macro = (rect.width() / self.def_data.dbu > 50)
+            
+            if is_macro and not self.show_macros: continue
+            if not is_macro and not self.show_insts: continue
+            
+            if is_macro:
+                mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
+            else:
+                std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
+                
+        if self.show_pins and hasattr(self.def_data, 'pins'):
+            for rect, name in self.def_data.pins:
+                pin_x.append(rect.x()); pin_y.append(rect.y()); pin_w.append(rect.width()); pin_h.append(rect.height())
+                
+        if self.show_power and hasattr(self.def_data, 'power_rails'):
+            for rect in self.def_data.power_rails:
+                pwr_x.append(rect.x()); pwr_y.append(rect.y()); pwr_w.append(rect.width()); pwr_h.append(rect.height())
+                
+        if std_x: self.core.load_std_cells(std_x, std_y, std_w, std_h)
+        if mac_x: self.core.load_macros(mac_x, mac_y, mac_w, mac_h)
+        if pin_x: self.core.load_pins(pin_x, pin_y, pin_w, pin_h)
+        if pwr_x: self.core.load_power(pwr_x, pwr_y, pwr_w, pwr_h)
+        
+        if self.first_load:
+            self.core.fit_in_view()
+            self.first_load = False

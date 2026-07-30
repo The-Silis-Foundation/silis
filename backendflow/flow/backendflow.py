@@ -7,12 +7,113 @@ import threading
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
-from backendflow.siliconpeeker.peeker import SiliconPeeker
+from backendflow.siliconpeeker.peeker import SiliconPeeker, FastSiliconPeeker
 from backendflow.gdsviewer.gds3d import GDS3DPort
 from pdkmanagers.pdk.manager import SSAForge
 from config import USER_SETTINGS, THEMES
 from editor.editor import ScintillaEditor
 from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
+
+class OpenROADPort(QWidget):
+    def __init__(self, parent_ide=None):
+        super().__init__(parent_ide)
+        self.ide = parent_ide
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        
+        self.header = QWidget()
+        self.header.setStyleSheet("border-bottom:1px solid gray;")
+        self.header.setFixedHeight(30)
+        h_lay = QHBoxLayout(self.header)
+        h_lay.setContentsMargins(5, 2, 5, 2)
+        
+        self.btn_close = QPushButton("Close Viewer")
+        self.btn_close.setStyleSheet("background:transparent; color:#f44336; border:1px solid #3a1a1a; font-weight:bold; border-radius:4px;")
+        self.btn_close.clicked.connect(self.kill_viewer)
+        self.btn_close.hide()
+        
+        _gl = QLabel("<b>OPENROAD C++ VIEWER (Embedded)</b>"); _gl.setStyleSheet("color:#00bcd4; font-size:10px;")
+        h_lay.addWidget(_gl)
+        h_lay.addStretch()
+        h_lay.addWidget(self.btn_close)
+        self.layout.addWidget(self.header)
+        
+        self.canvas = QWidget()
+        self.canvas_layout = QVBoxLayout(self.canvas)
+        self.layout.addWidget(self.canvas, stretch=1)
+        
+        self.btn_launch = QPushButton("🚀 Launch Embedded C++ Viewer")
+        self.btn_launch.setFixedSize(280, 50)
+        self.btn_launch.setStyleSheet("font-size: 14px; font-weight: bold; background: #2da44e; color: white; border-radius: 6px;")
+        self.btn_launch.clicked.connect(self.launch_viewer)
+        
+        self.info_label = QLabel("Click to natively embed the high-performance C++ executable via X11 WId.")
+        self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.info_label.setStyleSheet("color: #8b949e;")
+        
+        self.canvas_layout.addStretch()
+        self.canvas_layout.addWidget(self.btn_launch, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.canvas_layout.addWidget(self.info_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.canvas_layout.addStretch()
+        
+        self.proc = None
+        self.container = None
+
+    def launch_viewer(self):
+        viewer_exe = "/home/jerome/silis/backendflow/def_viewer_cpp/build/silis_def_viewer"
+        if not os.path.exists(viewer_exe):
+            self.info_label.setText("❌ Missing C++ Viewer Executable!")
+            self.info_label.setStyleSheet("color: #ff7b72;")
+            return
+
+        self.btn_launch.setEnabled(False)
+        self.btn_launch.setText("Binding to OS...")
+
+        self.proc = QProcess(self)
+        self.proc.readyReadStandardOutput.connect(self.handle_stdout)
+        self.proc.start(viewer_exe)
+
+    def handle_stdout(self):
+        if not self.proc: return
+        data = self.proc.readAllStandardOutput().data().decode()
+        for line in data.splitlines():
+            if line.startswith("WID:"):
+                wid = int(line.split(":")[1])
+                window = QWindow.fromWinId(wid)
+                
+                # Natively embed the external window into PyQt
+                self.container = QWidget.createWindowContainer(window, self)
+                
+                # Swap UI
+                self.btn_launch.hide()
+                self.info_label.hide()
+                self.btn_close.show()
+                
+                self.canvas_layout.addWidget(self.container)
+                break
+
+    def kill_viewer(self):
+        if self.proc:
+            self.proc.kill()
+            self.proc = None
+        if self.container:
+            self.container.deleteLater()
+            self.container = None
+            
+        subprocess.call(["killall", "-9", "silis_def_viewer"], stderr=subprocess.DEVNULL)
+        
+        self.btn_close.hide()
+        self.btn_launch.show()
+        self.btn_launch.setText("🚀 Launch Embedded C++ Viewer")
+        self.btn_launch.setEnabled(True)
+        self.info_label.show()
+        self.info_label.setText("Viewer closed. Ready to launch again.")
+        self.info_label.setStyleSheet("color: #8b949e;")
+
+    def closeEvent(self, event):
+        self.kill_viewer()
+        super().closeEvent(event)
 
 class BackendWidget(QWidget):
     def __init__(self, parent_ide):
@@ -24,6 +125,7 @@ class BackendWidget(QWidget):
         # --- 1. INITIALIZE WIDGETS ---
         self.peeker = SiliconPeeker()
         self.peeker.ide = self.ide
+        self.fast_peeker = FastSiliconPeeker(self.ide)
         self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
         
         self.def_ctrl_widget = QWidget()
@@ -100,9 +202,9 @@ class BackendWidget(QWidget):
         s_lay.addWidget(self.btn_load)
         h_lay.addWidget(sidebar)
         
-        # [NEW] Center Tabs mapped correctly
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
-        self.viz_tabs.addTab(self.peeker, "Live Floorplan (DEF)")
+        self.viz_tabs.addTab(self.fast_peeker, "Fast Layout Viewer")
+        self.viz_tabs.addTab(self.peeker, "Simplified Viewer")
         self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
         h_lay.addWidget(self.viz_tabs)
         
@@ -476,7 +578,9 @@ close $fp
             m = re.search(r'-die_area\s+"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"', cmd)
             if m:
                 x1, y1, x2, y2 = map(float, m.groups())
-                try: self.peeker.set_die_area(x1, y1, x2, y2)
+                try: 
+                    self.peeker.set_die_area(x1, y1, x2, y2)
+                    self.fast_peeker.set_die_area(x1, y1, x2, y2)
                 except: pass
         if self.proc and self.proc.state() == QProcess.ProcessState.Running: self.cmd_active = True; self.proc.write(f"{cmd}\n".encode())
         else: self.term_log.append(f"[ERR] Backend not running. Click Reset.")
@@ -486,8 +590,16 @@ close $fp
             self.peeker.show_insts = self.chk_inst.isChecked(); self.peeker.show_pins = self.chk_pins.isChecked()
             self.peeker.show_macros = self.chk_macros.isChecked()
             self.peeker.show_nets = self.chk_nets.isChecked(); self.peeker.show_power = self.chk_power.isChecked()
-            if hasattr(self, 'btn_heat'): self.peeker.show_heatmap = self.btn_heat.isChecked()
+            
+            self.fast_peeker.show_insts = self.chk_inst.isChecked(); self.fast_peeker.show_pins = self.chk_pins.isChecked()
+            self.fast_peeker.show_macros = self.chk_macros.isChecked()
+            self.fast_peeker.show_nets = self.chk_nets.isChecked(); self.fast_peeker.show_power = self.chk_power.isChecked()
+            
+            if hasattr(self, 'btn_heat'): 
+                self.peeker.show_heatmap = self.btn_heat.isChecked()
+                
             self.peeker.redraw()
+            self.fast_peeker.redraw()
         except: pass
     
     def load_routed_design(self):
@@ -495,7 +607,11 @@ close $fp
         def_path = os.path.join(proj_root, "results", "final_routed.def")
         if os.path.exists(def_path): 
             self.term_log.append(f"[SYS] Loading Routed Design from: {def_path}")
-            self.peeker.load_def_file(def_path); self.chk_nets.setChecked(True); self.peeker.show_nets = True; self.peeker.redraw(); self.viz_tabs.setCurrentIndex(0)
+            self.peeker.load_def_file(def_path); self.fast_peeker.load_def_file(def_path)
+            self.chk_nets.setChecked(True)
+            self.peeker.show_nets = True; self.fast_peeker.show_nets = True
+            self.peeker.redraw(); self.fast_peeker.redraw()
+            self.viz_tabs.setCurrentIndex(0)
         else: self.term_log.append(f"[ERR] Routed file not found at: {def_path}")
 
     def launch_native_gui(self):
@@ -524,7 +640,9 @@ close $fp
     def force_refresh_view(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
-        if os.path.exists(def_path): self.peeker.load_def_file(def_path)
+        if os.path.exists(def_path): 
+            self.peeker.load_def_file(def_path)
+            self.fast_peeker.load_def_file(def_path)
 
     def load_checkpoint(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")

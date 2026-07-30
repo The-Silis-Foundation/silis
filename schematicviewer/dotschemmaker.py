@@ -20,7 +20,14 @@ class YosysStructuralWorker(QThread):
             self.log.emit("Yosys not found!", "ERR")
             return
 
-        read_cmd = "".join([f"read_verilog {s}; " for s in self.src_files])
+        read_cmd = ""
+        for s in self.src_files:
+            if s.endswith(".sv"):
+                read_cmd += f"read_verilog -sv {s}; "
+            elif s.endswith(".vhd") or s.endswith(".vhdl"):
+                read_cmd += f"ghdl {s} -e {self.target_module}; "
+            else:
+                read_cmd += f"read_verilog {s}; "
         os.makedirs(os.path.join(self.root, "results"), exist_ok=True)
         out_prefix = os.path.join(self.root, "results", f"schem_{self.target_module}_{self.mode}")
         
@@ -32,13 +39,13 @@ class YosysStructuralWorker(QThread):
                 yosys_script = f"{read_cmd} hierarchy -top {self.target_module}; prep; write_json {json_file}"
                 
                 self.log.emit(f"Extracting structural JSON for {self.target_module}...", "SYS")
-                subprocess.run(f"yosys -p '{yosys_script}'", shell=True, cwd=self.root, capture_output=True, text=True)
+                res = subprocess.run(f"yosys -p '{yosys_script}'", shell=True, cwd=self.root, capture_output=True, text=True)
                 
                 if os.path.exists(json_file):
                     self.finished.emit(json_file, self.target_module, self.mode)
                     self.log.emit(f"Block Diagram Ready ({self.target_module}).", "SYS")
                 else:
-                    self.log.emit("Yosys failed to generate JSON netlist.", "ERR")
+                    self.log.emit(f"Yosys failed to generate JSON netlist. Error:\n{res.stderr}", "ERR")
                     
             elif self.mode == "gate":
                 json_file = out_prefix + ".json"
@@ -53,13 +60,13 @@ class YosysStructuralWorker(QThread):
                 yosys_script = f"{read_cmd} hierarchy -top {self.target_module}; synth; dfflibmap {lib_cmd}; abc {lib_cmd}; write_json {json_file}"
                 
                 self.log.emit(f"Synthesizing GATE view for {self.target_module}...", "SYS")
-                subprocess.run(f"yosys -p '{yosys_script}'", shell=True, cwd=self.root, capture_output=True, text=True)
+                res = subprocess.run(f"yosys -p '{yosys_script}'", shell=True, cwd=self.root, capture_output=True, text=True)
                 
                 if os.path.exists(json_file):
                     self.finished.emit(json_file, self.target_module, self.mode)
                     self.log.emit(f"Gate Schematic Ready ({self.target_module}).", "SYS")
                 else:
-                    self.log.emit("Yosys failed to generate Gate graph.", "ERR")
+                    self.log.emit(f"Yosys failed to generate JSON netlist. Error:\n{res.stderr}", "ERR")
                     
         except Exception as e:
             self.log.emit(f"Schematic Engine Crash: {e}", "ERR")

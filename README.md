@@ -1,66 +1,115 @@
-<h1 align="center"><b>SILIS - Silicon Scaffold</b></h1>
-<p align="center">
-    <a href="https://www.gnu.org/licenses/agpl-3.0"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License: AGPL v3"/></a>
-    <a href="https://github.com/JeromeAntonyRobin/silis"><img src="https://img.shields.io/badge/Status-Experimental-orange.svg" alt="Status: Experimental"/></a>
+<div align="center">
+
+<div align="center">
+
+<pre>
+ :::::::: ::::::::::: :::        :::  :::::::: 
+:+:    :+:    :+:     :+:        :+: :+:    :+: 
++:+           +:+     +:+        +:+ +:+        
++#++:++#++    +#+     +#+        +#+ +#++:++#++ 
+       +#+    +#+     +#+        +#+        +#+ 
+#+#    #+#    #+#     #+#        #+# #+#    #+# 
+ ######## ########### ########## ###  ########  
+</pre>
+
+</div>
+
+# SILIS — Silicon Scaffold
+
+### The Ultimate Keyboard-First, UX-First RTL to GDSII IDE
+
+<h4>
+  <a href="#-features">Features</a>
+  ·
+  <a href="#-development-status">Status</a>
+  ·
+  <a href="#-whats-working">Capabilities</a>
+  ·
+  <a href="#-project-structure">Architecture</a>
+</h4>
+
+<p>
+  <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
+  <img alt="Status" src="https://img.shields.io/badge/Status-Experimental-orange.svg?style=for-the-badge&logo=rocket&logoColor=white">
+  <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
+  <img alt="Powered By" src="https://img.shields.io/badge/Engine-PyQt6%20%7C%20C++-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
 </p>
 
-silis is an **integrated development environment (IDE)** for RTL to GDSII flow based and built upon several open-source softwares including **Icarus Verilog, Yosys, OpenROAD, Netgen, KLayout** and custom scripts that make the silicon design flow **easier for beginners and faster for experts** due to its **keyboard-first, UX-first approach**.
-
-silis aims to perform all ASIC design steps from RTL design to GDSII generation.
-
-silis is available under the **GNU Affero General Public License v3.0 (AGPL v3)**. It is meant to be used, forked, and modified. **The source code is open and will remain available even after application releases—feel free to modify it to your needs and your workflow.**
+</div>
 
 ---
 
-# Still In Development!
+**Silis** is an **Integrated Development Environment (IDE)** for the RTL to GDSII flow built around speed, aesthetics, and raw efficiency. 
 
-## [Click Here](https://github.com/The-Silis-Foundation/silis/blob/main/experimental/POCPNRV25) to use the latest stable version
+By integrating powerful open-source EDA tools—including **Icarus Verilog**, **Yosys**, **OpenROAD**, **Netgen**, and **KLayout**—Silis bridges the gap between hardware definition and physical silicon. It wraps complex EDA flows in a **keyboard-first, UX-first** interface, making silicon design *easier for beginners* and *blisteringly fast for experts*. 
+
+---
+
+## ✨ Features
+
+- 🖥️ **Pseudo-Terminal UI**: A fully integrated custom terminal with ghost auto-fill suggestions and command autocompletion to accelerate your workflow.
+- ⚡ **Blazing Fast C++ Renderers**: Seamless Pybind11 integration pushing thousands of standard cells, macros, and power rails into Qt6 at 60 FPS without breaking a sweat!
+- 🧩 **Built-in PDK Manager**: Integrated with Volare for zero-friction PDK downloading, corner selection, and configuration switching.
+- 👁️ **Visual Insights**:
+  - **Signal Peeker**: Built-in VCD waveform viewer.
+  - **Schematic Viewer**: High-speed, C++ optimized JSON structural parsing of your Yosys logic netlists!
+  - **Fast Layout Viewer**: A stunningly fast DEF visualizer mapping abstract chip structures, macros, pins, and heatmaps.
+  - **GDS3D View**: Spawn an interactive 3D cross-section window of your physical silicon over your IDE!
+
+---
+
+## 🚀 What's Working Right Now?
+
+- [x] **Verilog Compilation**: One-click (`F1`) Icarus Verilog compilation.
+- [x] **Simulation**: Drop your dump VCD in your testbench, and Signal Peeker auto-detects and loads the waveform!
+- [x] **Schematic Generation**: Multi-layered graph extraction ranging from hierarchical blocks down to gate-level structural views.
+- [x] **Synthesis**: Seamless Yosys + ABC integration.
+- [x] **Analysis**: Automatic post-synthesis reports mapping power, area, timing, and cell utilization.
+- [x] **Placement & Routing**: End-to-end routing workflows.
+- [x] **GDSII Generation**: Generating physical layout GDS files with Magic.
+- [x] **Fast Layout Rendering**: Custom C++ engine rendering OpenROAD DEF files in real-time.
+- [ ] **RAM Black-boxing**: *Coming soon via OpenRAM integration!*
+
+---
+
+## 🏗️ Project Structure
+
+Clean separation of concerns for active development:
+
+- `prime/` - Production-ready, stable codebase *(Coming soon)*
+- `experimental/` - Where the magic happens. Working features under active iteration.
+- `dev_*/` - Personal developer playgrounds.
+- `reference/` - Core documentation and boilerplate examples.
+
+---
+
+## ⚡ Development Status
 
 **Current status**: Early development, experimental features only.
 
-**Latest stable**: Check `experimental/by_JeromeAntonyRobin` for the latest "Reference Build".
+> ⚠️ *Silis is evolving quickly. While the core features work flawlessly, breaking changes may occur in the `experimental` branch.*
 
-## What works right now
-- [x] **Verilog Compilation**: complie codes with f1 using icarus verilog.
-- [x] **Psuedo-Terminal**: Works flawlessly, ghost autofill suggestions and command suggestions (front-end only, backend coming soon!)
-- [x] **Waveform Viewer**: in-built wavefrom viewer called signal peeker that automatically detects .vcd files (if given dump vcd in test bench)
-- [x] **schematic Generation and viewer**: using graphviz as schematic engine
-- [x] **PDK Manager**: in built PDK manager with volare integration and customizable pdk corner selection and custom config
-- [x] **Synthesis**: Using Yosys and abc
-- [x] **Post-synthesis report generation**: report generation with power-area-timing informations, cell utilisations and more.
-- [x] **Placement and Routing**: works.
-- [x] **DEF file visualizer**: in-built DEF file visualizer called silisconpeeker, a lightwieght visualisation tool for abstract view of the chip structure, has layers and overlay features like heatmap (cell density)
-- [x] **GDS Generation**: using Magic.
-- [x] **inbuilt GDS viewer**: its slow. but works
-- [x] **GDS3D Integration**: spawns a GDS3D window over silis IDE window thats resized along with the silis IDE window ( buggy with wayland, usable tho ;) )
-- [ ] **RAM Black-boxing and placement**: using OenRAM, i guess..
+### Quick Links
+- [Stable Release: POCPNRV25](https://github.com/The-Silis-Foundation/silis/blob/main/experimental/POCPNRV25)
+- Check `experimental/by_JeromeAntonyRobin` for the latest cutting-edge reference builds!
 
-## Project structure
-- `prime/` - Production-ready code (when we have it)
-- `experimental/` - Working features, still rough
-- `dev_*/` - Personal dev playgrounds (ignore these)
-- `reference/` - Documentation and examples
+---
 
-## For contributors
-We're not ready for external contributions yet.
+## 🛡️ License & Contributions
 
-## Created by [Jerome Antony Robin](https://github.com/JeromeAntonyRobin)
+**Silis** is proudly open-source under the **GNU Affero General Public License v3.0 (AGPL v3)**. 
 
-## License
-**GNU Affero General Public License v3.0 (AGPL v3)**
+We believe silicon design tools should be accessible to everyone. The source code is open and will remain open. You are free to modify it for your own workflows!
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
-**Permissions:**
-* Commercial use
-* Modification
-* Distribution
-* Private use
+*Currently, we are not accepting external contributions as the architecture is still being heavily shaped.*
 
 **Conditions:**
-* **License and copyright notice**: Must be included in all copies.
-* **State changes**: You must state significant changes made to the software.
-* **Disclose Source**: Source code must be made available when distributing the software or **interacting with it over a network**.
-* **Same License**: Modifications must be released under the same AGPL v3 license.
+- **License and copyright notice** must be included in all copies.
+- Source code must be disclosed when distributing or interacting with it over a network.
+- All modifications must remain under the AGPL v3.
 
-&copy; 2026 The Silis Foundation
+<div align="center">
+  <br>
+  <b>Created by <a href="https://github.com/JeromeAntonyRobin">Jerome Antony Robin</a></b><br>
+  &copy; 2026 The Silis Foundation
+</div>

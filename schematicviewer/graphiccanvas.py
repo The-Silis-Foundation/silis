@@ -39,6 +39,9 @@ class SilisSchematic(QGraphicsView):
 
     def mousePressEvent(self, event):
         item = self.itemAt(event.pos())
+        while item and not isinstance(item, SchematicBlock):
+            item = item.parentItem()
+            
         if isinstance(item, SchematicBlock):
             module = item.data(0)
             if module and module != "BOUNDARY":
@@ -104,9 +107,19 @@ class SchematicTab(QWidget):
     def go_home(self):
         self.history_stack.clear()
         self.current_idx = -1
+        import json
         _, base = self.ide.get_context()
         if base:
-            self.on_module_clicked(base, force_mode="top")
+            top_mod = base
+            proj_root = self.ide.get_proj_root(base)
+            proj_file = os.path.join(proj_root, "silis.silisproj") if proj_root else None
+            if proj_file and os.path.exists(proj_file):
+                try:
+                    with open(proj_file, 'r') as f:
+                        top_mod = json.load(f).get("top_module", base)
+                        if not top_mod: top_mod = base
+                except: pass
+            self.on_module_clicked(top_mod, force_mode="top")
         else:
             self.ide.log_system("No Top Module found", "ERR")
 
@@ -131,7 +144,7 @@ class SchematicTab(QWidget):
             return
         if path.endswith(".svg"):
             self.view.load_svg(path)
-        elif path.endswith(".json"):
+        elif path.endswith(".json"):   # covers both .json and .hier.json
             self.view.load_json(path, module, mode)
 
     def toggle_mode(self):
@@ -169,7 +182,10 @@ class SchematicTab(QWidget):
         
         root = self.ide.prep_workspace(base) if base else proj_root
         
-        all_src = glob.glob(os.path.join(root, "source", "*.v")) + glob.glob(os.path.join(root, "source", "*.sv"))
+        all_src = glob.glob(os.path.join(root, "source", "*.v")) + \
+                  glob.glob(os.path.join(root, "source", "*.sv")) + \
+                  glob.glob(os.path.join(root, "source", "*.vhd")) + \
+                  glob.glob(os.path.join(root, "source", "*.vhdl"))
         src = [f for f in all_src if not any(x in os.path.basename(f).lower() for x in ["tb_", "_tb", "test_"])]
         
         if not src:

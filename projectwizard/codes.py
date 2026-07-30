@@ -84,10 +84,13 @@ class Page2Sources(QWizardPage):
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("[+] Add Existing Files")
         add_btn.clicked.connect(self.add_files)
+        add_folder_btn = QPushButton("[+] Add Folder")
+        add_folder_btn.clicked.connect(self.add_folder)
         new_btn = QPushButton("[+] Create New File")
         new_btn.clicked.connect(self.create_file)
         
         btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(add_folder_btn)
         btn_layout.addWidget(new_btn)
         layout.addLayout(btn_layout)
 
@@ -100,6 +103,14 @@ class Page2Sources(QWizardPage):
         files, _ = QFileDialog.getOpenFileNames(self, "Select RTL Files", "", "Verilog (*.v *.sv);;All Files (*)")
         for f in files:
             self.list_widget.addItem(f)
+
+    def add_folder(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Source Directory")
+        if dir_path:
+            for root, _, files in os.walk(dir_path):
+                for f in files:
+                    if f.endswith('.v') or f.endswith('.sv') or f.endswith('.vhd') or f.endswith('.vhdl'):
+                        self.list_widget.addItem(os.path.join(root, f))
 
     def create_file(self):
         from PyQt6.QtWidgets import QInputDialog
@@ -299,15 +310,24 @@ class Page6Summary(QWizardPage):
         
         modules = set()
         module_pattern = re.compile(r'\bmodule\s+([a-zA-Z_][a-zA-Z0-9_]*)\b')
+        entity_pattern = re.compile(r'\bentity\s+([a-zA-Z_][a-zA-Z0-9_]*)\b', re.IGNORECASE)
         for f in rtl_files:
             try:
-                with open(f, 'r', encoding='utf-8') as file:
-                    for _ in range(500):
+                with open(f, 'r', encoding='utf-8', errors='ignore') as file:
+                    for _ in range(1500):
                         line = file.readline()
                         if not line: break
-                        match = module_pattern.search(line)
-                        if match:
-                            modules.add(match.group(1))
+                        
+                        # Strip inline comments to avoid natural language matches
+                        line = line.split('//')[0].split('--')[0]
+                        
+                        match_m = module_pattern.search(line)
+                        if match_m:
+                            modules.add(match_m.group(1))
+                            
+                        match_e = entity_pattern.search(line)
+                        if match_e:
+                            modules.add(match_e.group(1))
             except Exception:
                 pass
         

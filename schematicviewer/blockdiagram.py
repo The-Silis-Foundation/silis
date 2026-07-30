@@ -2,6 +2,14 @@ import json
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fast_schem", "build"))
+try:
+    import fast_schem_parser
+except ImportError:
+    fast_schem_parser = None
 
 def clean_instance_name(name):
     if "/" in name or "\\" in name:
@@ -84,12 +92,15 @@ class SchematicBlock(QGraphicsRectItem):
 def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=400):
     scene.clear()
     try:
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-            
-        modules = data.get("modules", {})
-        if target_module not in modules: return
-        mod = modules[target_module]
+        if fast_schem_parser:
+            mod = fast_schem_parser.parse_target_module(json_path, target_module)
+            if not mod: return
+        else:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            modules = data.get("modules", {})
+            if target_module not in modules: return
+            mod = modules[target_module]
         
         if mode == "top":
             block = SchematicBlock(target_module, target_module, is_top=True)
@@ -175,7 +186,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=4
                     dir = p_data.get("direction", "input")
                     bits = p_data.get("bits", [])
                     for b in bits:
-                        if type(b) is int:
+                        if type(b) in (int, str):
                             if dir == "input": bit_sources[b] = in_boundary.ports[p_name].get_anchor()
                             else:
                                 if b not in bit_sinks: bit_sinks[b] = []
@@ -190,7 +201,7 @@ def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=4
                         if p_name in b.ports:
                             anchor = b.ports[p_name].get_anchor()
                             for bit in bits:
-                                if type(bit) is int:
+                                if type(bit) in (int, str):
                                     if dir == "output": bit_sources[bit] = anchor
                                     else:
                                         if bit not in bit_sinks: bit_sinks[bit] = []

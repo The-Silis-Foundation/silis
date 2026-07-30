@@ -500,7 +500,20 @@ class SilisIDE(QMainWindow):
                 self.backend_widget.save_checkpoint()
                 # Give it a moment to write (simple block)
                 self.backend_widget.proc.waitForReadyRead(3000) 
-        
+                
+        import os
+        import subprocess
+        try:
+            pid = os.getpid()
+            # Find all child processes using pgrep
+            out = subprocess.check_output(['pgrep', '-P', str(pid)]).decode('utf-8').strip()
+            for child_pid in out.split():
+                if child_pid:
+                    try:
+                        os.kill(int(child_pid), 9)
+                    except: pass
+        except: pass
+            
         event.accept()
 
     def reset_sk(self):
@@ -539,49 +552,24 @@ class SilisIDE(QMainWindow):
         if self.schem_running:
             self.log_system("Schematic generation in progress...", "WARN")
             return
-
-        self.log_system("Generating Schematic...")
-        _, base = self.get_context()
-        if not base: 
-            self.log_system("No Top Module found", "ERR"); return
-            
-        root = self.prep_workspace(base)
-        
-        # [FIX] Grab all files, BUT filter out testbenches
-        all_src = glob.glob(os.path.join(root, "source", "*.v")) + glob.glob(os.path.join(root, "source", "*.sv"))
-        
-        # Filter: Exclude files containing 'tb_', '_tb', or 'test_'
-        src = [f for f in all_src if not any(x in os.path.basename(f).lower() for x in ["tb_", "_tb", "test_"])]
-        
-        if not src:
-            self.log_system("No synthesis sources found (Check file naming).", "ERR")
-            return
-
-        # Lock UI
-        self.schem_running = True
-        self.tab_schem.btn_gen.setEnabled(False)
-        self.tab_schem.btn_gen.setText("Crunching...")
-        
-        self.worker = SchematicWorker(root, base, self.schem_engine, src)
-        self.worker.log.connect(self.log_system)
-        self.worker.finished.connect(self.on_schematic_done) 
-        self.worker.start()
-
-
-
-    def on_schematic_done(self, path):
-        # Unlock UI
-        self.schem_running = False
-        self.tab_schem.btn_gen.setEnabled(True)
-        self.tab_schem.btn_gen.setText("Generate Logic View")
-        self.tab_schem.view.load_schematic(path)
+        self.tab_schem.go_home()
 
     def run_synthesis_flow(self):
-        if not self.active_pdk: 
-            QMessageBox.warning(self, "Err", "Select PDK!"); return
-        _, base = self.get_context()
-        if not base: return
+        base = None
+        if hasattr(self, 'project_config') and self.project_config:
+            base = self.project_config.get("top_module")
+        if not base:
+            _, base = self.get_context()
+        
+        if not base: 
+            self.log_system("[ERR] Cannot determine top module for synthesis.")
+            return
+            
         root = self.prep_workspace(base)
+        if not self.active_pdk:
+            self.log_system("[ERR] No Active PDK selected.")
+            return
+            
         self.pdk_path = self.active_pdk['lib']
         self.run_synthesis_thread(root, base)
 
@@ -592,9 +580,29 @@ class SilisIDE(QMainWindow):
         self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
         v_net = f"netlist/{base}_netlist.v"
-        src_v = glob.glob(os.path.join(root, "source", "*.v"))
+        src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
+                glob.glob(os.path.join(root, "source", "*.sv")) + \
+                glob.glob(os.path.join(root, "source", "*.vhd")) + \
+                glob.glob(os.path.join(root, "source", "*.vhdl"))
         src_v = [s for s in src_v if "tb_" not in s]
-        read_cmd = f"read_verilog {' '.join(src_v)}" if src_v else ""
+        
+        vhdl_files = [s for s in src_v if s.endswith('.vhd') or s.endswith('.vhdl')]
+        vlog_files = [s for s in src_v if not (s.endswith('.vhd') or s.endswith('.vhdl'))]
+        
+        # Sort VHDL files: packages must be compiled first!
+        vhdl_files = sorted(vhdl_files, key=lambda x: 0 if any(k in os.path.basename(x).lower() for k in ['pack', 'pkg', 'type', 'const']) else 1)
+        
+        read_cmd = "plugin -i ghdl;\n" if vhdl_files else ""
+        if vhdl_files:
+            work_lib = os.path.basename(root)
+            if hasattr(self, 'project_config') and self.project_config:
+                work_lib = self.project_config.get("vhdl_work", self.project_config.get("project_name", work_lib))
+                # For NeoRV32 specifically, the VHDL library must be 'neorv32'
+                if "neorv32" in root.lower() or "neorv32" in work_lib.lower():
+                    work_lib = "neorv32"
+            read_cmd += f"ghdl --work={work_lib} {' '.join(vhdl_files)} -e {base};\n"
+        if vlog_files:
+            read_cmd += f"read_verilog {' '.join(vlog_files)};\n"
         
         # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
         # Note the 'tee -o reports/area.rpt' to save area stats to a file
@@ -665,7 +673,10 @@ class SilisIDE(QMainWindow):
         _, base = self.get_context()
         if not base: return
         root = self.prep_workspace(base)
-        src_v = glob.glob(os.path.join(root, "source", "*.v")) + glob.glob(os.path.join(root, "source", "*.sv"))
+        src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
+                glob.glob(os.path.join(root, "source", "*.sv")) + \
+                glob.glob(os.path.join(root, "source", "*.vhd")) + \
+                glob.glob(os.path.join(root, "source", "*.vhdl"))
         if not src_v: self.log_system("No source files!", "ERR"); return
         cmd = ["iverilog", "-g2012", "-o", f"{base}.out"] + src_v
         def task():
@@ -787,10 +798,12 @@ class SilisIDE(QMainWindow):
             with open(self.current_file, 'w') as f: f.write(self.tab_compile.editor.toPlainText())
             self.log_system(f"Saved {os.path.basename(self.current_file)}")
             self.lbl_proj.setText(os.path.basename(self.current_file))
+            if self.current_file.endswith(('.v', '.sv')):
+                self.tab_schem.invalidate_cache()
 
     def get_context(self):
         content = self.tab_compile.editor.toPlainText()
-        m = re.search(r'module\s+(\w+)', content)
+        m = re.search(r'(?:module|entity)\s+(\w+)', content, re.IGNORECASE)
         if not m: return None, None
         return m.group(1), m.group(1).replace("tb_", "").replace("_tb", "")
 
