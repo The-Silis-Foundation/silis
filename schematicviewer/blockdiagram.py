@@ -90,6 +90,13 @@ class SchematicBlock(QGraphicsRectItem):
             ry += 20
 
 def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=400):
+    is_fast = False
+    actual_fast_view = None
+    if not isinstance(scene, QGraphicsScene):
+        is_fast = True
+        actual_fast_view = scene
+        scene = QGraphicsScene()
+        
     scene.clear()
     try:
         if fast_schem_parser:
@@ -109,6 +116,9 @@ def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=4
                 block.add_port(port_name, dir, is_left=(dir=="input"))
             block.layout_ports()
             scene.addItem(block)
+            all_blocks = [block]
+            segments = []
+            junctions = []
             
         elif mode in ("block", "gate"):
             cells = mod.get("cells", {})
@@ -630,6 +640,86 @@ def parse_and_draw_json(scene, json_path, target_module, mode, channel_spacing=4
                 j_rect.setPen(QPen(Qt.PenStyle.NoPen))
                 j_rect.setZValue(10)
                 scene.addItem(j_rect)
+                
+        if is_fast and actual_fast_view:
+                b_x, b_y, b_w, b_h, b_names, b_types, b_tops = [], [], [], [], [], [], []
+                p_x, p_y, p_names, p_dirs, p_lefts = [], [], [], [], []
+                w_x1, w_y1, w_x2, w_y2, w_bus, w_gap = [], [], [], [], [], []
+                j_x, j_y = [], []
+                d_x, d_y, d_text = [], [], []
+                
+                # Add junctions
+                for jx, jy in junctions:
+                    j_x.append(jx)
+                    j_y.append(jy)
+                    
+                # Add route dots if in block mode
+                if mode in ("block", "gate"):
+                    for (src_key, sink_keys), bits in route_groups_final.items():
+                        d_x.append(src_key[0])
+                        d_y.append(src_key[1])
+                        d_text.append(f"[{len(bits)}]")
+                        for sk in sink_keys:
+                            d_x.append(sk[0])
+                            d_y.append(sk[1])
+                            d_text.append("")
+                
+                for b in all_blocks:
+                    b_x.append(b.pos().x())
+                    b_y.append(b.pos().y())
+                    b_w.append(b.boundingRect().width())
+                    b_h.append(b.boundingRect().height())
+                    b_names.append(b.short_id)
+                    b_types.append(b.type_name)
+                    b_tops.append(b.is_top)
+                    
+                    for p_name, p in b.ports.items():
+                        p_x.append(b.pos().x() + p.pos().x())
+                        p_y.append(b.pos().y() + p.pos().y())
+                        p_names.append(p.name)
+                        p_dirs.append(p.direction)
+                        p_lefts.append(p.is_left)
+                        
+                        
+                for seg in segments:
+                    is_bus = uid_is_bus.get(seg['uid'], False)
+                    if seg['type'] == 'H':
+                        w_x1.append(seg['x1']); w_y1.append(seg['y'])
+                        w_x2.append(seg['x2']); w_y2.append(seg['y'])
+                        w_bus.append(is_bus); w_gap.append(False)
+                    else:
+                        cross_ys = v_crossings.get(id(seg), [])
+                        start_y, end_y = seg['y1'], seg['y2']
+                        direction = 1 if end_y > start_y else -1
+                        cross_ys.sort(key=lambda y: y * direction)
+                        
+                        curr_y = start_y
+                        for cy in cross_ys:
+                            if abs(cy - start_y) < 5 or abs(cy - end_y) < 5: continue
+                            hop_start = cy - (4 * direction)
+                            hop_end = cy + (4 * direction)
+                            
+                            w_x1.append(seg['x']); w_y1.append(curr_y)
+                            w_x2.append(seg['x']); w_y2.append(hop_start)
+                            w_bus.append(is_bus); w_gap.append(False)
+                            
+                            w_x1.append(seg['x']); w_y1.append(hop_start)
+                            w_x2.append(seg['x']); w_y2.append(hop_end)
+                            w_bus.append(is_bus); w_gap.append(True)
+                            
+                            curr_y = hop_end
+                            
+                        w_x1.append(seg['x']); w_y1.append(curr_y)
+                        w_x2.append(seg['x']); w_y2.append(end_y)
+                        w_bus.append(is_bus); w_gap.append(False)
+                        
+                actual_fast_view.clear()
+                actual_fast_view.load_blocks(b_x, b_y, b_w, b_h, b_names, b_types, b_tops)
+                actual_fast_view.load_ports(p_x, p_y, p_names, p_dirs, p_lefts)
+                actual_fast_view.load_junctions(j_x, j_y)
+                actual_fast_view.load_dots(d_x, d_y, d_text)
+                actual_fast_view.load_wires(w_x1, w_y1, w_x2, w_y2, w_bus, w_gap)
+                actual_fast_view.fit_in_view()
                     
     except Exception as e:
         print(f"Block Diagram Parse Error: {e}")

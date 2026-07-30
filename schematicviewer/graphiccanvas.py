@@ -1,63 +1,92 @@
 import os
+import sys
 from PyQt6.QtWidgets import *
 from PyQt6.QtSvgWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from schematicviewer.blockdiagram import parse_and_draw_json, SchematicBlock
 
-class SilisSchematic(QGraphicsView):
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fast_schem_viewer", "build"))
+try:
+    import fast_schem_viewer
+except ImportError:
+    fast_schem_viewer = None
+
+from PyQt6 import sip
+
+class SilisSchematic(QWidget):
     module_clicked = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0,0,0,0)
         
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        self.stack = QStackedWidget(self)
         
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        # SVG View (Original)
+        self.svg_view = QGraphicsView()
+        self.svg_scene = QGraphicsScene(self)
+        self.svg_view.setScene(self.svg_scene)
+        self.svg_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.svg_view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.svg_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.svg_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Fast C++ View (New)
+        if fast_schem_viewer:
+            self.fast_view = fast_schem_viewer.FastSchematicViewerCore()
+            ptr = self.fast_view.get_ptr()
+            self.native_fast_view = sip.wrapinstance(ptr, QWidget)
+            self.native_fast_view.installEventFilter(self)
+            self.stack.addWidget(self.native_fast_view)
+        else:
+            self.fast_view = None
+            self.native_fast_view = QWidget() # Fallback
+            self.stack.addWidget(self.native_fast_view)
+            
+        self.stack.addWidget(self.svg_view)
+        self.layout.addWidget(self.stack)
+
+    def eventFilter(self, obj, event):
+        if obj == self.native_fast_view and event.type() == QEvent.Type.MouseButtonDblClick:
+            x, y = event.position().x(), event.position().y()
+            if hasattr(self.fast_view, 'hit_test'):
+                module = self.fast_view.hit_test(x, y)
+                if module and module != "BOUNDARY":
+                    self.module_clicked.emit(module)
+                    return True
+        return super().eventFilter(obj, event)
 
     def load_svg(self, path):
-        self.scene.clear()
+        self.stack.setCurrentWidget(self.svg_view)
+        self.svg_scene.clear()
         if not (os.path.exists(path) and path.endswith(".svg")): return
         item = QGraphicsSvgItem(path)
-        self.scene.addItem(item)
-        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self.svg_scene.addItem(item)
+        self.svg_view.fitInView(self.svg_scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def load_json(self, path, module, mode):
-        self.scene.clear()
-        if not (os.path.exists(path) and path.endswith(".json")): return
-        parse_and_draw_json(self.scene, path, module, mode)
-        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def mousePressEvent(self, event):
-        item = self.itemAt(event.pos())
-        while item and not isinstance(item, SchematicBlock):
-            item = item.parentItem()
-            
-        if isinstance(item, SchematicBlock):
-            module = item.data(0)
-            if module and module != "BOUNDARY":
-                self.module_clicked.emit(module)
-                return
-        super().mousePressEvent(event)
-
-    def wheelEvent(self, event):
-        factor = 1.15 if event.angleDelta().y() > 0 else 0.85
-        self.scale(factor, factor)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_0 or event.key() == Qt.Key.Key_F:
-            self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if fast_schem_viewer:
+            self.stack.setCurrentWidget(self.native_fast_view)
+            self.fast_view.clear()
+            if not (os.path.exists(path) and path.endswith(".json")): return
+            parse_and_draw_json(self.fast_view, path, module, mode)
         else:
-            super().keyPressEvent(event)
+            self.stack.setCurrentWidget(self.svg_view)
+            self.svg_scene.clear()
+            if not (os.path.exists(path) and path.endswith(".json")): return
+            parse_and_draw_json(self.svg_scene, path, module, mode)
+            self.svg_view.fitInView(self.svg_scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def fitInView(self, rect=None, mode=None):
+        if self.stack.currentWidget() == self.native_fast_view:
+            if hasattr(self.fast_view, 'fit_in_view'):
+                self.fast_view.fit_in_view()
+        else:
+            if not rect: rect = self.svg_scene.itemsBoundingRect()
+            self.svg_view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
 
 class SchematicTab(QWidget):
     def __init__(self, ide):
@@ -81,7 +110,7 @@ class SchematicTab(QWidget):
         self.btn_forward.clicked.connect(self.go_forward)
         self.btn_mode.clicked.connect(self.toggle_mode)
         self.btn_home.clicked.connect(self.go_home)
-        self.btn_fit.clicked.connect(lambda: self.view.fitInView(self.view.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio))
+        self.btn_fit.clicked.connect(lambda: self.view.fitInView())
         
         tb.addWidget(self.btn_back)
         tb.addWidget(self.btn_forward)
