@@ -20,6 +20,7 @@ PYBIND11_MODULE(schematic_engine, m) {
         .def("fit_in_view", &SchematicViewer::fit_in_view)
         .def("clear", &SchematicViewer::clear)
         .def("load_json", &SchematicViewer::load_json)
+        .def("set_theme", &SchematicViewer::set_theme)
         .def("get_ptr", [](SchematicViewer& self) {
             return reinterpret_cast<uintptr_t>(&self);
         });

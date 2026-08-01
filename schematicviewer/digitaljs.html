@@ -5,13 +5,22 @@
     <title>Silis Schematic Viewer (DigitalJS)</title>
     <link rel="stylesheet" href="web/schematic_webview.css">
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #1e1e1e; overflow: hidden; }
-        #toolbar { height: 35px; background: #333; color: #fff; }
-        #paper-container { height: calc(100% - 60px); width: 100%; }
-        #status { height: 25px; background: #222; color: #fff; }
+        :root {
+            --silis-bg: #1e1e2e;
+            --silis-fg: #cdd6f4;
+            --silis-margin-bg: #181825;
+            --silis-sel: #585b70;
+            --silis-kw: #cba6f7;
+            --silis-ident: #89b4fa;
+        }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: var(--silis-bg); color: var(--silis-fg); overflow: hidden; }
+        #toolbar { height: 35px; background: var(--silis-margin-bg); color: var(--silis-fg); border-bottom: 1px solid var(--silis-sel); }
+        #paper-container { height: calc(100% - 60px); width: 100%; background: var(--silis-bg); }
+        #status { height: 25px; background: var(--silis-margin-bg); color: var(--silis-fg); border-top: 1px solid var(--silis-sel); }
+        .joint-paper-scroller { background: var(--silis-bg) !important; }
     </style>
 </head>
-<body>
+<body class="vscode-dark">
 <div id="toolbar">
   <span id="breadcrumb"></span>
   <span id="toolbar-right">
@@ -44,25 +53,151 @@
     <script src="web/yosys_bridge.js"></script>
     <script src="web/schematic_webview.js"></script>
     <script>
+        function applyTheme(colors) {
+            if (!colors) return;
+            const root = document.documentElement;
+            // Set Silis CSS vars (used by our base stylesheet)
+            root.style.setProperty('--silis-bg', colors.bg);
+            root.style.setProperty('--silis-fg', colors.fg);
+            root.style.setProperty('--silis-margin-bg', colors.margin_bg);
+            root.style.setProperty('--silis-sel', colors.sel);
+            root.style.setProperty('--silis-kw', colors.kw);
+            root.style.setProperty('--silis-ident', colors.ident);
+            // Set VSCode CSS vars consumed by sv-pathfinder and DigitalJS
+            root.style.setProperty('--vscode-editor-background', colors.bg);
+            root.style.setProperty('--vscode-editor-foreground', colors.fg);
+            root.style.setProperty('--vscode-sideBar-background', colors.margin_bg);
+            root.style.setProperty('--vscode-editorWidget-background', colors.margin_bg);
+            root.style.setProperty('--vscode-editorWidget-border', colors.sel);
+            root.style.setProperty('--vscode-button-background', colors.ident);
+            root.style.setProperty('--vscode-button-hoverBackground', colors.kw);
+            root.style.setProperty('--vscode-button-foreground', colors.bg);
+            root.style.setProperty('--vscode-focusBorder', colors.kw);
+            root.style.setProperty('--vscode-textLink-foreground', colors.kw2);
+            root.style.setProperty('--vscode-panel-background', colors.bg);
+            root.style.setProperty('--vscode-panel-border', colors.sel);
+            // Force body/toolbar/status directly (overrides any inline defaults)
+            document.body.style.backgroundColor = colors.bg;
+            document.body.style.color = colors.fg;
+            const toolbar = document.getElementById('toolbar');
+            if (toolbar) { toolbar.style.background = colors.margin_bg; toolbar.style.color = colors.fg; toolbar.style.borderBottom = '1px solid ' + colors.sel; }
+            const status = document.getElementById('status');
+            if (status) { status.style.background = colors.margin_bg; status.style.color = colors.fg; }
+            
+            // Override hardcoded jointjs SVG colors
+            let styleId = 'silis-dynamic-theme';
+            let styleTag = document.getElementById(styleId);
+            if (!styleTag) {
+                styleTag = document.createElement('style');
+                styleTag.id = styleId;
+                document.head.appendChild(styleTag);
+            }
+            styleTag.innerHTML = `
+                .joint-paper-background { background-color: var(--silis-bg) !important; }
+                .joint-paper.joint-theme-dark { background-color: var(--silis-bg) !important; }
+                .joint-element .body { fill: var(--silis-margin-bg) !important; stroke: var(--silis-sel) !important; }
+                .joint-element text, .joint-element text.numvalue { fill: var(--silis-fg) !important; }
+                .joint-element foreignObject.tooltip body, div.wire_hover { background: var(--silis-bg) !important; color: var(--silis-fg) !important; border: 1px solid var(--silis-sel) !important; }
+                .joint-element path { stroke: var(--silis-sel) !important; }
+                .joint-element path.decor { fill: transparent !important; }
+            `;
+        }
+        window._silusTheme = null;
+        window._onThemeApply = null;
+
         function loadSchematic(b64str) {
             try {
                 const jsonStr = decodeURIComponent(escape(window.atob(b64str)));
                 const yosysData = JSON.parse(jsonStr);
                 
                 const digitaljsData = window.processYosys(yosysData, {});
+                if (!digitaljsData.devices && digitaljsData.subcircuits) {
+                    const keys = Object.keys(digitaljsData.subcircuits);
+                    if (keys.length > 0) {
+                        const topMod = digitaljsData.subcircuits[keys[0]];
+                        Object.assign(digitaljsData, topMod);
+                        delete digitaljsData.subcircuits[keys[0]];
+                    } else {
+                        digitaljsData.devices = {};
+                        digitaljsData.connectors = [];
+                    }
+                }
+                
+                // Fix for empty/blackbox subcircuits (like PDK cells) missing from definitions
+                if (!digitaljsData.subcircuits) digitaljsData.subcircuits = {};
+                function ensureSubcircuits(circ, modName) {
+                    if (!circ.devices) return;
+                    const yMod = yosysData.modules[modName] || {};
+                    const cells = yMod.cells || {};
+                    
+                    for (const [id, dev] of Object.entries(circ.devices)) {
+                        if (dev.type === 'Subcircuit' && !digitaljsData.subcircuits[dev.celltype]) {
+                            const subDef = { devices: {}, connectors: [] };
+                            digitaljsData.subcircuits[dev.celltype] = subDef;
+                            
+                            const cell = cells[dev.label] || cells[id] || {};
+                            const conns = cell.connections || {};
+                            const dirs = cell.port_directions || {};
+                            
+                            for (const [pname, pconn] of Object.entries(conns)) {
+                                const pdir = dirs[pname] || 'input';
+                                subDef.devices[pname] = {
+                                    type: (pdir === 'output' || pdir === 'out') ? 'Output' : 'Input',
+                                    net: pname,
+                                    order: Object.keys(subDef.devices).length,
+                                    bits: Array.isArray(pconn) ? pconn.length : 1
+                                };
+                            }
+                        }
+                    }
+                }
+                const topName = Object.keys(yosysData.modules || {})[0] || 'top';
+                ensureSubcircuits(digitaljsData, topName);
+                for (const [subName, sub] of Object.entries(digitaljsData.subcircuits)) {
+                    ensureSubcircuits(sub, subName);
+                }
+                
+                const moduleName = Object.keys(yosysData.modules || {})[0] || 'top';
                 window.postMessage({
                     type: 'loadSchematic',
                     circuit: digitaljsData,
-                    scopePath: "top",
-                    moduleName: "top",
+                    scopePath: moduleName,
+                    moduleName: moduleName,
                     hasParent: false,
                     overview: 'scrollbars',
                     spacing: 'comfortable'
                 }, '*');
+                // Re-apply theme after each schematic load
+                if (window._silusTheme) applyTheme(window._silusTheme);
             } catch (err) {
                 console.error("Failed to load schematic:", err);
             }
         }
+        
+        window.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            
+            // Zoom: +, =, NumpadAdd
+            if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+                document.getElementById('zoom-in').click();
+            } 
+            // Zoom: -, _, NumpadSubtract
+            else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+                document.getElementById('zoom-out').click();
+            } 
+            // Pan: Arrows (both normal and numpad usually map to ArrowUp/etc. when numlock is off, but we can also check codes)
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.code.startsWith('Numpad')) {
+                // Find the actual scroller element which might be created by joint.ui.PaperScroller
+                const scroller = document.querySelector('.joint-paper-scroller') || document.getElementById('paper-container');
+                if (scroller) {
+                    const step = 40;
+                    if (e.key === 'ArrowUp' || e.code === 'Numpad8') { scroller.scrollTop -= step; e.preventDefault(); }
+                    if (e.key === 'ArrowDown' || e.code === 'Numpad2') { scroller.scrollTop += step; e.preventDefault(); }
+                    if (e.key === 'ArrowLeft' || e.code === 'Numpad4') { scroller.scrollLeft -= step; e.preventDefault(); }
+                    if (e.key === 'ArrowRight' || e.code === 'Numpad6') { scroller.scrollLeft += step; e.preventDefault(); }
+                }
+            }
+        });
     </script>
 </body>
 </html>

@@ -91,6 +91,10 @@ class SchematicTab(QWidget):
         self.btn_home = QPushButton("Top Level")
         self.btn_fit = QPushButton("Fit")
         
+        self.cmb_instances = QComboBox()
+        self.cmb_instances.addItem("Select Instance...")
+        self.cmb_instances.activated.connect(self.on_instance_selected)
+        
         self.btn_back.clicked.connect(self.go_back)
         self.btn_forward.clicked.connect(self.go_forward)
         self.btn_mode.clicked.connect(self.toggle_mode)
@@ -101,6 +105,7 @@ class SchematicTab(QWidget):
         tb.addWidget(self.btn_forward)
         tb.addWidget(self.btn_mode)
         tb.addWidget(self.btn_home)
+        tb.addWidget(self.cmb_instances)
         tb.addWidget(self.btn_fit)
         tb.addStretch()
         
@@ -117,6 +122,12 @@ class SchematicTab(QWidget):
         if 0 <= self.current_idx < len(self.history_stack):
             mode = self.history_stack[self.current_idx]["mode"]
             self.btn_mode.setText("View: Gate-Level" if mode == "gate" else "View: Block")
+
+    def on_instance_selected(self, index):
+        if index <= 0: return
+        mod = self.cmb_instances.itemText(index)
+        self.cmb_instances.setCurrentIndex(0)
+        self.on_module_clicked(mod, force_mode="block")
 
     def go_home(self):
         self.history_stack.clear()
@@ -159,6 +170,44 @@ class SchematicTab(QWidget):
         if path.endswith(".svg"):
             self.view.load_svg(path)
         elif path.endswith(".json"):   # covers both .json and .hier.json
+            import json
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                
+                # Update instances dropdown
+                self.cmb_instances.blockSignals(True)
+                self.cmb_instances.clear()
+                self.cmb_instances.addItem("Select Instance...")
+                for mod_name, mod_data in data.get("modules", {}).items():
+                    for cell_name, cell_data in mod_data.get("cells", {}).items():
+                        cell_type = cell_data.get("type", "")
+                        if not cell_type.startswith("$"):
+                            self.cmb_instances.addItem(cell_type)
+                self.cmb_instances.blockSignals(False)
+                
+                # Apply current theme to WebEngine
+                if hasattr(self.view, 'fast_view') and self.view.fast_view is not None:
+                    try:
+                        from config import USER_SETTINGS
+                        theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
+                    except ImportError:
+                        theme_name = "Catppuccin Mocha"
+                        
+                    color_cfg = os.path.join(os.path.dirname(os.path.dirname(__file__)), "editor", "colorconfig.json")
+                    if os.path.exists(color_cfg):
+                        with open(color_cfg, 'r') as cf:
+                            all_themes = json.load(cf)
+                            colors = all_themes.get(theme_name)
+                            if not colors:
+                                colors = all_themes.get("Catppuccin Mocha", {})
+                        if colors:
+                            if hasattr(self.view.fast_view, 'set_theme'):
+                                self.view.fast_view.set_theme(json.dumps(colors))
+                            
+            except Exception as e:
+                print("Error parsing json for UI:", e)
+                
             self.view.load_json(path, module, mode)
 
     def toggle_mode(self):

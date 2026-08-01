@@ -7841,10 +7841,14 @@
           }
         }
         function connect_device(dname, cell, portmap) {
-          for (const [pname, pdir] of Object.entries(cell.port_directions)) {
+          const dirs = cell.port_directions || {};
+          const pnames = Object.keys(cell.connections || {});
+          for (const pname of pnames) {
+            const pdir = dirs[pname] || "input";
             const pconn = cell.connections[pname];
             switch (pdir) {
               case "input":
+              case "inout":
                 add_net_target(pconn, dname, portmap[pname]);
                 break;
               case "output":
@@ -7912,7 +7916,9 @@
           }
         }
         for (const [pname, port] of Object.entries(mod.ports)) {
+          if (!port || !port.bits) continue;
           const dir = port.direction == "input" ? "Input" : port.direction == "output" ? "Output" : void 0;
+          if (!dir) continue;
           const dname = add_device({
             type: dir,
             net: pname,
@@ -8493,8 +8499,17 @@
             connect_mem(dname, cell, dev);
           else if (cell.type == "$lut")
             connect_mem(dname, cell, dev);
-          else
-            throw Error("Invalid cell type: " + cell.type);
+          else {
+            const dynamic_portmap = {};
+            const dirs = cell.port_directions || {};
+            for (const pname of Object.keys(cell.connections || {})) {
+              const pdir = dirs[pname] || "input";
+              dynamic_portmap[pname] = pdir == "input" || pdir == "inout" || pdir == "in" ? { in: pname } : { out: pname };
+            }
+            dev.type = "Subcircuit";
+            dev.celltype = cell.type;
+            connect_device(dname, cell, dynamic_portmap);
+          }
         }
         for (const [nbits, net] of nets.entries()) {
           if (net.source !== void 0)

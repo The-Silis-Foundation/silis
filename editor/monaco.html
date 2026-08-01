@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        html, body, #container {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <script>
+        // All values below are injected at runtime by Python — do NOT hardcode any of these.
+        var MONACO_LOCAL = window.__MONACO_LOCAL__ || '';
+        var MONACO_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs';
+        var SILIS_THEME = window.__SILIS_THEME__ || null;
+        var SILIS_FONT_FAMILY = window.__SILIS_FONT_FAMILY__ || 'Consolas';
+        var SILIS_FONT_SIZE = window.__SILIS_FONT_SIZE__ || 13;
+        var SILIS_LANG = window.__SILIS_LANG__ || 'plaintext';
+
+        function loadMonaco(vsPath) {
+            var script = document.createElement('script');
+            script.src = vsPath + '/loader.js';
+            script.onload = function() {
+                require.config({ paths: { 'vs': vsPath } });
+                initEditor();
+            };
+            script.onerror = function() {
+                if (vsPath !== MONACO_CDN) {
+                    console.warn('Local Monaco not found, falling back to CDN...');
+                    loadMonaco(MONACO_CDN);
+                } else {
+                    document.getElementById('container').innerText = 'Monaco Editor failed to load.';
+                }
+            };
+            document.body.appendChild(script);
+        }
+
+        var editor;
+        function initEditor() {
+            require(['vs/editor/editor.main'], function() {
+                // Register custom Silis theme from colorconfig.json colors
+                var monacoThemeName = 'silis-theme';
+                var baseTheme = 'vs-dark';
+                var colors = SILIS_THEME;
+
+                if (colors) {
+                    // Detect if it's a dark or light theme by bg luminance
+                    var bg = colors.bg || '#1e1e1e';
+                    var r = parseInt(bg.slice(1,3),16), g = parseInt(bg.slice(3,5),16), b = parseInt(bg.slice(5,7),16);
+                    var lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+                    baseTheme = lum < 0.5 ? 'vs-dark' : 'vs';
+
+                    monaco.editor.defineTheme(monacoThemeName, {
+                        base: baseTheme,
+                        inherit: true,
+                        rules: [
+                            { token: '',            foreground: colors.fg.replace('#',''),   background: colors.bg.replace('#','') },
+                            { token: 'keyword',     foreground: colors.kw.replace('#',''),   fontStyle: 'bold' },
+                            { token: 'keyword.flow',foreground: colors.kw2.replace('#',''),  fontStyle: 'bold' },
+                            { token: 'string',      foreground: colors.str.replace('#','') },
+                            { token: 'comment',     foreground: colors.comment.replace('#',''), fontStyle: 'italic' },
+                            { token: 'number',      foreground: colors.num.replace('#','') },
+                            { token: 'identifier',  foreground: colors.ident.replace('#','') },
+                            { token: 'type',        foreground: colors.ident.replace('#','') },
+                            { token: 'variable',    foreground: colors.fg.replace('#','') },
+                        ],
+                        colors: {
+                            'editor.background':            colors.bg,
+                            'editor.foreground':            colors.fg,
+                            'editor.lineHighlightBackground': colors.sel,
+                            'editor.selectionBackground':   colors.sel,
+                            'editorLineNumber.foreground':  colors.margin_fg,
+                            'editorGutter.background':      colors.margin_bg,
+                            'editorCursor.foreground':      colors.fg,
+                            'editorWidget.background':      colors.margin_bg,
+                            'editorWidget.border':          colors.sel,
+                            'input.background':             colors.margin_bg,
+                            'input.foreground':             colors.fg,
+                            'focusBorder':                  colors.kw,
+                            'scrollbar.shadow':             colors.bg,
+                            'scrollbarSlider.background':   colors.sel + '88',
+                            'scrollbarSlider.hoverBackground': colors.sel,
+                        }
+                    });
+                } else {
+                    monacoThemeName = baseTheme;
+                }
+
+                editor = monaco.editor.create(document.getElementById('container'), {
+                    value: '',
+                    language: SILIS_LANG,
+                    theme: monacoThemeName,
+                    automaticLayout: true,
+                    fontFamily: SILIS_FONT_FAMILY,
+                    fontSize: SILIS_FONT_SIZE,
+                    fontLigatures: true,
+                    renderWhitespace: 'selection',
+                    minimap: { enabled: true },
+                    scrollBeyondLastLine: false,
+                    smoothScrolling: true,
+                    cursorBlinking: 'smooth',
+                    cursorSmoothCaretAnimation: 'on',
+                });
+
+                window.setText = function(text) {
+                    editor.setValue(decodeURIComponent(escape(atob(text))));
+                };
+                window.getText = function() {
+                    return editor.getValue();
+                };
+                window.setLanguage = function(lang) {
+                    monaco.editor.setModelLanguage(editor.getModel(), lang);
+                };
+                window.setTheme = function(theme) {
+                    monaco.editor.setTheme(theme);
+                };
+                window.setFont = function(family, size) {
+                    editor.updateOptions({ fontFamily: family, fontSize: size });
+                };
+            });
+        }
+
+        loadMonaco(MONACO_LOCAL || MONACO_CDN);
+    </script>
+</body>
+</html>

@@ -7,13 +7,20 @@ import re
 import datetime
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
-from terminal.terminal import HeaderFactory
+
 
 
 class ReportEngine:
     """Parses generated report files for robust metric extraction."""
 
-    FOOTER_ART = HeaderFactory.ASCII_ART
+    FOOTER_ART = """
+███████╗ ██╗ ██╗      ██╗ ███████╗
+██╔════╝ ██║ ██║      ██║ ██╔════╝
+███████╗ ██║ ██║      ██║ ███████╗
+╚════██║ ██║ ██║      ██║ ╚════██║
+███████║ ██║ ███████╗ ██║ ███████║
+╚══════╝ ╚═╝ ╚══════╝ ╚═╝ ╚══════╝
+    """
 
     @staticmethod
     def parse_files(report_dir):

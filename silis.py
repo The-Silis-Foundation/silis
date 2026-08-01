@@ -27,7 +27,7 @@ from PyQt6.QtGui import *
 # Importing extracted modules
 from config import THEMES, USER_SETTINGS, save_user_settings
 from editor.editor import CommandPalette, VSCodeEditorTabs, ScintillaEditor
-from terminal.terminal import HeaderFactory, VSCodeTerminalWidget
+from terminal.terminal import VSCodeTerminalWidget
 from pdkmanagers.pdk.manager import SSAForge, PDKManager, PDKSelector
 from pdkmanagers.volare import VolareManagerWidget
 from backendflow.siliconpeeker.peeker import DEFParser, SiliconPeeker
@@ -133,13 +133,10 @@ class CompileTab(QWidget):
         
         # ── VS Code-style terminal ──────────────────────────────────────────
         self.terminal = VSCodeTerminalWidget(self.ide)
-        self.mode_btn   = self.terminal.mode_btn    # kept for backward compat
-        self.term_input = self.terminal.term_input  # kept for backward compat
-        self.term_log   = self.terminal.term_log    # kept for backward compat
-        self.mode_btn.clicked.connect(self.ide.toggle_term_mode)
         self.right_split.addWidget(self.terminal)
         
         self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 4)
+        self.split.setSizes([1000, 9000])  # Make explorer pane take less space
         self.right_split.setStretchFactor(0, 8); self.right_split.setStretchFactor(1, 1)
         self.right_split.setSizes([8000, 2000])
 
@@ -465,9 +462,9 @@ class SilisIDE(QMainWindow):
                     self.tab_compile.editor.setFocus()
                 elif txt == self.key_map["focus_terminal"]: 
                     self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
-                    self.tab_compile.term_input.setFocus()
-                elif txt == self.key_map["term_toggle"]: 
-                    self.toggle_term_mode()
+                    self.tab_compile.terminal.setFocus()
+                elif txt == self.key_map["term_toggle"]:
+                    pass # term toggle removed
                 elif txt == 'e':
                     cmd = USER_SETTINGS.get("external_editor", "")
                     path = self.tab_compile.editor.current_file_path()
@@ -713,10 +710,7 @@ class SilisIDE(QMainWindow):
         dlg.exec()
     def log_system(self, msg, tag="SYS"):
         # ROUTE SYSTEM MESSAGES TO TAB 1 (Compile Tab)
-        color = "#00FFFF" if "ERR" not in tag else "#FF5555"
-        self.tab_compile.term_log.append(f'<span style="color:{color};">[{tag}] {msg}</span>')
-        self.tab_compile.term_log.verticalScrollBar().setValue(self.tab_compile.term_log.verticalScrollBar().maximum())
-
+        self.tab_compile.terminal.append_output(f"[{tag}] {msg}")
     def change_directory(self, path):
         if os.path.exists(path):
             os.chdir(path); self.cwd = os.getcwd(); self.tab_compile.explorer.set_cwd(self.cwd)
@@ -729,10 +723,7 @@ class SilisIDE(QMainWindow):
 
     def handle_terminal_input(self):
         """Legacy shim — real input now comes from VSCodeTerminalWidget via handle_terminal_cmd."""
-        cmd = self.tab_compile.term_input.text().strip()
-        self.tab_compile.term_input.clear()
-        if cmd:
-            self.handle_terminal_cmd(cmd)
+        pass
 
     def handle_terminal_cmd(self, cmd):
         """Called by VSCodeTerminalWidget after the user presses Enter."""
@@ -777,9 +768,6 @@ class SilisIDE(QMainWindow):
                 self.queue.put(("TERM_OUT", f"[ERR] {e}"))
         threading.Thread(target=_run, daemon=True).start()
 
-    def toggle_term_mode(self): 
-        self.term_mode = "SIM" if self.term_mode == "SHELL" else "SHELL"
-        self.tab_compile.mode_btn.setText(f"[{self.term_mode}]")
 
     def open_pdk_selector(self):
         dlg = PDKSelector(self.pdk_mgr, self)
@@ -859,8 +847,7 @@ class SilisIDE(QMainWindow):
 
             # [NEW] Route Backend-specific messages to Backend Terminal
             elif tag == "[BACKEND]":
-                self.backend_widget.term_log.append(content)
-                self.backend_widget.term_log.verticalScrollBar().setValue(self.backend_widget.term_log.verticalScrollBar().maximum())
+                self.backend_widget.append_output(content)
             elif tag == "[BACKEND_GDS_DONE]":
                 QMessageBox.information(self, "GDS Generation Complete", f"GDS layout successfully exported to:\n\n{content}")
 

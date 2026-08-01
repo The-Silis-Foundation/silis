@@ -13,11 +13,28 @@ SchematicViewer::SchematicViewer(QWidget* parent) : QWebEngineView(parent) {
 void SchematicViewer::on_load_finished(bool ok) {
     if (ok) {
         is_loaded = true;
+        if (!pending_theme.isEmpty()) {
+            QString js = QString("applyTheme(%1); window._silusTheme = %1;").arg(pending_theme);
+            page()->runJavaScript(js);
+            pending_theme.clear();
+        }
         if (!pending_json_b64.isEmpty()) {
             QString js = QString("loadSchematic('%1');").arg(pending_json_b64);
             page()->runJavaScript(js);
             pending_json_b64.clear();
         }
+    }
+}
+
+void SchematicViewer::set_theme(const std::string& colors_json) {
+    QString json_str = QString::fromStdString(colors_json);
+    // Cache in _silusTheme so JS re-applies after each schematic load
+    QString js_cache = QString("window._silusTheme = %1;").arg(json_str);
+    if (is_loaded) {
+        QString js = QString("applyTheme(%1); window._silusTheme = %1;").arg(json_str);
+        page()->runJavaScript(js);
+    } else {
+        pending_theme = json_str;
     }
 }
 

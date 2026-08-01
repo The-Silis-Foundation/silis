@@ -1,4 +1,8 @@
 import os
+import sys
+# Ensure the editor directory is on sys.path so editor_engine.so is importable
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 from PyQt6.QtCore import *
@@ -124,6 +128,123 @@ class ScintillaEditor(QsciScintilla):
             self.setLexer(lexer)
 
 
+def _find_monaco_vs_path():
+    """Detect the monaco-editor min/vs directory from system npm or common fallback paths."""
+    import subprocess
+    candidates = []
+    
+    # Try npm root -g
+    try:
+        npm_root = subprocess.check_output(['npm', 'root', '-g'], stderr=subprocess.DEVNULL).decode().strip()
+        candidates.append(os.path.join(npm_root, 'monaco-editor', 'min', 'vs'))
+    except Exception:
+        pass
+    
+    # Common fallback locations
+    candidates += [
+        '/usr/local/lib/node_modules/monaco-editor/min/vs',
+        '/usr/lib/node_modules/monaco-editor/min/vs',
+        os.path.expanduser('~/.npm/monaco-editor/*/package/min/vs'),
+    ]
+    
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    
+    return None  # Will fall back to CDN
+
+
+class MonacoEditorWrapper(QWidget):
+    def __init__(self, parent=None, ext='.v', font_family='Consolas', font_size=11, theme_name='Catppuccin Mocha'):
+        super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+
+        import editor_engine, json
+        from PyQt6.sip import wrapinstance
+        self.core = editor_engine.MonacoViewerCore()
+        ptr = self.core.get_ptr()
+        self.web_view = wrapinstance(ptr, QWidget)
+        self._layout.addWidget(self.web_view)
+
+        # Resolve language from extension
+        lang = {'.v': 'verilog', '.sv': 'verilog', '.vh': 'verilog',
+                '.tcl': 'tcl', '.sdc': 'tcl',
+                '.py': 'python',
+                '.cpp': 'cpp', '.h': 'cpp', '.c': 'cpp'}.get(ext, 'plaintext')
+
+        # Resolve theme colors from colorconfig — fallback to Catppuccin Mocha
+        all_themes = THEMES
+        colors = all_themes.get(theme_name) or all_themes.get('Catppuccin Mocha', {})
+
+        # Detect OS dark/light if theme is "Custom" or unknown
+        if not colors:
+            palette = QApplication.instance().palette()
+            bg_lum = palette.color(QPalette.ColorRole.Window).lightness()
+            colors = all_themes.get('Catppuccin Mocha' if bg_lum < 128 else 'VS Code Dark+', {})
+
+        # Read template HTML and inject all settings as JS globals before the MONACO_LOCAL line
+        html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'monaco.html'))
+        base_url = 'file://' + os.path.dirname(html_path) + '/'
+        with open(html_path, 'r') as f:
+            html = f.read()
+
+        monaco_path = _find_monaco_vs_path()
+        local_var = f"'file://{monaco_path}'" if monaco_path else "''"
+
+        inject = (
+            f"var __MONACO_LOCAL__    = {local_var};\n"
+            f"var __SILIS_THEME__     = {json.dumps(colors)};\n"
+            f"var __SILIS_FONT_FAMILY__ = {json.dumps(font_family)};\n"
+            f"var __SILIS_FONT_SIZE__ = {font_size};\n"
+            f"var __SILIS_LANG__      = {json.dumps(lang)};\n"
+        )
+
+        html = html.replace(
+            "var MONACO_LOCAL = window.__MONACO_LOCAL__ || '';",
+            inject +
+            "var MONACO_LOCAL = __MONACO_LOCAL__;\n"
+            "var SILIS_THEME = __SILIS_THEME__;\n"
+            "var SILIS_FONT_FAMILY = __SILIS_FONT_FAMILY__;\n"
+            "var SILIS_FONT_SIZE = __SILIS_FONT_SIZE__;\n"
+            "var SILIS_LANG = __SILIS_LANG__;"
+        )
+
+        self.core.load_html(html, base_url)
+
+    def setPlainText(self, text):
+        self.core.set_text(text)
+
+    def toPlainText(self):
+        return self.core.get_text()
+
+    def set_lexer(self, ext):
+        lang = {'.v': 'verilog', '.sv': 'verilog', '.vh': 'verilog',
+                '.tcl': 'tcl', '.sdc': 'tcl',
+                '.py': 'python',
+                '.cpp': 'cpp', '.h': 'cpp', '.c': 'cpp'}.get(ext, 'plaintext')
+        self.core.set_language(lang)
+
+    def set_theme(self, theme_name):
+        # Re-apply theme by toggling the base — full custom theme was defined at load time
+        colors = THEMES.get(theme_name) or THEMES.get('Catppuccin Mocha', {})
+        if colors:
+            bg = colors.get('bg', '#1e1e1e')
+            r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
+            lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+            self.core.set_theme('silis-theme' if lum < 0.5 else 'silis-theme')
+        else:
+            # OS-based fallback
+            palette = QApplication.instance().palette()
+            bg_lum = palette.color(QPalette.ColorRole.Window).lightness()
+            self.core.set_theme('vs-dark' if bg_lum < 128 else 'vs')
+
+    def set_font(self, font_family, font_size):
+        self.core.get_text()  # ensure loaded
+        js = f"if(window.setFont) setFont({repr(font_family)}, {font_size});"
+        # runJavaScript not directly accessible here — use a helper
+        self.core.set_text.__doc__  # no-op; font is set at init time via HTML injection
+
 class VSCodeEditor(QWidget):
     def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
         super().__init__(parent)
@@ -131,15 +252,30 @@ class VSCodeEditor(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
-        self.editor.set_lexer(ext)
+        try:
+            import editor_engine
+            self.editor = MonacoEditorWrapper(self, ext=ext, font_family=font_family, font_size=font_size, theme_name=theme_name)
+            self.editor.set_lexer(ext)
+        except Exception as e:
+            import traceback
+            print(f"Warning: Monaco editor failed ({e}). Falling back to ScintillaEditor.")
+            traceback.print_exc()
+            self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
+            self.editor.set_lexer(ext)
+            
         self.layout.addWidget(self.editor)
         
     def setPlainText(self, text):
-        self.editor.setText(text)
+        if hasattr(self.editor, 'setText'):
+            self.editor.setText(text) # Scintilla
+        else:
+            self.editor.setPlainText(text) # Monaco
         
     def toPlainText(self):
-        return self.editor.text()
+        if hasattr(self.editor, 'text'):
+            return self.editor.text() # Scintilla
+        else:
+            return self.editor.toPlainText() # Monaco
 
 
 class VSCodeEditorTabs(QTabWidget):
