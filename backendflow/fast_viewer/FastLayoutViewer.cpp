@@ -14,6 +14,7 @@ void FastLayoutViewer::clear() {
     macros_.clear();
     pins_.clear();
     power_.clear();
+    signals_.clear();
     core_rect_ = QRectF();
     update();
 }
@@ -63,6 +64,16 @@ void FastLayoutViewer::load_power(const std::vector<float>& x, const std::vector
     update();
 }
 
+void FastLayoutViewer::load_signals(const std::vector<float>& x1, const std::vector<float>& y1, 
+                                    const std::vector<float>& x2, const std::vector<float>& y2) {
+    size_t count = x1.size();
+    signals_.reserve(signals_.size() + count);
+    for (size_t i = 0; i < count; ++i) {
+        signals_.emplace_back(x1[i], y1[i], x2[i], y2[i]);
+    }
+    update();
+}
+
 void FastLayoutViewer::fit_in_view() {
     if (core_rect_.isNull() || core_rect_.width() == 0 || core_rect_.height() == 0) return;
     double scale_x = width() / (core_rect_.width() * 1.1);
@@ -95,25 +106,33 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     painter.setPen(pwr_pen);
     painter.setBrush(QColor(255, 170, 0, 150));
     painter.drawRects(power_.data(), power_.size());
+    
+    // Draw Signal Routes
+    if (!signals_.empty()) {
+        QPen sig_pen(QColor(65, 105, 225, 200)); // Royal Blue
+        sig_pen.setCosmetic(true);
+        painter.setPen(sig_pen);
+        painter.drawLines(signals_.data(), signals_.size());
+    }
 
     // Draw Standard Cells (Solid cyan-ish with dark border)
     QPen std_pen(QColor(0, 50, 100, 100));
     std_pen.setCosmetic(true);
     painter.setPen(std_pen);
-    painter.setBrush(QColor(76, 201, 240, 200));
+    painter.setBrush(QColor(76, 201, 240, 255));
     painter.drawRects(std_cells_.data(), std_cells_.size());
 
     // Draw Macros (Bright Orange/Red, solid)
     QPen macro_pen(QColor(255, 100, 50));
     macro_pen.setCosmetic(true);
     painter.setPen(macro_pen);
-    painter.setBrush(QColor(255, 120, 70, 200));
+    painter.setBrush(QColor(255, 120, 70, 255));
     painter.drawRects(macros_.data(), macros_.size());
     
     // Draw Pins
     QPen pin_pen(Qt::NoPen);
     painter.setPen(pin_pen);
-    painter.setBrush(QColor(255, 0, 0, 200));
+    painter.setBrush(QColor(255, 0, 0, 255));
     painter.drawRects(pins_.data(), pins_.size());
 }
 

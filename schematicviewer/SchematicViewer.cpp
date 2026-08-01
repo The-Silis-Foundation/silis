@@ -1,4 +1,4 @@
-#include "FastSchematicViewer.h"
+#include "SchematicViewer.h"
 #include <QPainter>
 #include <QWheelEvent>
 #include <QMouseEvent>
@@ -10,13 +10,13 @@
 #include <cmath>
 #include <iostream>
 
-FastSchematicViewer::FastSchematicViewer(QWidget* parent) 
+SchematicViewer::SchematicViewer(QWidget* parent) 
     : QWidget(parent), zoom_factor_(1.0), is_panning_(false) {
     setMouseTracking(true);
     setAttribute(Qt::WA_OpaquePaintEvent); // Skip default background drawing for speed
 }
 
-void FastSchematicViewer::clear() {
+void SchematicViewer::clear() {
     blocks_.clear();
     ports_.clear();
     wires_.clear();
@@ -26,7 +26,7 @@ void FastSchematicViewer::clear() {
     update();
 }
 
-void FastSchematicViewer::update_bounding_rect() {
+void SchematicViewer::update_bounding_rect() {
     if (blocks_.empty() && ports_.empty()) return;
     
     float min_x = 1e9, min_y = 1e9;
@@ -61,7 +61,7 @@ void FastSchematicViewer::update_bounding_rect() {
     bounding_rect_ = QRectF(QPointF(min_x, min_y), QPointF(max_x, max_y));
 }
 
-void FastSchematicViewer::load_blocks(const std::vector<float>& x, const std::vector<float>& y, 
+void SchematicViewer::load_blocks(const std::vector<float>& x, const std::vector<float>& y, 
                                      const std::vector<float>& w, const std::vector<float>& h,
                                      const std::vector<std::string>& names, const std::vector<std::string>& types,
                                      const std::vector<bool>& is_tops) {
@@ -74,7 +74,7 @@ void FastSchematicViewer::load_blocks(const std::vector<float>& x, const std::ve
     update();
 }
 
-void FastSchematicViewer::load_ports(const std::vector<float>& x, const std::vector<float>& y, 
+void SchematicViewer::load_ports(const std::vector<float>& x, const std::vector<float>& y, 
                                      const std::vector<std::string>& names, const std::vector<std::string>& directions,
                                      const std::vector<bool>& is_lefts) {
     size_t count = x.size();
@@ -86,7 +86,7 @@ void FastSchematicViewer::load_ports(const std::vector<float>& x, const std::vec
     update();
 }
 
-void FastSchematicViewer::load_wires(const std::vector<float>& x1, const std::vector<float>& y1, 
+void SchematicViewer::load_wires(const std::vector<float>& x1, const std::vector<float>& y1, 
                                      const std::vector<float>& x2, const std::vector<float>& y2,
                                      const std::vector<bool>& is_bus, const std::vector<bool>& is_gap) {
     size_t count = x1.size();
@@ -98,7 +98,7 @@ void FastSchematicViewer::load_wires(const std::vector<float>& x1, const std::ve
     update();
 }
 
-void FastSchematicViewer::load_junctions(const std::vector<float>& x, const std::vector<float>& y) {
+void SchematicViewer::load_junctions(const std::vector<float>& x, const std::vector<float>& y) {
     size_t count = x.size();
     junctions_.reserve(junctions_.size() + count);
     for (size_t i = 0; i < count; ++i) {
@@ -107,7 +107,7 @@ void FastSchematicViewer::load_junctions(const std::vector<float>& x, const std:
     update();
 }
 
-void FastSchematicViewer::load_dots(const std::vector<float>& x, const std::vector<float>& y,
+void SchematicViewer::load_dots(const std::vector<float>& x, const std::vector<float>& y,
                                     const std::vector<std::string>& text) {
     size_t count = x.size();
     dots_.reserve(dots_.size() + count);
@@ -117,7 +117,14 @@ void FastSchematicViewer::load_dots(const std::vector<float>& x, const std::vect
     update();
 }
 
-std::string FastSchematicViewer::hit_test(float x, float y) {
+#include "SchematicRouter.h"
+
+void SchematicViewer::load_json(const std::string& path, const std::string& module, const std::string& mode) {
+    SchematicRouter router(this);
+    router.parse_and_draw_json(path, module, mode);
+}
+
+std::string SchematicViewer::hit_test(float x, float y) {
     // x and y are viewport coordinates. Convert to scene coordinates.
     // wait, Python's hit_test usually gives the viewport coordinates.
     // We should map x, y to scene coordinates.
@@ -134,7 +141,7 @@ std::string FastSchematicViewer::hit_test(float x, float y) {
     return "";
 }
 
-void FastSchematicViewer::fit_in_view() {
+void SchematicViewer::fit_in_view() {
     if (bounding_rect_.isNull() || bounding_rect_.width() == 0 || bounding_rect_.height() == 0) return;
     double w = width();
     double h = height();
@@ -150,7 +157,7 @@ void FastSchematicViewer::fit_in_view() {
     update();
 }
 
-void FastSchematicViewer::paintEvent(QPaintEvent* event) {
+void SchematicViewer::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     // Dark schematic background
     painter.fillRect(rect(), QColor(25, 27, 33));
@@ -241,14 +248,14 @@ void FastSchematicViewer::paintEvent(QPaintEvent* event) {
     }
 }
 
-void FastSchematicViewer::wheelEvent(QWheelEvent* event) {
+void SchematicViewer::wheelEvent(QWheelEvent* event) {
     double angle = event->angleDelta().y();
     if (angle > 0) zoom_factor_ *= 1.15;
     else zoom_factor_ /= 1.15;
     update();
 }
 
-void FastSchematicViewer::mousePressEvent(QMouseEvent* event) {
+void SchematicViewer::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
         is_panning_ = true;
         last_mouse_pos_ = event->position();
@@ -256,7 +263,7 @@ void FastSchematicViewer::mousePressEvent(QMouseEvent* event) {
     }
 }
 
-void FastSchematicViewer::mouseMoveEvent(QMouseEvent* event) {
+void SchematicViewer::mouseMoveEvent(QMouseEvent* event) {
     if (is_panning_) {
         QPointF delta = event->position() - last_mouse_pos_;
         pan_offset_ += delta / zoom_factor_;
@@ -265,14 +272,14 @@ void FastSchematicViewer::mouseMoveEvent(QMouseEvent* event) {
     }
 }
 
-void FastSchematicViewer::mouseReleaseEvent(QMouseEvent* event) {
+void SchematicViewer::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
         is_panning_ = false;
         setCursor(Qt::ArrowCursor);
     }
 }
 
-void FastSchematicViewer::mouseDoubleClickEvent(QMouseEvent* event) {
+void SchematicViewer::mouseDoubleClickEvent(QMouseEvent* event) {
     // We could emit signals here if a block is double-clicked for hierarchy navigation!
     // But currently we'll handle this in Python. 
     // Wait, QMouseEvent in C++ doesn't easily emit to Python unless we pass a callback.

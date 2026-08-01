@@ -6,10 +6,10 @@
 #include <QPointF>
 #include <QLineF>
 
-class FastSchematicViewer : public QWidget {
+class SchematicViewer : public QWidget {
     Q_OBJECT
 public:
-    FastSchematicViewer(QWidget* parent = nullptr);
+    SchematicViewer(QWidget* parent = nullptr);
 
     // load_blocks: x, y, w, h, name, type, is_top
     void load_blocks(const std::vector<float>& x, const std::vector<float>& y, 
@@ -33,6 +33,9 @@ public:
     // load_dots: array of x,y coordinates and text
     void load_dots(const std::vector<float>& x, const std::vector<float>& y,
                    const std::vector<std::string>& text);
+
+    // load_json: Load and route a module from JSON directly
+    void load_json(const std::string& path, const std::string& module, const std::string& mode);
 
     // hit_test returns the type name of the block at x,y. Returns empty string if none.
     std::string hit_test(float x, float y);

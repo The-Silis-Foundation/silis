@@ -4,13 +4,12 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtSvgWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
-from schematicviewer.blockdiagram import parse_and_draw_json, SchematicBlock
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fast_schem_viewer", "build"))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "build"))
 try:
-    import fast_schem_viewer
+    import schematic_engine
 except ImportError:
-    fast_schem_viewer = None
+    schematic_engine = None
 
 from PyQt6 import sip
 
@@ -24,28 +23,19 @@ class SilisSchematic(QWidget):
         
         self.stack = QStackedWidget(self)
         
-        # SVG View (Original)
-        self.svg_view = QGraphicsView()
-        self.svg_scene = QGraphicsScene(self)
-        self.svg_view.setScene(self.svg_scene)
-        self.svg_view.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.svg_view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.svg_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.svg_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
-        # Fast C++ View (New)
-        if fast_schem_viewer:
-            self.fast_view = fast_schem_viewer.FastSchematicViewerCore()
+        # Fast C++ View (New Main Engine)
+        if schematic_engine:
+            self.fast_view = schematic_engine.SchematicViewerCore()
             ptr = self.fast_view.get_ptr()
             self.native_fast_view = sip.wrapinstance(ptr, QWidget)
             self.native_fast_view.installEventFilter(self)
             self.stack.addWidget(self.native_fast_view)
         else:
             self.fast_view = None
-            self.native_fast_view = QWidget() # Fallback
+            self.native_fast_view = QLabel("Failed to load C++ Schematic Engine. Please recompile.")
+            self.native_fast_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.stack.addWidget(self.native_fast_view)
             
-        self.stack.addWidget(self.svg_view)
         self.layout.addWidget(self.stack)
 
     def eventFilter(self, obj, event):
@@ -67,25 +57,17 @@ class SilisSchematic(QWidget):
         self.svg_view.fitInView(self.svg_scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def load_json(self, path, module, mode):
-        if fast_schem_viewer:
+        if schematic_engine and self.fast_view:
             self.stack.setCurrentWidget(self.native_fast_view)
             self.fast_view.clear()
             if not (os.path.exists(path) and path.endswith(".json")): return
-            parse_and_draw_json(self.fast_view, path, module, mode)
-        else:
-            self.stack.setCurrentWidget(self.svg_view)
-            self.svg_scene.clear()
-            if not (os.path.exists(path) and path.endswith(".json")): return
-            parse_and_draw_json(self.svg_scene, path, module, mode)
-            self.svg_view.fitInView(self.svg_scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.fast_view.load_json(path, module, mode)
+            self.fast_view.fit_in_view()
 
     def fitInView(self, rect=None, mode=None):
         if self.stack.currentWidget() == self.native_fast_view:
             if hasattr(self.fast_view, 'fit_in_view'):
                 self.fast_view.fit_in_view()
-        else:
-            if not rect: rect = self.svg_scene.itemsBoundingRect()
-            self.svg_view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
 
 class SchematicTab(QWidget):

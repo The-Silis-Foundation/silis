@@ -628,14 +628,29 @@ class FastSiliconPeeker(QWidget):
             for rect, name in self.def_data.pins:
                 pin_x.append(rect.x()); pin_y.append(rect.y()); pin_w.append(rect.width()); pin_h.append(rect.height())
                 
-        if self.show_power and hasattr(self.def_data, 'power_rails'):
-            for rect in self.def_data.power_rails:
-                pwr_x.append(rect.x()); pwr_y.append(rect.y()); pwr_w.append(rect.width()); pwr_h.append(rect.height())
+        if self.show_power and hasattr(self.def_data, 'power_routes'):
+            for width, points in self.def_data.power_routes:
+                for i in range(len(points)-1):
+                    p1 = points[i]; p2 = points[i+1]
+                    px = min(p1.x(), p2.x()) - width/2
+                    py = min(p1.y(), p2.y()) - width/2
+                    pw = abs(p2.x() - p1.x()) + width
+                    ph = abs(p2.y() - p1.y()) + width
+                    pwr_x.append(px); pwr_y.append(py); pwr_w.append(pw); pwr_h.append(ph)
+                    
+        sig_x1, sig_y1, sig_x2, sig_y2 = [], [], [], []
+        if self.show_nets and hasattr(self.def_data, 'signal_routes'):
+            for points in self.def_data.signal_routes:
+                for i in range(len(points)-1):
+                    p1 = points[i]; p2 = points[i+1]
+                    sig_x1.append(p1.x()); sig_y1.append(p1.y())
+                    sig_x2.append(p2.x()); sig_y2.append(p2.y())
                 
         if std_x: self.core.load_std_cells(std_x, std_y, std_w, std_h)
         if mac_x: self.core.load_macros(mac_x, mac_y, mac_w, mac_h)
         if pin_x: self.core.load_pins(pin_x, pin_y, pin_w, pin_h)
         if pwr_x: self.core.load_power(pwr_x, pwr_y, pwr_w, pwr_h)
+        if sig_x1: self.core.load_signals(sig_x1, sig_y1, sig_x2, sig_y2)
         
         if self.first_load:
             self.core.fit_in_view()

@@ -3,6 +3,7 @@
 #include <vector>
 #include <QRectF>
 #include <QPointF>
+#include <QLineF>
 
 class FastLayoutViewer : public QWidget {
     Q_OBJECT
@@ -13,6 +14,7 @@ public:
     void load_macros(const std::vector<float>& x, const std::vector<float>& y, const std::vector<float>& w, const std::vector<float>& h);
     void load_pins(const std::vector<float>& x, const std::vector<float>& y, const std::vector<float>& w, const std::vector<float>& h);
     void load_power(const std::vector<float>& x, const std::vector<float>& y, const std::vector<float>& w, const std::vector<float>& h);
+    void load_signals(const std::vector<float>& x1, const std::vector<float>& y1, const std::vector<float>& x2, const std::vector<float>& y2);
     void fit_in_view();
     void clear();
 protected:
@@ -27,6 +29,7 @@ private:
     std::vector<QRectF> macros_;
     std::vector<QRectF> pins_;
     std::vector<QRectF> power_;
+    std::vector<QLineF> signals_;
     double zoom_factor_;
     QPointF pan_offset_;
     bool is_panning_;
