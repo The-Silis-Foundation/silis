@@ -1,4 +1,3 @@
-
 #include "SchematicRouter.h"
 #include <fstream>
 #include <iostream>
@@ -174,6 +173,7 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
     std::vector<Block*> all_blocks;
     std::vector<Segment> segments;
     std::vector<QPointF> junctions;
+    std::vector<int> junction_types;
     
     if (mode == "top") {
         allocated_blocks.emplace_back(target_module, target_module, true);
@@ -309,68 +309,107 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
             }
         }
         
-        // Determine depths
-        in_boundary->depth = 0;
-        bool changed = true;
-        int iters = 0;
-        while (changed && iters < 1000) {
-            changed = false;
-            for (auto* b : core_blocks) {
-                int max_dep_depth = -1;
-                for (auto* dep : b->dependencies) {
-                    if (dep->depth > max_dep_depth) {
-                        max_dep_depth = dep->depth;
-                    }
-                }
-                if (max_dep_depth >= 0 && b->depth < max_dep_depth + 1) {
-                    b->depth = max_dep_depth + 1;
-                    changed = true;
-                }
-            }
-            iters++;
-        }
-        
-        // Group by depth (columns)
-        std::map<int, std::vector<Block*>> columns;
-        int max_depth = 0;
-        for (auto* b : core_blocks) {
-            columns[b->depth].push_back(b);
-            if (b->depth > max_depth) max_depth = b->depth;
-        }
-        
-        out_boundary->depth = max_depth + 1;
-        
-        // Placement
-        float col_x = snap(300.0f);
-        for (int d = 0; d <= max_depth; ++d) {
-            if (columns.count(d) == 0) continue;
-            float col_y = snap(0.0f);
-            float max_w_in_col = 0.0f;
-            for (auto* b : columns[d]) {
-                b->x = col_x;
-                b->y = col_y;
-                max_w_in_col = std::max(max_w_in_col, b->w);
-                col_y += snap(b->h + 300.0f);
-            }
-            col_x += snap(max_w_in_col + channel_spacing);
-        }
-        
-        in_boundary->x = snap(0); in_boundary->y = snap(0);
-        out_boundary->x = snap(col_x + 100.0f); out_boundary->y = snap(0);
-        
         all_blocks.push_back(in_boundary);
         all_blocks.push_back(out_boundary);
         for (auto* b : core_blocks) all_blocks.push_back(b);
+
+        // Force-Directed Physics Placement
+        float canvas_size = std::max(2000.0f, std::sqrt((float)core_blocks.size()) * 1200.0f);
+        for (auto* b : core_blocks) {
+            b->x = (rand() % (int)canvas_size);
+            b->y = (rand() % (int)canvas_size);
+        }
+        in_boundary->x = 0; in_boundary->y = canvas_size / 2.0f;
+        out_boundary->x = canvas_size; out_boundary->y = canvas_size / 2.0f;
+
+        float K = 0.05f;
+        float C = 5000000.0f;
+
+        for (int iter = 0; iter < 500; ++iter) {
+            std::map<Block*, std::pair<float, float>> forces;
+            for (auto* b : all_blocks) forces[b] = {0.0f, 0.0f};
+
+            // Repulsion
+            for (size_t i = 0; i < all_blocks.size(); ++i) {
+                for (size_t j = i + 1; j < all_blocks.size(); ++j) {
+                    Block* b1 = all_blocks[i];
+                    Block* b2 = all_blocks[j];
+                    float dx = b1->x - b2->x;
+                    float dy = b1->y - b2->y;
+                    float dist_sq = dx*dx + dy*dy;
+                    if (dist_sq < 1.0f) dist_sq = 1.0f;
+                    float dist = std::sqrt(dist_sq);
+                    float force = C / dist_sq;
+                    float fx = force * (dx / dist);
+                    float fy = force * (dy / dist);
+
+                    forces[b1].first += fx;
+                    forces[b1].second += fy;
+                    forces[b2].first -= fx;
+                    forces[b2].second -= fy;
+                }
+            }
+
+            // Attraction
+            for (auto* b : core_blocks) {
+                for (auto* dep : b->dependencies) {
+                    float dx = dep->x - b->x;
+                    float dy = dep->y - b->y;
+                    float dist = std::sqrt(dx*dx + dy*dy);
+                    if (dist < 1.0f) dist = 1.0f;
+                    float force = K * dist;
+                    float fx = force * (dx / dist);
+                    float fy = force * (dy / dist);
+
+                    forces[b].first += fx;
+                    forces[b].second += fy;
+                    forces[dep].first -= fx;
+                    forces[dep].second -= fy;
+                }
+            }
+
+            // Flow Anchor
+            forces[in_boundary].first += 0.5f * (0.0f - in_boundary->x);
+            forces[in_boundary].second += 0.5f * ((canvas_size / 2.0f) - in_boundary->y);
+            forces[out_boundary].first += 0.5f * (canvas_size - out_boundary->x);
+            forces[out_boundary].second += 0.5f * ((canvas_size / 2.0f) - out_boundary->y);
+
+            for (auto* b : core_blocks) {
+                forces[b].first += 5.0f; // Gently to the right
+            }
+
+            // Update
+            for (auto* b : all_blocks) {
+                b->x += forces[b].first * 0.1f;
+                b->y += forces[b].second * 0.1f;
+            }
+        }
+
+        // Snap to grid
+        for (auto* b : all_blocks) {
+            b->x = snap(b->x);
+            b->y = snap(b->y);
+        }
         
         // --- ROUTING ---
-        std::map<int, bool> uid_is_bus;
         struct SrcData { std::set<std::pair<float, float>> sinks; std::vector<std::string> bits; };
-        std::map<std::pair<float, float>, SrcData> _src_map;
+        struct Interval { float min_val, max_val; int uid; };
+        
+        std::map<int, bool> uid_is_bus;
+        std::map<const Segment*, std::vector<float>> v_crossings;
         std::map<std::pair<std::pair<float, float>, std::vector<std::pair<float, float>>>, std::vector<std::string>> route_groups;
         
+        segments.clear();
+        junctions.clear();
+        junction_types.clear();
+        uid_is_bus.clear();
+        v_crossings.clear();
+        route_groups.clear();
+        
+        std::map<std::pair<float, float>, SrcData> _src_map;
         std::map<std::string, QPointF> bit_sources;
         std::map<std::string, std::vector<QPointF>> bit_sinks;
-        
+            
         if (mod.contains("ports")) {
             for (auto it = mod["ports"].begin(); it != mod["ports"].end(); ++it) {
                 std::string dir = it.value().value("direction", "input");
@@ -388,7 +427,7 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
                 }
             }
         }
-        
+            
         for (auto* b : core_blocks) {
             if (mod["cells"].contains(b->raw_name)) {
                 auto& c_data = mod["cells"][b->raw_name];
@@ -409,13 +448,13 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
                 }
             }
         }
-        
+            
         float min_y = 1e9, max_y = -1e9;
         for (auto* b : all_blocks) {
             min_y = std::min(min_y, b->y);
             max_y = std::max(max_y, b->y + b->h);
         }
-        
+            
         for (auto& kv : bit_sources) {
             auto src_key = std::make_pair(kv.second.x(), kv.second.y());
             _src_map[src_key].bits.push_back(kv.first);
@@ -423,13 +462,110 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
                 _src_map[src_key].sinks.insert({s.x(), s.y()});
             }
         }
-        
+            
         for (auto& kv : _src_map) {
             std::vector<std::pair<float, float>> sink_keys(kv.second.sinks.begin(), kv.second.sinks.end());
             std::sort(sink_keys.begin(), sink_keys.end());
             route_groups[{kv.first, sink_keys}] = kv.second.bits;
         }
-        
+            
+        std::map<float, std::vector<Interval>> occupied_h_lanes;
+        std::map<float, std::vector<Interval>> occupied_v_lanes;
+            
+        auto is_h_lane_free = [&](float y, float x1, float x2, int cur_uid) {
+            float x_min = std::min(x1, x2);
+            float x_max = std::max(x1, x2);
+            auto it_low = occupied_h_lanes.lower_bound(y - (GRID - 2));
+            auto it_high = occupied_h_lanes.upper_bound(y + (GRID - 2));
+            for (auto it = it_low; it != it_high; ++it) {
+                for (const auto& iv : it->second) {
+                    if (iv.uid != cur_uid && !(x_max < iv.min_val || x_min > iv.max_val)) return false;
+                }
+            }
+            return true;
+        };
+
+        auto is_v_lane_free = [&](float x, float y1, float y2, int cur_uid) {
+            float y_min = std::min(y1, y2);
+            float y_max = std::max(y1, y2);
+            auto it_low = occupied_v_lanes.lower_bound(x - (GRID - 2));
+            auto it_high = occupied_v_lanes.upper_bound(x + (GRID - 2));
+            for (auto it = it_low; it != it_high; ++it) {
+                for (const auto& iv : it->second) {
+                    if (iv.uid != cur_uid && !(y_max < iv.min_val || y_min > iv.max_val)) return false;
+                }
+            }
+            return true;
+        };
+
+        auto add_h_seg = [&](int cur_uid, float x1, float x2, float y, bool is_pin) {
+            if (std::abs(x1 - x2) < 0.1f) return;
+            segments.push_back({cur_uid, 'H', x1, x2, y, 0, 0, 0, is_pin, std::min(x1, x2), std::max(x1, x2), y, y});
+            occupied_h_lanes[y].push_back({std::min(x1, x2), std::max(x1, x2), cur_uid});
+        };
+
+        auto add_v_seg = [&](int cur_uid, float x, float y1, float y2, bool is_pin) {
+            if (std::abs(y1 - y2) < 0.1f) return;
+            segments.push_back({cur_uid, 'V', 0, 0, 0, x, y1, y2, is_pin, x, x, std::min(y1, y2), std::max(y1, y2)});
+            occupied_v_lanes[x].push_back({std::min(y1, y2), std::max(y1, y2), cur_uid});
+        };
+
+        auto find_free_v_lane = [&](float pref_x, float y1, float y2, int cur_uid) {
+            float x = pref_x;
+            int step = 1;
+            const int MAX_STEPS = 6;
+            while (!is_v_lane_free(x, y1, y2, cur_uid)) {
+                float offset_val = std::floor(step / 2.0f + 0.5f) * GRID;
+                if (step % 2 != 0) x = pref_x - offset_val;
+                else x = pref_x + offset_val;
+                step++;
+                
+                if (step > MAX_STEPS) {
+                    int crowd_left = 0, crowd_right = 0;
+                    for (int i = 1; i <= 5; i++) {
+                        if (!is_v_lane_free(pref_x - i * GRID, y1, y2, cur_uid)) crowd_left++;
+                        if (!is_v_lane_free(pref_x + i * GRID, y1, y2, cur_uid)) crowd_right++;
+                    }
+                    if (crowd_left <= crowd_right) {
+                        pref_x -= 5 * GRID;
+                    } else {
+                        pref_x += 5 * GRID;
+                    }
+                    x = pref_x;
+                    step = 1;
+                }
+            }
+            return x;
+        };
+
+        auto find_free_h_lane = [&](float pref_y, float x1, float x2, int cur_uid) {
+            float y = pref_y;
+            int step = 1;
+            const int MAX_STEPS = 6;
+            while (!is_h_lane_free(y, x1, x2, cur_uid)) {
+                float offset_val = std::floor(step / 2.0f + 0.5f) * GRID;
+                if (step % 2 != 0) y = pref_y - offset_val;
+                else y = pref_y + offset_val;
+                step++;
+                
+                if (step > MAX_STEPS) {
+                    int crowd_up = 0, crowd_down = 0;
+                    for (int i = 1; i <= 5; i++) {
+                        if (!is_h_lane_free(pref_y - i * GRID, x1, x2, cur_uid)) crowd_up++;
+                        if (!is_h_lane_free(pref_y + i * GRID, x1, x2, cur_uid)) crowd_down++;
+                    }
+                    if (crowd_up <= crowd_down) {
+                        pref_y -= 5 * GRID;
+                    } else {
+                        pref_y += 5 * GRID;
+                    }
+                    y = pref_y;
+                    step = 1;
+                }
+            }
+            return y;
+        };
+
         int uid = 0;
         float global_up = snap(min_y - 100.0f);
         float global_down = snap(max_y + 100.0f);
@@ -462,62 +598,71 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
             if (trunk_end_x < trunk_start_x + GRID) trunk_end_x = trunk_start_x + GRID;
             
             if (has_forward) {
-                segments.push_back({uid, 'H', trunk_start_x, trunk_end_x, trunk_y, 0, 0, 0, false, 0,0,0,0});
+                add_h_seg(uid, trunk_start_x, trunk_end_x, trunk_y, false);
             }
             
             for (size_t sink_idx = 0; sink_idx < sinks.size(); ++sink_idx) {
                 QPointF sink = sinks[sink_idx];
-                float offset = snap((uid % 8) * GRID);
                 
                 if (sink.x() > src.x()) {
                     // Forward route: Orthogonal tap
-                    float tap_x = snap(sink.x() - 3 * GRID - offset);
-                    if (tap_x < src.x() + GRID) tap_x = snap(src.x() + GRID);
+                    float pref_tap_x = snap(sink.x() - 3 * GRID);
+                    if (pref_tap_x < src.x() + GRID) pref_tap_x = snap(src.x() + GRID);
                     
-                    segments.push_back({uid, 'H', trunk_start_x, tap_x, trunk_y, 0, 0, 0, false, 0,0,0,0});
-                    segments.push_back({uid, 'V', 0, 0, 0, tap_x, trunk_y, sink.y(), false, 0,0,0,0});
-                    segments.push_back({uid, 'H', tap_x, sink.x(), sink.y(), 0, 0, 0, true, 0,0,0,0});
+                    float tap_x = find_free_v_lane(pref_tap_x, trunk_y, sink.y(), uid);
+                    
+                    add_h_seg(uid, trunk_start_x, tap_x, trunk_y, false);
+                    add_v_seg(uid, tap_x, trunk_y, sink.y(), false);
+                    add_h_seg(uid, tap_x, sink.x(), sink.y(), true);
                 } else {
                     // Feedback loop: Route up/down to global highway
-                    float h_way = (uid % 2 == 0) ? (global_up - offset) : (global_down + offset);
+                    float pref_h_way = (uid % 2 == 0) ? global_up : global_down;
                     
-                    float up_tap_x = snap(src.x() + 2 * GRID + offset);
-                    float down_tap_x = snap(sink.x() - 3 * GRID - offset);
+                    float pref_up_tap_x = snap(src.x() + 2 * GRID);
+                    float pref_down_tap_x = snap(sink.x() - 3 * GRID);
                     
-                    segments.push_back({uid, 'H', src.x(), up_tap_x, src.y(), 0, 0, 0, false, 0,0,0,0});
-                    segments.push_back({uid, 'V', 0, 0, 0, up_tap_x, src.y(), h_way, false, 0,0,0,0});
-                    segments.push_back({uid, 'H', up_tap_x, down_tap_x, h_way, 0, 0, 0, false, 0,0,0,0});
-                    segments.push_back({uid, 'V', 0, 0, 0, down_tap_x, h_way, sink.y(), false, 0,0,0,0});
-                    segments.push_back({uid, 'H', down_tap_x, sink.x(), sink.y(), 0, 0, 0, true, 0,0,0,0});
+                    float up_tap_x = find_free_v_lane(pref_up_tap_x, src.y(), pref_h_way, uid);
+                    float down_tap_x = find_free_v_lane(pref_down_tap_x, pref_h_way, sink.y(), uid);
+                    float h_way = find_free_h_lane(pref_h_way, up_tap_x, down_tap_x, uid);
+                    
+                    add_h_seg(uid, src.x(), up_tap_x, src.y(), false);
+                    add_v_seg(uid, up_tap_x, src.y(), h_way, false);
+                    add_h_seg(uid, up_tap_x, down_tap_x, h_way, false);
+                    add_v_seg(uid, down_tap_x, h_way, sink.y(), false);
+                    add_h_seg(uid, down_tap_x, sink.x(), sink.y(), true);
                 }
             }
         }
         
-        for (auto& seg : segments) {
-            if (seg.type == 'H') {
-                seg.x_min = std::min(seg.x1, seg.x2);
-                seg.x_max = std::max(seg.x1, seg.x2);
-            } else {
-                seg.y_min = std::min(seg.y1, seg.y2);
-                seg.y_max = std::max(seg.y1, seg.y2);
-            }
-        }
-        
-        std::map<const Segment*, std::vector<float>> v_crossings;
+
         for (const auto& h : segments) {
             if (h.type != 'H') continue;
             for (const auto& v : segments) {
                 if (v.type != 'V') continue;
                 float ix = v.x, iy = h.y;
                 if (ix >= h.x_min && ix <= h.x_max && iy >= v.y_min && iy <= v.y_max) {
+                    bool h_is_bus = uid_is_bus[h.uid];
+                    bool v_is_bus = uid_is_bus[v.uid];
+                    int j_type = 0; // 0: wire-wire, 1: bus-bus, 2: wire-bus
+                    if (h_is_bus && v_is_bus) j_type = 1;
+                    else if (h_is_bus || v_is_bus) j_type = 2;
+
                     if (h.uid == v.uid) {
                         if (!(std::abs(ix - h.x1) < 1.0f || std::abs(ix - h.x2) < 1.0f) || 
                             !(std::abs(iy - v.y1) < 1.0f || std::abs(iy - v.y2) < 1.0f)) {
                             junctions.push_back(QPointF(ix, iy));
+                            junction_types.push_back(j_type);
                         }
                     } else {
-                        if (ix > h.x_min && ix < h.x_max && iy > v.y_min && iy < v.y_max) {
-                            v_crossings[&v].push_back(iy);
+                        bool h_endpoint = (std::abs(ix - h.x1) < 1.0f || std::abs(ix - h.x2) < 1.0f);
+                        bool v_endpoint = (std::abs(iy - v.y1) < 1.0f || std::abs(iy - v.y2) < 1.0f);
+                        if (h_endpoint || v_endpoint) {
+                            junctions.push_back(QPointF(ix, iy));
+                            junction_types.push_back(j_type);
+                        } else {
+                            if (ix > h.x_min && ix < h.x_max && iy > v.y_min && iy < v.y_max) {
+                                v_crossings[&v].push_back(iy);
+                            }
                         }
                     }
                 }
@@ -605,7 +750,7 @@ void SchematicRouter::parse_and_draw_json(const std::string& json_path, const st
         
         viewer_->load_blocks(b_x, b_y, b_w, b_h, b_names, b_types, b_tops);
         viewer_->load_ports(p_x, p_y, p_names, p_dirs, p_lefts);
-        viewer_->load_junctions(j_x, j_y);
+        viewer_->load_junctions(j_x, j_y, junction_types);
         viewer_->load_dots(d_x, d_y, d_text);
         viewer_->load_wires(w_x1, w_y1, w_x2, w_y2, w_bus, w_gap);
         viewer_->fit_in_view();

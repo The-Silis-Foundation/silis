@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Silis Schematic Viewer (DigitalJS)</title>
+    <link rel="stylesheet" href="web/schematic_webview.css">
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #1e1e1e; overflow: hidden; }
+        #toolbar { height: 35px; background: #333; color: #fff; }
+        #paper-container { height: calc(100% - 60px); width: 100%; }
+        #status { height: 25px; background: #222; color: #fff; }
+    </style>
+</head>
+<body>
+<div id="toolbar">
+  <span id="breadcrumb"></span>
+  <span id="toolbar-right">
+    <button id="go-parent" class="codicon codicon-debug-step-out" title="Go to parent scope" disabled></button>
+    <button id="sv-find-btn" class="codicon codicon-search" title="Find (Ctrl+F)"></button>
+    <button id="zoom-out" class="codicon codicon-zoom-out" title="Zoom out"></button>
+    <button id="zoom-in" class="codicon codicon-zoom-in" title="Zoom in"></button>
+    <button id="zoom-fit" class="codicon codicon-screen-full" title="Fit"></button>
+    <span id="preset-toggle" class="sv-seg" title="Toggle RTL / Gate-Level view">
+      <span class="sv-seg-label active" data-side="rtl">RTL</span>
+      <label class="sv-switch"><input type="checkbox" id="preset-switch"><span class="sv-slider"></span></label>
+      <span class="sv-seg-label" data-side="gls">Gate-Level</span>
+    </span>
+    <button id="refresh" class="codicon codicon-refresh" title="Reload"></button>
+    <button id="export" class="codicon codicon-export" title="Export"></button>
+  </span>
+</div>
+<div id="paper-container"><div id="paper"></div></div>
+<div id="status"><span id="sv-taskbar"></span><span id="status-text"></span></div>
+    <script>
+        // Mock VSCode API for standalone WebEngine
+        function acquireVsCodeApi() {
+            return {
+                postMessage: function(msg) { console.log("VSCode message:", msg); },
+                getState: function() { return {}; },
+                setState: function(state) {}
+            };
+        }
+    </script>
+    <script src="web/yosys_bridge.js"></script>
+    <script src="web/schematic_webview.js"></script>
+    <script>
+        function loadSchematic(b64str) {
+            try {
+                const jsonStr = decodeURIComponent(escape(window.atob(b64str)));
+                const yosysData = JSON.parse(jsonStr);
+                
+                const digitaljsData = window.processYosys(yosysData, {});
+                window.postMessage({
+                    type: 'loadSchematic',
+                    circuit: digitaljsData,
+                    scopePath: "top",
+                    moduleName: "top",
+                    hasParent: false,
+                    overview: 'scrollbars',
+                    spacing: 'comfortable'
+                }, '*');
+            } catch (err) {
+                console.error("Failed to load schematic:", err);
+            }
+        }
+    </script>
+</body>
+</html>

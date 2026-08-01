@@ -26,6 +26,9 @@ class SilisSchematic(QWidget):
         # Fast C++ View (New Main Engine)
         if schematic_engine:
             self.fast_view = schematic_engine.SchematicViewerCore()
+            import os
+            html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "digitaljs.html"))
+            self.fast_view.init_url(html_path)
             ptr = self.fast_view.get_ptr()
             self.native_fast_view = sip.wrapinstance(ptr, QWidget)
             self.native_fast_view.installEventFilter(self)

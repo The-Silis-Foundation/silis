@@ -4,6 +4,9 @@ import sys
 # --- Fix for PyQt6 missing symbol error ---
 qt_lib_path = "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
 current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+os.environ["QTWEBENGINEPROCESS_PATH"] = "/usr/lib/qt6/libexec/QtWebEngineProcess"
+os.environ["QTWEBENGINE_RESOURCES_PATH"] = "/usr/share/qt6/resources"
+os.environ["QTWEBENGINE_LOCALES_PATH"] = "/usr/share/qt6/translations/qtwebengine_locales"
 if qt_lib_path not in current_ld:
     os.environ["LD_LIBRARY_PATH"] = f"{qt_lib_path}:{current_ld}" if current_ld else qt_lib_path
     os.execv(sys.executable, [sys.executable] + sys.argv)
