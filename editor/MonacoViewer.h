@@ -13,6 +13,7 @@ public:
     std::string get_text();
     void set_language(const std::string& lang);
     void set_theme(const std::string& theme);
+    void run_js(const std::string& script);
 
 private:
     bool is_loaded = false;

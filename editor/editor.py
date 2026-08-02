@@ -242,8 +242,12 @@ class MonacoEditorWrapper(QWidget):
     def set_font(self, font_family, font_size):
         self.core.get_text()  # ensure loaded
         js = f"if(window.setFont) setFont({repr(font_family)}, {font_size});"
-        # runJavaScript not directly accessible here — use a helper
-        self.core.set_text.__doc__  # no-op; font is set at init time via HTML injection
+        if hasattr(self.core, 'run_js'):
+            self.core.run_js(js)
+
+    def run_js(self, script):
+        if hasattr(self.core, 'run_js'):
+            self.core.run_js(script)
 
 class VSCodeEditor(QWidget):
     def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
@@ -276,6 +280,10 @@ class VSCodeEditor(QWidget):
             return self.editor.text() # Scintilla
         else:
             return self.editor.toPlainText() # Monaco
+
+    def run_js(self, script):
+        if hasattr(self.editor, 'run_js'):
+            self.editor.run_js(script)
 
 
 class VSCodeEditorTabs(QTabWidget):
@@ -385,6 +393,25 @@ class CommandPalette(QDialog):
         self.input.textChanged.connect(self.filter_list)
         self.list.itemActivated.connect(self.accept)
         self.input.returnPressed.connect(self.on_return)
+        
+        self.input.installEventFilter(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.input.setFocus()
+
+    def eventFilter(self, obj, event):
+        if obj is self.input and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Up:
+                row = self.list.currentRow()
+                if row > 0: self.list.setCurrentRow(row - 1)
+                return True
+            elif key == Qt.Key.Key_Down:
+                row = self.list.currentRow()
+                if row < self.list.count() - 1: self.list.setCurrentRow(row + 1)
+                return True
+        return super().eventFilter(obj, event)
 
     def populate_list(self, items):
         self.list.clear()
@@ -406,4 +433,90 @@ class CommandPalette(QDialog):
             name = self.list.currentItem().text()
             for cmd_name, func in self.commands:
                 if cmd_name == name: return func
+        return None
+
+class FileSearchPalette(QDialog):
+    def __init__(self, parent, root_dir):
+        super().__init__(parent)
+        self.root_dir = root_dir
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup)
+        self.setStyleSheet("""
+            QDialog { background: #252526; border: 1px solid #454545; border-radius: 6px; }
+            QLineEdit { background: #3C3C3C; color: #CCCCCC; padding: 6px; border: 1px solid #007ACC; font-size: 14px; }
+            QListWidget { background: #252526; color: #CCCCCC; border: none; font-size: 13px; }
+            QListWidget::item:selected { background: #094771; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Search files by name (e.g. main.v)...")
+        layout.addWidget(self.input)
+        self.list = QListWidget()
+        layout.addWidget(self.list)
+        
+        self.all_files = []
+        import os
+        ignore_dirs = {'build', '.git', 'node_modules', '__pycache__', '.pytest_cache'}
+        for root, dirs, files in os.walk(self.root_dir):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, self.root_dir)
+                self.all_files.append((f, rel, full))
+                
+        self.input.textChanged.connect(self.filter_list)
+        self.list.itemActivated.connect(self.accept)
+        self.input.returnPressed.connect(self.on_return)
+        
+        self.input.installEventFilter(self)
+        self.filter_list("")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.input.setFocus()
+
+    def eventFilter(self, obj, event):
+        if obj is self.input and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Up:
+                row = self.list.currentRow()
+                if row > 0: self.list.setCurrentRow(row - 1)
+                return True
+            elif key == Qt.Key.Key_Down:
+                row = self.list.currentRow()
+                if row < self.list.count() - 1: self.list.setCurrentRow(row + 1)
+                return True
+        return super().eventFilter(obj, event)
+        
+    def filter_list(self, text):
+        self.list.clear()
+        text = text.lower()
+        
+        results = []
+        for name, rel, full in self.all_files:
+            if not text:
+                results.append((0, name, rel, full))
+            elif text in name.lower():
+                # Prefer exact or starts with
+                if name.lower().startswith(text): results.append((1, name, rel, full))
+                else: results.append((2, name, rel, full))
+            elif text in rel.lower():
+                results.append((3, name, rel, full))
+                
+        results.sort(key=lambda x: (x[0], x[1]))
+        for r in results[:100]:
+            item = QListWidgetItem(f"{r[1]}  —  {os.path.dirname(r[2])}")
+            item.setData(Qt.ItemDataRole.UserRole, r[3])
+            self.list.addItem(item)
+            
+        if self.list.count() > 0:
+            self.list.setCurrentRow(0)
+            
+    def on_return(self):
+        if self.list.count() > 0:
+            self.accept()
+            
+    def get_selected(self):
+        if self.list.currentItem():
+            return self.list.currentItem().data(Qt.ItemDataRole.UserRole)
         return None

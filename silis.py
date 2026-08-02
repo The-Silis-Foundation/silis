@@ -26,7 +26,7 @@ from PyQt6.QtGui import *
 
 # Importing extracted modules
 from config import THEMES, USER_SETTINGS, save_user_settings
-from editor.editor import CommandPalette, VSCodeEditorTabs, ScintillaEditor
+from editor.editor import CommandPalette, FileSearchPalette, VSCodeEditorTabs, ScintillaEditor
 from terminal.terminal import VSCodeTerminalWidget
 from pdkmanagers.pdk.manager import SSAForge, PDKManager, PDKSelector
 from pdkmanagers.volare import VolareManagerWidget
@@ -40,6 +40,7 @@ from projectwizard.codes import SilisProjectWizard, SilisLauncher
 class SilisExplorer(QTreeView):
     fileOpened = pyqtSignal(str)
     dirChanged = pyqtSignal(str)
+    gds3dOpened = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,6 +58,16 @@ class SilisExplorer(QTreeView):
         
         # --- CRITICAL FIX: CONNECT MOUSE CLICK ---
         self.doubleClicked.connect(self.on_double_click)
+
+    def contextMenuEvent(self, event):
+        idx = self.indexAt(event.pos())
+        if not idx.isValid(): return
+        path = self.fs_model.filePath(idx)
+        menu = QMenu(self)
+        if path.endswith(".gds") or path.endswith(".GDS"):
+            action = menu.addAction("Open in 3D Viewer")
+            action.triggered.connect(lambda: self.gds3dOpened.emit(path))
+        menu.exec(event.globalPos())
 
     def on_double_click(self, index):
         path = self.fs_model.filePath(index)
@@ -117,6 +128,7 @@ class CompileTab(QWidget):
         self.explorer = SilisExplorer(self.ide)
         self.explorer.dirChanged.connect(self.ide.change_directory)
         self.explorer.fileOpened.connect(self.ide.open_file_in_editor)
+        self.explorer.gds3dOpened.connect(self.ide.open_gds3d)
         l_lay.addWidget(QLabel("PROJECT EXPLORER")); l_lay.addWidget(self.explorer)
         self.split.addWidget(self.explorer_container)
 
@@ -359,9 +371,14 @@ class SilisIDE(QMainWindow):
             if top_mod:
                 for f_path in self.project_config.get("rtl_files", []):
                     if top_mod in os.path.basename(f_path):
-                        abs_path = os.path.join(self.cwd, f_path) if not os.path.isabs(f_path) else f_path
-                        self.open_file_in_editor(abs_path)
-                        break
+                        target_name = os.path.basename(f_path)
+                        found = False
+                        for root_dir, _, files in os.walk(self.cwd):
+                            if target_name in files:
+                                self.open_file_in_editor(os.path.join(root_dir, target_name))
+                                found = True
+                                break
+                        if found: break
 
     # === UX: SMART SHORTCUTS ===
     def eventFilter(self, source, event):
@@ -371,6 +388,13 @@ class SilisIDE(QMainWindow):
             
             # --- COMMAND PALETTE ---
             if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and (modifiers & Qt.KeyboardModifier.ShiftModifier):
+                focused = QApplication.focusWidget()
+                if focused and (self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor):
+                    current_ed = self.tab_compile.editor.current_editor()
+                    if current_ed and hasattr(current_ed, 'run_js'):
+                        current_ed.run_js("editor.trigger('keyboard', 'editor.action.quickCommand')")
+                    return True
+                    
                 commands = [
                     ("View: Toggle Fullscreen", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen()),
                     ("View: Open Settings", self.open_settings),
@@ -378,6 +402,7 @@ class SilisIDE(QMainWindow):
                     ("Go to: Waveform Tab", lambda: self.frontend_tabs.setCurrentIndex(1)),
                     ("Go to: Schematic Tab", lambda: self.frontend_tabs.setCurrentIndex(2)),
                     ("Go to: Synthesis Dashboard", lambda: self.frontend_tabs.setCurrentIndex(3)),
+                    ("Go to: 3D Viewer", lambda: (self.switch_world(1), self.backend_widget.viz_tabs.setCurrentIndex(2))),
                     ("Backend: Reset Flow", self.backend_widget.reset_backend),
                 ]
                 pal = CommandPalette(self, commands)
@@ -385,6 +410,23 @@ class SilisIDE(QMainWindow):
                 if pal.exec():
                     func = pal.get_selected()
                     if func: func()
+                return True
+                
+            # --- FILE SEARCH (Ctrl+P) ---
+            if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+                from editor.editor import FileSearchPalette
+                pal = FileSearchPalette(self, self.cwd)
+                
+                # Position and size perfectly over the file explorer
+                explorer_rect = self.tab_compile.explorer_container.geometry()
+                global_pos = self.tab_compile.mapToGlobal(explorer_rect.topLeft())
+                pal.move(global_pos)
+                pal.setFixedSize(explorer_rect.width(), explorer_rect.height())
+                
+                if pal.exec():
+                    selected_file = pal.get_selected()
+                    if selected_file:
+                        self.open_file_in_editor(selected_file)
                 return True
             
             # --- FULLSCREEN TOGGLE ---
@@ -422,6 +464,11 @@ class SilisIDE(QMainWindow):
                         else: self.run_synthesis_flow()
                     return True
 
+                elif key == Qt.Key.Key_F5:
+                    self.switch_world(1)
+                    self.backend_widget.viz_tabs.setCurrentIndex(2)
+                    return True
+
             # --- SUPER KEY LOGIC (` + Key) ---
             if key == Qt.Key.Key_QuoteLeft: # Backtick `
                 if getattr(self, '_ignore_next_sk', False):
@@ -432,8 +479,12 @@ class SilisIDE(QMainWindow):
                     focused = QApplication.focusWidget()
                     if focused:
                         self._ignore_next_sk = True
-                        if hasattr(focused, 'SendScintilla'):
-                            focused.SendScintilla(QsciScintilla.SCI_ADDTEXT, b'`')
+                        if self.tab_compile.terminal.isAncestorOf(focused) or focused is self.tab_compile.terminal:
+                            self.tab_compile.terminal.core.send_text("`")
+                        elif self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor:
+                            current_ed = self.tab_compile.editor.current_editor()
+                            if current_ed and hasattr(current_ed, 'run_js'):
+                                current_ed.run_js("editor.trigger('keyboard', 'type', {text: '`'})")
                         elif hasattr(focused, 'insert'):
                             focused.insert("`")
                         elif hasattr(focused, 'insertPlainText'):
@@ -459,7 +510,12 @@ class SilisIDE(QMainWindow):
                     self.tab_compile.explorer.setFocus()
                 elif txt == self.key_map["focus_editor"]: 
                     self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
-                    self.tab_compile.editor.setFocus()
+                    current_ed = self.tab_compile.editor.current_editor()
+                    if current_ed:
+                        if hasattr(current_ed, 'run_js'): current_ed.run_js("editor.focus()")
+                        if hasattr(current_ed, 'editor') and hasattr(current_ed.editor, 'web_view'): current_ed.editor.web_view.setFocus()
+                    else:
+                        self.tab_compile.editor.setFocus()
                 elif txt == self.key_map["focus_terminal"]: 
                     self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
                     self.tab_compile.terminal.setFocus()
@@ -580,11 +636,19 @@ class SilisIDE(QMainWindow):
         self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
         v_net = f"netlist/{base}_netlist.v"
-        src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
-                glob.glob(os.path.join(root, "source", "*.sv")) + \
-                glob.glob(os.path.join(root, "source", "*.vhd")) + \
-                glob.glob(os.path.join(root, "source", "*.vhdl"))
-        src_v = [s for s in src_v if "tb_" not in s]
+        
+        src_v = []
+        if hasattr(self, 'project_config') and self.project_config and self.project_config.get("rtl_files"):
+            for f_path in self.project_config.get("rtl_files", []):
+                abs_path = os.path.join(self.cwd, f_path) if not os.path.isabs(f_path) else f_path
+                src_v.append(abs_path)
+        else:
+            src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
+                    glob.glob(os.path.join(root, "source", "*.sv")) + \
+                    glob.glob(os.path.join(root, "source", "*.vhd")) + \
+                    glob.glob(os.path.join(root, "source", "*.vhdl"))
+                    
+        src_v = [s for s in src_v if "tb_" not in os.path.basename(s).lower()]
         
         vhdl_files = [s for s in src_v if s.endswith('.vhd') or s.endswith('.vhdl')]
         vlog_files = [s for s in src_v if not (s.endswith('.vhd') or s.endswith('.vhdl'))]
@@ -720,6 +784,13 @@ class SilisIDE(QMainWindow):
     def open_file_in_editor(self, path):
         if os.path.exists(path):
             self.tab_compile.editor.open_file(path)
+            self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
+
+    def open_gds3d(self, path):
+        if os.path.exists(path):
+            self.backend_widget.gds3d_port.load_gds(path)
+            self.switch_world(1)
+            self.backend_widget.viz_tabs.setCurrentIndex(2)
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
 
     def handle_terminal_input(self):

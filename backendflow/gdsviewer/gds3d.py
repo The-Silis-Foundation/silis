@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import time
 import hashlib
@@ -6,6 +7,13 @@ import gdstk
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
+from PyQt6 import sip
+
+sys.path.append("/home/jerome/silis/third-party/GDS3D/build")
+try:
+    import gds3d_engine
+except ImportError:
+    gds3d_engine = None
 
 class LODPolygonItem(QGraphicsPolygonItem):
     # 0.5 = Aggressive (Fastest)
@@ -136,58 +144,39 @@ class GDS3DPort(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        # --- 1. THE ESCAPE HATCH (Header Bar) ---
         self.header = QWidget()
         self.header.setStyleSheet("background: #1e1e1e; border-bottom: 2px solid #fd8c73;")
         self.header.setFixedHeight(45)
         h_lay = QHBoxLayout(self.header)
         h_lay.setContentsMargins(10, 5, 10, 5)
         
-        self.btn_close_3d = QPushButton("Close 3D Viewer")
-        self.btn_close_3d.setStyleSheet("background: #cf222e; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
-        self.btn_close_3d.clicked.connect(self.kill_viewer)
-        self.btn_close_3d.hide() # Hidden until viewer is running
+        self.btn_load = QPushButton("Load GDS in 3D")
+        self.btn_load.setStyleSheet("background: #2da44e; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
+        self.btn_load.clicked.connect(self.prompt_load)
         
-        h_lay.addWidget(QLabel("<b style='color:#c9d1d9'>Hardware Accelerated GDS3D</b>"))
+        h_lay.addWidget(QLabel("<b style='color:#c9d1d9'>Hardware Accelerated GDS3D (Native)</b>"))
         h_lay.addStretch()
-        h_lay.addWidget(self.btn_close_3d)
+        h_lay.addWidget(self.btn_load)
         self.layout.addWidget(self.header)
         
-        # --- 2. THE TRACKING CANVAS ---
         self.canvas = QWidget()
-        self.canvas.setStyleSheet("background: #2d2d2d;") # Dark background while loading
+        self.canvas.setStyleSheet("background: #2d2d2d;")
         self.canvas_layout = QVBoxLayout(self.canvas)
+        self.canvas_layout.setContentsMargins(0,0,0,0)
         self.layout.addWidget(self.canvas, stretch=1)
         
-        # UI: Launch Button (Lives inside the Canvas)
-        self.btn_launch = QPushButton("🚀 Launch 3D GDS Viewer")
-        self.btn_launch.setFixedSize(250, 50)
-        self.btn_launch.setStyleSheet("font-size: 14px; font-weight: bold; background: #2da44e; color: white; border-radius: 6px;")
-        self.btn_launch.clicked.connect(self.launch_viewer)
+        self.core = None
+        self.native_widget = None
         
-        self.info_label = QLabel("Click to bind the Chameleon Overlay.\nUse Left/Right Click to Rotate & Pan in 3D.")
-        self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.info_label.setStyleSheet("color: #8b949e;")
-        
-        self.canvas_layout.addStretch()
-        self.canvas_layout.addWidget(self.btn_launch, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.canvas_layout.addWidget(self.info_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.canvas_layout.addStretch()
-        
-        # State Tracking
-        self.gds3d_proc = None
-        self.wid = None
-        self.last_geom = (0, 0, 0, 0)
-        self.is_mapped = False
-        self.track_timer = QTimer(self)
-        self.track_timer.timeout.connect(self.sync_overlay)
+        if gds3d_engine:
+            self.core = gds3d_engine.GDS3DViewerCore()
+            ptr = self.core.get_ptr()
+            self.native_widget = sip.wrapinstance(ptr, QWidget)
+            self.canvas_layout.addWidget(self.native_widget)
+        else:
+            self.canvas_layout.addWidget(QLabel("GDS3D Engine failed to load! Compile it first."))
 
-    def launch_viewer(self):
-        # The Highlander Protocol
-        subprocess.call(["killall", "-9", "gds3d"], stderr=subprocess.DEVNULL)
-        if self.gds3d_proc and self.gds3d_proc.poll() is None:
-            self.gds3d_proc.kill()
-
+    def prompt_load(self):
         try:
             proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
             results_dir = os.path.join(proj_root, "results")
@@ -195,116 +184,14 @@ class GDS3DPort(QWidget):
             results_dir = os.getcwd() 
             
         gds_path, _ = QFileDialog.getOpenFileName(self, "Select GDS File for 3D Viewer", results_dir, "GDSII Files (*.gds);;All Files (*)")
-        
-        if not gds_path:
-            return # User canceled
-        process_file = os.path.expanduser("~/GDS3D/techfiles/sky130.txt")
-        
-        if not os.path.exists(gds_path) or not os.path.exists(process_file):
-            self.info_label.setText("❌ Missing GDS or Tech file!")
-            self.info_label.setStyleSheet("color: #ff7b72;")
+        if not gds_path: return
+        self.load_gds(gds_path)
+
+    def load_gds(self, path):
+        if not os.path.exists(path) or not self.core: return
+        process_file = os.path.expanduser("~/silis/third-party/GDS3D/techfiles/sky130.txt")
+        if not os.path.exists(process_file):
+            print("Warning: Missing sky130.txt process file for GDS3D!")
             return
-
-        self.btn_launch.setEnabled(False)
-        self.btn_launch.setText("Binding to OS...")
-
-        try:
-            self.gds3d_proc = subprocess.Popen(["gds3d", "-p", process_file, "-i", gds_path]) 
-            self.bind_chameleon_overlay()
-        except FileNotFoundError:
-            self.info_label.setText("❌ 'gds3d' executable not found!")
-            self.info_label.setStyleSheet("color: #ff7b72;")
-            self.btn_launch.setEnabled(True)
-            self.btn_launch.setText("🚀 Launch 3D GDS Viewer")
-
-    def bind_chameleon_overlay(self):
-        max_attempts = 30 
-        self.wid = None
         
-        for _ in range(max_attempts):
-            try:
-                out = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name', 'GDS3D']).decode('utf-8').strip()
-                wids = out.splitlines()
-                if wids:
-                    self.wid = wids[-1] 
-                    break
-            except subprocess.CalledProcessError:
-                pass
-            time.sleep(0.1) 
-            
-        if not self.wid:
-            self.info_label.setText("❌ Timeout: GDS3D Window never appeared.")
-            self.btn_launch.setEnabled(True)
-            self.btn_launch.setText("🚀 Launch 3D GDS Viewer")
-            return
-
-        try:
-            # Decapitate borders and force on top
-            subprocess.call(['xprop', '-id', self.wid, '-f', '_MOTIF_WM_HINTS', '32c', '-set', '_MOTIF_WM_HINTS', '2, 0, 0, 0, 0'])
-            subprocess.call(['wmctrl', '-i', '-r', hex(int(self.wid)), '-b', 'add,above'])
-
-            # Hide Launch UI, Show Escape Hatch
-            self.btn_launch.hide()
-            self.info_label.hide()
-            self.btn_close_3d.show()
-                
-            self.is_mapped = True
-            self.track_timer.start(16) 
-            
-        except Exception as e:
-            self.info_label.setText(f"❌ Overlay Binding Failed:\n{e}")
-            self.btn_launch.setEnabled(True)
-            self.btn_launch.setText("🚀 Launch 3D GDS Viewer")
-
-    def sync_overlay(self):
-        if not self.wid: return
-
-        currently_visible = self.isVisible() and not self.window().isMinimized()
-
-        if currently_visible and not self.is_mapped:
-            subprocess.Popen(['xdotool', 'windowmap', self.wid])
-            self.is_mapped = True
-        elif not currently_visible and self.is_mapped:
-            subprocess.Popen(['xdotool', 'windowunmap', self.wid])
-            self.is_mapped = False
-
-        if not currently_visible:
-            return 
-
-        # --- THE FIX: Track the CANVAS, not the whole widget ---
-        global_pos = self.canvas.mapToGlobal(QPoint(0, 0))
-        x, y = global_pos.x(), global_pos.y()
-        w, h = self.canvas.width(), self.canvas.height()
-
-        if (x, y, w, h) != self.last_geom:
-            subprocess.Popen(['xdotool', 'windowsize', self.wid, str(w), str(h)])
-            subprocess.Popen(['xdotool', 'windowmove', self.wid, str(x), str(y)])
-            self.last_geom = (x, y, w, h)
-
-    def kill_viewer(self):
-        """ The Escape Hatch Logic """
-        # Murder the process
-        if self.gds3d_proc:
-            self.gds3d_proc.kill()
-        subprocess.call(["killall", "-9", "gds3d"], stderr=subprocess.DEVNULL)
-        
-        # Stop tracking
-        self.track_timer.stop()
-        self.is_mapped = False
-        self.wid = None
-        self.last_geom = (0, 0, 0, 0)
-        
-        # Restore UI
-        self.btn_close_3d.hide()
-        self.btn_launch.show()
-        self.btn_launch.setText("🚀 Launch 3D GDS Viewer")
-        self.btn_launch.setEnabled(True)
-        self.info_label.show()
-        self.info_label.setText("Viewer closed. Ready to launch again.")
-        self.info_label.setStyleSheet("color: #8b949e;")
-
-    def closeEvent(self, event):
-        self.kill_viewer()
-        super().closeEvent(event)
-
-
+        self.core.load_gds(path, process_file, "")

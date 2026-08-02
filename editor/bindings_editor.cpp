@@ -15,6 +15,7 @@ PYBIND11_MODULE(editor_engine, m) {
         .def("get_text", &MonacoViewer::get_text)
         .def("set_language", &MonacoViewer::set_language)
         .def("set_theme", &MonacoViewer::set_theme)
+        .def("run_js", &MonacoViewer::run_js)
         .def("get_ptr", [](MonacoViewer& self) {
             return reinterpret_cast<uintptr_t>(&self);
         });

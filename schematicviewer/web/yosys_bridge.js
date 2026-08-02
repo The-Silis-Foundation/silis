@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2026 Tsung-Tso Hsieh
+ * Adapted from sv-pathfinder
+ * 
+ * Changes made:
+ * - Integrated into Silis EDA tool suite
+ * - Adapted for PyQt6 QWebEngineView bridge
+ */
+
 (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;
   var __commonJS = (cb, mod) => function __require() {

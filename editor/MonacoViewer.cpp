@@ -89,3 +89,9 @@ void MonacoViewer::set_theme(const std::string& theme) {
         pending_theme = qtheme;
     }
 }
+
+void MonacoViewer::run_js(const std::string& script) {
+    if (is_loaded) {
+        page()->runJavaScript(QString::fromStdString(script));
+    }
+}

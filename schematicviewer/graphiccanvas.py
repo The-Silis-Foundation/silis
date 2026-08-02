@@ -245,10 +245,17 @@ class SchematicTab(QWidget):
         
         root = self.ide.prep_workspace(base) if base else proj_root
         
-        all_src = glob.glob(os.path.join(root, "source", "*.v")) + \
-                  glob.glob(os.path.join(root, "source", "*.sv")) + \
-                  glob.glob(os.path.join(root, "source", "*.vhd")) + \
-                  glob.glob(os.path.join(root, "source", "*.vhdl"))
+        all_src = []
+        if hasattr(self.ide, 'project_config') and self.ide.project_config and self.ide.project_config.get("rtl_files"):
+            for f_path in self.ide.project_config.get("rtl_files", []):
+                abs_path = os.path.join(self.ide.cwd, f_path) if not os.path.isabs(f_path) else f_path
+                all_src.append(abs_path)
+        else:
+            all_src = glob.glob(os.path.join(root, "source", "*.v")) + \
+                      glob.glob(os.path.join(root, "source", "*.sv")) + \
+                      glob.glob(os.path.join(root, "source", "*.vhd")) + \
+                      glob.glob(os.path.join(root, "source", "*.vhdl"))
+        
         src = [f for f in all_src if not any(x in os.path.basename(f).lower() for x in ["tb_", "_tb", "test_"])]
         
         if not src:
