@@ -432,8 +432,22 @@ void GDSObject_ogl::RenderList(MATRIX4X4 object_view, bool HQ, float fps)
 		
 	}
 }
+
 void GDSObject_ogl::RenderList(MATRIX4X4 object_view, float Quality, bool Update)
 {
+	// Early frustum culling for the entire cell and its hierarchy
+	AA_BOUNDING_BOX bounds = bbox;
+	bounds.maxes.z *= 1.0f+exploded_fraction;
+	bounds.mins.z *= 1.0f+exploded_fraction;
+	for(unsigned long i=0;i<8;i++)
+		bounds.vertices[i].z *= 1.0f+exploded_fraction;
+	bounds.Mult(object_view);
+
+	// If this cell is completely outside the camera's frustum, do not submit its geometry
+	// and do not waste CPU cycles recursively traversing its children!
+	if(!frustum.IsAABoundingBoxInside(bounds))
+		return;
+
 	struct ProcessLayer *layer;
     
     // Do we need to build the geometry?
@@ -456,25 +470,12 @@ void GDSObject_ogl::RenderList(MATRIX4X4 object_view, float Quality, bool Update
 				Quality, false);
 	}
 
-	// Frustum
-	AA_BOUNDING_BOX bounds;
+	// Frustum culling has already been performed at the start of RenderList
 	float distance;
 	MATRIX4X4 mod, total;
     VECTOR4D color;
     bool transparent;
-
-	// Prepare bounding box
-	bounds = bbox;
-	bounds.maxes.z *= 1.0f+exploded_fraction;
-	bounds.mins.z *= 1.0f+exploded_fraction;
-	for(unsigned long i=0;i<8;i++)
-		bounds.vertices[i].z *= 1.0f+exploded_fraction;
-	bounds.Mult(object_view);
 	
-	// Frustum culling of bounding boxes
-	if(!frustum.IsAABoundingBoxInside(bounds))
-		return;
-
 	distance = bounds.DistFromPoint(cam);
 
 	// Output geometry for each layer
@@ -484,10 +485,6 @@ void GDSObject_ogl::RenderList(MATRIX4X4 object_view, float Quality, bool Update
 
 		if(!layer->Show)
 			continue;
-	
-		//// Frustum culling of bounding boxes
-		//if(!frustum.IsAABoundingBoxInside(bbox))
-			//continue;
         
         GLfloat alpha = 1.0f-layer->Filter;
         //alpha = 1.0f;
@@ -507,15 +504,10 @@ void GDSObject_ogl::RenderList(MATRIX4X4 object_view, float Quality, bool Update
 			if(zrel > 1.0f*Quality/10.0)
 				continue;
 		}
-        if(zrel>0.5f*Quality / 10.0)
-        {
-            alpha = alpha - (zrel-0.5f)*2.0f;
-            if(alpha < 0.0f)
-                alpha = 0.0f;
-            transparent = true;
-        }
-        else
-            transparent = false;
+        
+        // Remove the buggy distance-based alpha fading which causes extreme 
+        // Z-buffer flickering and transparent sorting glitches!
+        transparent = (alpha < 1.0f);
 
 		if (transparent_object) {
 			transparent = true;

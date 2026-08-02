@@ -6,12 +6,15 @@ GDS3DWidget::GDS3DWidget(QWidget *parent) : QOpenGLWidget(parent) {
     wm = std::make_unique<Wm_Qt>();
     ::wm = wm.get();
     
-    // NOTE: We intentionally do NOT use a QTimer for a continuous render loop.
-    // That causes the Qt Event loop to poll aggressively, leading to UI stuttering
-    // and 100% CPU usage. We use Event-Driven Rendering instead!
+    render_timer = new QTimer(this);
+    connect(render_timer, &QTimer::timeout, this, [this]() {
+        update();
+    });
+    render_timer->start(16); // Target ~60 FPS
 }
 
 GDS3DWidget::~GDS3DWidget() {
+    render_timer->stop();
     if (::wm == wm.get()) {
         ::wm = nullptr;
     }
@@ -44,12 +47,28 @@ void GDS3DWidget::resizeGL(int w, int h) {
 }
 
 void GDS3DWidget::paintGL() {
+    static_cast<Wm_Qt*>(wm.get())->texts.clear();
+    
+    // Safely draw 2D text overlay using QPainter directly onto the active FBO context!
+    // We MUST wrap raw OpenGL calls in beginNativePainting/endNativePainting to prevent flickering!
+    QPainter painter(this);
+    painter.beginNativePainting();
+    
     if (wm->getWorld()) {
+        // This will issue raw OpenGL commands and also populate the texts buffer
         wm->draw();
-        if (wm->update) {
-            update();
-        }
     }
+    
+    painter.endNativePainting();
+    QFont font = painter.font();
+    font.setPixelSize(14);
+    painter.setFont(font);
+    
+    for (const auto& cmd : static_cast<Wm_Qt*>(wm.get())->texts) {
+        painter.setPen(QColor(cmd.color.GetX() * 255, cmd.color.GetY() * 255, cmd.color.GetZ() * 255, cmd.color.GetW() * 255));
+        painter.drawText(cmd.x, cmd.y + 12, QString::fromStdString(cmd.text));
+    }
+    painter.end();
 }
 
 int GDS3DWidget::translate_button(Qt::MouseButton button) {

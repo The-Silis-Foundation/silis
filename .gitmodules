@@ -1,0 +1,3 @@
+[submodule "third-party/OpenSTA"]
+	path = third-party/OpenSTA
+	url = https://github.com/The-Silis-Foundation/OpenSTA

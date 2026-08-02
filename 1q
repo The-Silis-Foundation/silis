@@ -1,0 +1,25 @@
+the application kinda turns dark after i click the 'load gds in 3d' button
+GL Type: desktop
+Surface Type: OpenGL
+Surface Profile: CompatibilityProfile
+Surface Version: 4.6
+QSG RHI Backend: OpenGL
+Using Supported QSG Backend: yes
+Using Software Dynamic GL: no
+Using Multithreaded OpenGL: yes
+
+Init Parameters:
+  *  application-name silis.py 
+  *  browser-subprocess-path /usr/lib/qt6/libexec/QtWebEngineProcess 
+  *  create-default-gl-context  
+  *  disable-features ConsolidatedMovementXY,InstalledApp,BackgroundFetch,WebOTP,WebPayments,WebUSB,PictureInPicture 
+  *  disable-setuid-sandbox  
+  *  disable-speech-api  
+  *  enable-features NetworkServiceInProcess,TracingServiceInProcess 
+  *  enable-threaded-compositing  
+  *  in-process-gpu  
+  *  use-gl desktop 
+
+DEBUG: Parsed 20038 comps, 41982 pwr_segs, 0 sig_nets.
+DEBUG: Parsed 20038 comps, 41982 pwr_segs, 0 sig_nets.
+Segmentation fault

@@ -676,17 +676,48 @@ class SilisIDE(QMainWindow):
         synth -top {base}
         dfflibmap -liberty {self.pdk_path}
         abc -liberty {self.pdk_path}
+        #flatten
         tee -o reports/area.rpt stat -liberty {self.pdk_path} -json
         write_verilog -noattr {v_net}
         """
+        
+        # --- USER CONFIRMATION DIALOG ---
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Confirm Yosys Synthesis Script")
+        dlg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        dlg.resize(700, 350)
+        
+        theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
+        theme = THEMES.get(theme_name, THEMES["Catppuccin Mocha"])
+        dlg.setStyleSheet(f"QDialog {{ background-color: {theme['bg']}; color: {theme['fg']}; }} QLabel {{ color: {theme['fg']}; }}")
+        
+        dlg_layout = QVBoxLayout(dlg)
+        dlg_layout.addWidget(QLabel("Edit the Yosys commands below. (Uncomment 'flatten' to extract complete clock tree hierarchy)"))
+        
+        editor = ScintillaEditor(is_minimap=False, font_family=USER_SETTINGS.get("font_family", "Consolas"), font_size=USER_SETTINGS.get("font_size", 11), theme_name=theme_name)
+        editor.set_lexer(".tcl")
+        editor.setText(ys.strip())
+        dlg_layout.addWidget(editor)
+        
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bbox.accepted.connect(dlg.accept)
+        bbox.rejected.connect(dlg.reject)
+        dlg_layout.addWidget(bbox)
+        
+        QShortcut(QKeySequence("Ctrl+Return"), dlg).activated.connect(dlg.accept)
+        
+        if not dlg.exec():
+            self.tab_synth.card_status.setText("CANCELLED")
+            return
+            
+        ys = editor.text()
         with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
         
         # --- 2. STA SCRIPT (With Explicit File Dumps) ---
         # Redirects output (>) to timing.rpt and power.rpt
         sdc_files = glob.glob(os.path.join(root, "source", "*.sdc"))
         rel_sdc = os.path.relpath(sdc_files[0], root) if sdc_files else f"source/{base}.sdc"
-        tcl = f"""
-        set_thread_count [exec nproc]
+        tcl = f"""sta::set_thread_count [exec nproc]
         read_liberty {self.pdk_path}
         read_verilog {v_net}
         link_design {base}
@@ -719,7 +750,9 @@ class SilisIDE(QMainWindow):
 
             # --- STEP 2: OPENSTA ---
             try:
-                p2 = subprocess.Popen(f"sta sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                sta_bin = os.path.join(base_dir, "synthengine", "build", "OpenSTA_build", "sta")
+                p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                 for line in iter(p2.stdout.readline, ''):
                     line = line.strip()
                     if line:

@@ -206,6 +206,21 @@ class BackendWidget(QWidget):
         self.viz_tabs.addTab(self.fast_peeker, "Fast Layout Viewer")
         self.viz_tabs.addTab(self.peeker, "Simplified Viewer")
         self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
+        
+        # --- NEW: CLOCK TREE VIEWER ---
+        import sys
+        sys.path.append("/home/jerome/silis/clocktreeviewer/build")
+        try:
+            import clocktree_engine
+            from PyQt6 import sip
+            self.clock_engine = clocktree_engine.ClockTreeViewerCore()
+            ptr = self.clock_engine.get_ptr()
+            self.native_clock_view = sip.wrapinstance(ptr, QWidget)
+            self.viz_tabs.addTab(self.native_clock_view, "Clock Tree")
+        except Exception as e:
+            err_lbl = QLabel(f"Failed to load C++ ClockTreeViewer:\n{e}")
+            self.viz_tabs.addTab(err_lbl, "Clock Tree")
+            
         h_lay.addWidget(self.viz_tabs)
         
         v_split.addWidget(h_widget)
@@ -342,10 +357,56 @@ class BackendWidget(QWidget):
 
         if step_name == "STA":
             if not self.active_pdk: QMessageBox.critical(self, "Error", "PDK not active."); return
-            self.term_log.append("\n[SIGNOFF] Running Signoff Timing Analysis...")
-            lib_cmd = f"read_liberty \"{self.active_pdk['lib']}\""
-            cmd = f"{lib_cmd}\nreport_checks -path_delay max -format full_clock_expanded -fields {{slew cap input_pins fanout}} -digits 4\nreport_worst_slack -max\nreport_tns\nreport_wns"
-            self.send_command_internal(cmd)
+            self.term_log.append("\n[SIGNOFF] Extracting Full Clock Topology via C++ STA Engine...")
+            
+            # Use our custom C++ OpenSTA engine to extract the graph!
+            import sys
+            sys.path.append("/home/jerome/silis/synthengine/build")
+            try:
+                import synth_engine
+                if not hasattr(self, 'sta_anal'):
+                    self.sta_anal = synth_engine.TimingAnalyzer()
+                
+                proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+                base = self.ide.get_context()[1] or "design"
+                v_net = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
+                
+                if self.sta_anal.init_and_analyze(self.active_pdk['lib'], v_net, base):
+                    import json
+                    ports = json.loads(self.sta_anal.get_input_ports_json())
+                    
+                    # Create an interactive dialog to select clock port
+                    dlg = QDialog(self)
+                    dlg.setWindowTitle("Clock Tree Topology Extractor")
+                    dlg.resize(400, 150)
+                    dlg_layout = QVBoxLayout(dlg)
+                    dlg_layout.addWidget(QLabel("Select Clock Port for Layout Topology Extraction:"))
+                    cmb = QComboBox()
+                    cmb.addItems(ports)
+                    
+                    # Auto select
+                    for c in ["clk_i", "clk", "clock", "sys_clk"]:
+                        if c in ports:
+                            cmb.setCurrentText(c)
+                            break
+                            
+                    dlg_layout.addWidget(cmb)
+                    
+                    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                    bbox.accepted.connect(dlg.accept)
+                    bbox.rejected.connect(dlg.reject)
+                    dlg_layout.addWidget(bbox)
+                    
+                    if dlg.exec():
+                        port = cmb.currentText()
+                        tree_json = self.sta_anal.get_clock_tree_json(port)
+                        if hasattr(self, 'clock_engine'):
+                            self.clock_engine.load_tree_data(tree_json)
+                            # Switch to Clock Tree tab (index 3)
+                            self.viz_tabs.setCurrentIndex(3)
+                            self.term_log.append(f"[SUCCESS] Rendered Clock Tree for {port}!")
+            except Exception as e:
+                self.term_log.append(f"[ERR] Failed to extract clock tree: {e}")
             return
 
         if step_name == "DRC":

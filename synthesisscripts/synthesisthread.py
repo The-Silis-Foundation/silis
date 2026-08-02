@@ -296,13 +296,29 @@ class SynthesisTab(QWidget):
         self.list_err.clear()
         for e in m['errors']: self.list_err.addItem(e)
         if m['errors']: self.log_tabs.setCurrentIndex(1)
+        
+        # --- LOAD REAL CLOCK TREE ---
+        import sys
+        sys.path.append("/home/jerome/silis/synthengine/build")
+        try:
+            import synth_engine
+            sta_anal = synth_engine.TimingAnalyzer()
+            lib_path = self.ide.active_pdk['lib']
+            v_net = os.path.join(root, "results", "temp.v")
+            if not os.path.exists(v_net):
+                # Fallback to the actual netlist directory used by the flow
+                v_net = os.path.join(root, "netlist", f"{base}_netlist.v")
+                
+            if sta_anal.init_and_analyze(lib_path, v_net, base):
+                pass
+        except Exception as e:
+            print(f"Failed to load real clock tree: {e}")
 
         rpt = ReportEngine.generate_report(m, base or "design")
         self.preview.setPlainText(rpt)
         self.last_report = rpt
-
+        
         self.ide.log_system("Generating Post Synthesis Report...", "SYS")
-        print(rpt)
         self.ide.log_system("Report generated in background.", "RPT")
 
     def save_report(self):

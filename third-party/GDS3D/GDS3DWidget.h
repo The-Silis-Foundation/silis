@@ -10,14 +10,27 @@
 
 #include "gdsoglviewer/windowmanager.h"
 #include "gdsoglviewer/renderer.h"
+#include <QElapsedTimer>
+#include <QPainter>
+#include <QPaintEvent>
+#include <vector>
+
+struct TextCmd {
+    int x, y;
+    std::string text;
+    VECTOR4D color;
+};
 
 // We implement WindowManager to link GDS3D to Qt
 class Wm_Qt : public WindowManager {
 public:
+    QElapsedTimer global_timer;
+
     Wm_Qt() {
         screenWidth = 800;
         screenHeight = 600;
         active = true;
+        global_timer.start();
     }
     virtual ~Wm_Qt() {}
 
@@ -27,11 +40,22 @@ public:
     void change_cursor(int shape) override {}
     void move_mouse(int x, int y) override {}
     
-    // Qt handles timers outside of this tight loop for us
-    float timer(htime *t, int reset) override { return 0.016f; }
-    htime* new_timer() override { return nullptr; }
+    htime* new_timer() override { 
+        return (htime*) new qint64(global_timer.nsecsElapsed()); 
+    }
+    float timer(htime *t, int reset) override { 
+        if (!t) return 0.016f;
+        qint64* qt = (qint64*)t;
+        qint64 now = global_timer.nsecsElapsed();
+        float delta = (now - *qt) / 1e9f;
+        if (reset) *qt = now;
+        return delta;
+    }
     
-    void render_text(int x, int y, const char * text, VECTOR4D color) override {}
+    std::vector<TextCmd> texts;
+    void render_text(int x, int y, const char * text, VECTOR4D color) override {
+        texts.push_back({x, y, text ? text : "", color});
+    }
     bool query_update(FILE *f) override { return false; }
     
     bool active;
