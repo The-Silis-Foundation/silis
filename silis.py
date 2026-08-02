@@ -622,6 +622,7 @@ class SilisIDE(QMainWindow):
         sdc_files = glob.glob(os.path.join(root, "source", "*.sdc"))
         rel_sdc = os.path.relpath(sdc_files[0], root) if sdc_files else f"source/{base}.sdc"
         tcl = f"""
+        set_thread_count [exec nproc]
         read_liberty {self.pdk_path}
         read_verilog {v_net}
         link_design {base}

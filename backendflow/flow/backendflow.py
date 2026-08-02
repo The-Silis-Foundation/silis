@@ -374,7 +374,7 @@ class BackendWidget(QWidget):
                 sdc_path = os.path.join(proj_root, "source", f"{ctx}.sdc")
                 os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
                 with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
-            tcl_content = f"""read_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
+            tcl_content = f"""set_thread_count [exec nproc]\nread_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
             
             macros = self.ide.project_config.get('macros', [])
             if macros:

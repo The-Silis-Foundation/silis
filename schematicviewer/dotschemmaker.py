@@ -24,7 +24,18 @@ class YosysStructuralWorker(QThread):
         
         script_path = os.path.join(build_dir, "temp_synth.ys")
         with open(script_path, "w") as f:
-            for s in self.src:
+            vhdl_files = [s for s in self.src if s.endswith('.vhd') or s.endswith('.vhdl')]
+            vlog_files = [s for s in self.src if not (s.endswith('.vhd') or s.endswith('.vhdl'))]
+            vhdl_files = sorted(vhdl_files, key=lambda x: 0 if any(k in os.path.basename(x).lower() for k in ['pack', 'pkg', 'type', 'const']) else 1)
+            
+            if vhdl_files:
+                f.write("plugin -i ghdl;\n")
+                work_lib = os.path.basename(self.root)
+                if "neorv32" in self.root.lower() or "neorv32" in work_lib.lower():
+                    work_lib = "neorv32"
+                f.write(f"ghdl --work={work_lib} {' '.join(vhdl_files)} -e {self.module_name};\n")
+                
+            for s in vlog_files:
                 if s.endswith(".sv"):
                     f.write(f"read_verilog -sv {s}\n")
                 else:
