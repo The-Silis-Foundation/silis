@@ -25,6 +25,8 @@
   <a href="#-whats-working">Capabilities</a>
   ·
   <a href="#-project-structure">Architecture</a>
+  ·
+  <a href="#-compilation--build-instructions">Build Guide</a>
 </h4>
 
 <p>
@@ -51,7 +53,7 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 - **Built-in PDK Manager**: Integrated with Volare for zero-friction PDK downloading, corner selection, and configuration switching.
 - **Visual Insights**:
   - **Signal Peeker**: Built-in VCD waveform viewer.
-  - **Schematic Viewer**: High-speed, C++ optimized JSON structural parsing of your Yosys logic netlists!
+  - **Schematic Viewer**: High-speed JSON structural parsing of your Yosys logic netlists via embedded web-rendering.
   - **Fast Layout Viewer**: A stunningly fast DEF visualizer mapping abstract chip structures, macros, pins, and heatmaps.
   - **GDS3D View**: Spawn an interactive 3D cross-section window of your physical silicon over your IDE!
 
@@ -71,6 +73,50 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 
 ---
 
+## Native C++ Engines & Integrations
+
+To achieve high performance, Silis relies on several custom C++ engines exposed to Python via `pybind11`:
+
+- **Schematic Engine** (`schematicviewer/`): Hosts the `digitaljs.html` renderer inside a native `QWebEngineView` and manages background Yosys graph extraction.
+- **Fast Layout Engine** (`backendflow/fast_viewer/` & `backendflow/def_viewer_cpp/`): Bypasses legacy MESA OpenGL errors by rendering millions of layout shapes (macros, pins, standard cells) directly via native Qt primitives.
+- **Clock Tree Engine** (`clocktreeviewer/`): Parses STA clock tree JSON outputs (buffers, fanouts, caps) and interactively visualizes the topology using custom C++ Qt drawing.
+- **Monaco Editor Engine** (`editor/`): Wraps the Monaco code editor inside a native `QWebEngineView` as the primary IDE text editor. It intelligently falls back to the native `QsciScintilla` editor if the C++ module fails to load, guaranteeing usability on all setups.
+
+## Third-Party App Integrations
+
+Silis embeds and calls out to heavily optimized open-source tools to handle complex EDA tasks:
+
+- **GDS3D** (`third-party/GDS3D/`): A hardware-accelerated 3D physical layout viewer custom-compiled for Silis.
+- **OpenSTA** (`third-party/OpenSTA/` and `synthengine/`): Embedded statically for high-performance timing analysis and topology extraction.
+- **External CLI Apps**: Tools like **Yosys** (Logic Synthesis), **OpenROAD** (Place & Route), and **Magic** (DRC/GDS extraction) are called dynamically via Python subprocesses. Ensure these are installed in your system `$PATH`.
+
+---
+
+## Compilation & Build Instructions
+
+Before running the IDE, you must compile the custom C++ engines. 
+
+### Prerequisites
+- `cmake` (>= 3.16)
+- `make` or `ninja`
+- `pybind11-dev`
+- Qt6 Development Packages (`qt6-base-dev`, `qt6-webengine-dev`, etc.)
+
+### Build Steps
+
+For each engine directory (`schematicviewer`, `clocktreeviewer`, `editor`, `synthengine`, `backendflow/fast_viewer`, `backendflow/def_viewer_cpp`, `third-party/GDS3D`, `third-party/OpenSTA`), follow the standard CMake build process:
+
+```bash
+cd <engine_directory>
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
+```
+
+The `CMakeLists.txt` files are configured to generate `.so` libraries that the Python frontend dynamically imports at runtime. 
+
+---
+
 ## Project Structure
 
 Clean separation of concerns for active development:
@@ -79,6 +125,8 @@ Clean separation of concerns for active development:
 - `experimental/` - Where the magic happens. Working features under active iteration.
 - `dev_*/` - Personal developer playgrounds.
 - `reference/` - Core documentation and boilerplate examples.
+- `third-party/` - Embedded third-party C++ repositories (GDS3D, OpenSTA).
+- `schematicviewer/`, `editor/`, `clocktreeviewer/`, `synthengine/`, `backendflow/` - Core native C++ engines and their Python UI wrappers.
 
 ---
 

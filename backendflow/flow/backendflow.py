@@ -524,7 +524,14 @@ close $fp
             cmd = load_template("place.tcl", {"write_cmd": write_cmd})
         elif step_name == "CTS":
             cts_cmd = SSAForge.get_cts_cmd(pdk_name, lib_path)
-            cmd = load_template("cts.tcl", {"cts_cmd": cts_cmd, "write_cmd": write_cmd})
+            cmd = f'''{cts_cmd}
+#clock_tree_synthesis -sink_clustering_enable
+write_def "{def_abs_path}"
+
+# --- CTS FLAGS ---
+# clock_tree_synthesis:
+#   -sink_clustering_enable : Group close sinks to save power and reduce buffer count.
+'''
         elif step_name == "Route":
             guide_path = os.path.join(results_dir, "route.guide").replace("\\", "/")
             drc_path = os.path.join(reports_dir, "drc.rpt").replace("\\", "/")
@@ -532,7 +539,19 @@ close $fp
             try: 
                 with open(fix_script, 'w') as f: f.write("set db [ord::get_db]; set chip [$db getChip]; set block [$chip getBlock]; set net_names {zero_ one_ logic0 logic1}; foreach name $net_names { set net [$block findNet $name]; if {$net != \"NULL\"} { $net setSigType \"SIGNAL\" } }")
             except: pass
-            cmd = load_template("route.tcl", {"fix_script": fix_script, "guide_path": guide_path, "drc_path": drc_path, "write_cmd": write_cmd})
+            cmd = f'''source "{fix_script}"
+global_route -guide_file "{guide_path}" -congestion_iterations 50 -verbose
+#global_route -congestion_iterations 100
+detailed_route -output_drc "{drc_path}"
+#detailed_route -bottom_routing_layer met1 -top_routing_layer met5
+write_def "{def_abs_path}"
+
+# --- ROUTING FLAGS ---
+# global_route:
+#   -congestion_iterations <N> : How aggressively the router tries to fix congestion (higher = slower but better).
+# detailed_route:
+#   -bottom_routing_layer / -top_routing_layer : Restrict routing to specific layers.
+'''
 
         if cmd:
             # Format the command string nicely into multiple lines for the dialog
