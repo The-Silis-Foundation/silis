@@ -807,8 +807,22 @@ class SilisIDE(QMainWindow):
         dlg = SettingsDialog(self)
         dlg.exec()
     def log_system(self, msg, tag="SYS"):
-        # ROUTE SYSTEM MESSAGES TO TAB 1 (Compile Tab)
-        self.tab_compile.terminal.append_output(f"[{tag}] {msg}")
+        # ROUTE SYSTEM MESSAGES TO STATUS BAR & SYNTH LOG
+        formatted = f"[{tag}] {msg}"
+        self.statusBar().showMessage(formatted, 5000)
+        if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'log_main'):
+            self.tab_synth.log_main.append(formatted)
+        # Also push it to the terminal via a cat command as requested
+        try:
+            root = self.get_proj_root(self.get_context()[1] or "design")
+            log_dir = os.path.join(root, "reports")
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "sys.log")
+            with open(log_path, "a") as f:
+                f.write(f"[{tag}] {msg}\n")
+            self.tab_compile.terminal.append_output(f"cat {log_path}\n")
+        except Exception:
+            pass
     def change_directory(self, path):
         if os.path.exists(path):
             os.chdir(path); self.cwd = os.getcwd(); self.tab_compile.explorer.set_cwd(self.cwd)

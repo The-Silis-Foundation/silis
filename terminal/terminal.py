@@ -51,6 +51,11 @@ class VSCodeTerminalWidget(QWidget):
         ptr = self.core.get_ptr()
         self.term_widget = wrapinstance(ptr, QWidget)
         
+        self.term_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.term_widget.setMinimumHeight(50)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(50)
+        
         lay.addWidget(self.term_widget)
         
         # We start the shell and pass the current directory

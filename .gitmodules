@@ -1,3 +1,6 @@
 [submodule "third-party/OpenSTA"]
 	path = third-party/OpenSTA
 	url = https://github.com/The-Silis-Foundation/OpenSTA
+[submodule "third-party/OpenROAD"]
+	path = third-party/OpenROAD
+	url = https://github.com/The-Silis-Foundation/OpenROAD

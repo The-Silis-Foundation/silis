@@ -20,8 +20,6 @@
 <h4>
   <a href="#-features">Features</a>
   ·
-  <a href="#-development-status">Status</a>
-  ·
   <a href="#-whats-working">Capabilities</a>
   ·
   <a href="#-project-structure">Architecture</a>
@@ -31,7 +29,6 @@
 
 <p>
   <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
-  <img alt="Status" src="https://img.shields.io/badge/Status-Experimental-orange.svg?style=for-the-badge&logo=rocket&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
   <img alt="Powered By" src="https://img.shields.io/badge/Engine-PyQt6%20%7C%20C++-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
 </p>
@@ -48,8 +45,8 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 
 ## Features
 
-- **Pseudo-Terminal UI**: A fully integrated custom terminal with ghost auto-fill suggestions and command autocompletion to accelerate your workflow.
-- **Blazing Fast C++ Renderers**: Seamless Pybind11 integration pushing thousands of standard cells, macros, and power rails into Qt6 at 60 FPS without breaking a sweat!
+- **Native Terminal Emulator**: A fully integrated native terminal running inside the IDE.
+- **Blazing Fast C++ Renderers**: Seamless Pybind11 integration pushing thousands of layout instances and graphs into Qt6 at 60 FPS without breaking a sweat!
 - **Built-in PDK Manager**: Integrated with Volare for zero-friction PDK downloading, corner selection, and configuration switching.
 - **Visual Insights**:
   - **Signal Peeker**: Built-in VCD waveform viewer.
@@ -67,9 +64,11 @@ By integrating powerful open-source EDA tools—including **Icarus Verilog**, **
 - [x] **Synthesis**: Seamless Yosys + ABC integration.
 - [x] **Analysis**: Automatic post-synthesis reports mapping power, area, timing, and cell utilization.
 - [x] **Placement & Routing**: End-to-end routing workflows.
+- [x] **Macro Placements**: Macros are successfully placed. (Halo sizing not done yet).
 - [x] **GDSII Generation**: Generating physical layout GDS files with Magic.
 - [x] **Fast Layout Rendering**: Custom C++ engine rendering OpenROAD DEF files in real-time.
-- [ ] **RAM Black-boxing**: *Coming soon via OpenRAM integration!*
+
+*(Note: Standard cell placement blocks are not implemented yet).*
 
 ---
 
@@ -80,7 +79,8 @@ To achieve high performance, Silis relies on several custom C++ engines exposed 
 - **Schematic Engine** (`schematicviewer/`): Hosts the `digitaljs.html` renderer inside a native `QWebEngineView` and manages background Yosys graph extraction.
 - **Fast Layout Engine** (`backendflow/fast_viewer/` & `backendflow/def_viewer_cpp/`): Bypasses legacy MESA OpenGL errors by rendering millions of layout shapes (macros, pins, standard cells) directly via native Qt primitives.
 - **Clock Tree Engine** (`clocktreeviewer/`): Parses STA clock tree JSON outputs (buffers, fanouts, caps) and interactively visualizes the topology using custom C++ Qt drawing.
-- **Monaco Editor Engine** (`editor/`): Wraps the Monaco code editor inside a native `QWebEngineView` as the primary IDE text editor. It intelligently falls back to the native `QsciScintilla` editor if the C++ module fails to load, guaranteeing usability on all setups.
+- **Terminal Engine** (`terminal/`): A fully featured native terminal emulator built in C++.
+- **Monaco Editor Engine** (`editor/`): Wraps the Monaco code editor inside a native `QWebEngineView` as the primary IDE text editor. It intelligently falls back to the native `QsciScintilla` editor if the C++ module fails to load.
 
 ## Third-Party App Integrations
 
@@ -104,41 +104,91 @@ Before running the IDE, you must compile the custom C++ engines.
 
 ### Build Steps
 
-For each engine directory (`schematicviewer`, `clocktreeviewer`, `editor`, `synthengine`, `backendflow/fast_viewer`, `backendflow/def_viewer_cpp`, `third-party/GDS3D`, `third-party/OpenSTA`), follow the standard CMake build process:
+Run the following commands block-by-block to build each required C++ module:
 
+**1. Schematic Engine**
 ```bash
-cd <engine_directory>
+cd schematicviewer
 mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
+cmake .. && make -j$(nproc)
+cd ../..
 ```
 
-The `CMakeLists.txt` files are configured to generate `.so` libraries that the Python frontend dynamically imports at runtime. 
+**2. Clock Tree Engine**
+```bash
+cd clocktreeviewer
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../..
+```
+
+**3. Terminal Engine**
+```bash
+cd terminal
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../..
+```
+
+**4. Editor Engine**
+```bash
+cd editor
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../..
+```
+
+**5. Fast Layout Viewer Engine (OpenROAD DEF Parsing)**
+```bash
+cd backendflow/fast_viewer
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../../..
+
+cd backendflow/def_viewer_cpp
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../../..
+```
+
+**6. Synthesis Engine & OpenSTA**
+```bash
+cd synthengine
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../..
+
+# For the core OpenSTA submodule
+cd third-party/OpenSTA
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../../..
+```
+
+**7. GDS3D Engine**
+```bash
+cd third-party/GDS3D
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+cd ../../..
+```
 
 ---
 
 ## Project Structure
 
-Clean separation of concerns for active development:
-
-- `prime/` - Production-ready, stable codebase *(Coming soon)*
-- `experimental/` - Where the magic happens. Working features under active iteration.
-- `dev_*/` - Personal developer playgrounds.
-- `reference/` - Core documentation and boilerplate examples.
-- `third-party/` - Embedded third-party C++ repositories (GDS3D, OpenSTA).
-- `schematicviewer/`, `editor/`, `clocktreeviewer/`, `synthengine/`, `backendflow/` - Core native C++ engines and their Python UI wrappers.
-
----
-
-## Development Status
-
-**Current status**: Early development, experimental features only.
-
-> *Silis is evolving quickly. While the core features work flawlessly, breaking changes may occur in the `experimental` branch.*
-
-### Quick Links
-- [Stable Release: POCPNRV25](https://github.com/The-Silis-Foundation/silis/blob/main/experimental/POCPNRV25)
-- Check `experimental/by_JeromeAntonyRobin` for the latest cutting-edge reference builds!
+- `backendflow/` - Routing, Floorplanning, GUI logic, and Fast Layout engines.
+- `clocktreeviewer/` - C++ engine for Clock Tree visualization.
+- `editor/` - C++ engine and UI for the Monaco/Scintilla code editor.
+- `terminal/` - Native C++ terminal emulator integration.
+- `pdkmanagers/` - Volare integration and PDK config parsing.
+- `projectwizard/` - UI for creating new projects and workspace logic.
+- `schematicviewer/` - C++ wrapper hosting the DigitalJS schematic engine.
+- `signalpeeker/` - VCD waveform viewing module.
+- `synthengine/` - C++ wrapper for static timing analysis via OpenSTA.
+- `synthesisscripts/` - UI flow and multithreading for synthesis tasks.
+- `testing/` - Sandbox tests.
+- `third-party/` - Embedded third-party repositories (GDS3D, OpenSTA).
 
 ---
 

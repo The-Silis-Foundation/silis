@@ -288,5 +288,6 @@ class SchematicTab(QWidget):
     def invalidate_cache(self):
         self.history_stack.clear()
         self.current_idx = -1
-        self.view.scene.clear()
+        if hasattr(self.view, 'fast_view') and self.view.fast_view:
+            self.view.fast_view.clear()
 
