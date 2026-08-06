@@ -5,7 +5,6 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(fast_layout_viewer, m) {
-    // py::nodelete prevents Python's garbage collector from destroying the C++ Qt Object
     py::class_<FastLayoutViewer, std::unique_ptr<FastLayoutViewer, py::nodelete>>(m, "FastLayoutViewerCore")
         .def(py::init<>())
         .def("clear", &FastLayoutViewer::clear)
@@ -15,6 +14,9 @@ PYBIND11_MODULE(fast_layout_viewer, m) {
         .def("load_pins", &FastLayoutViewer::load_pins)
         .def("load_power", &FastLayoutViewer::load_power)
         .def("load_signals", &FastLayoutViewer::load_signals)
+        .def("load_regions", &FastLayoutViewer::load_regions)
+        .def("load_blockages", &FastLayoutViewer::load_blockages)
+        .def("set_heatmap", &FastLayoutViewer::set_heatmap)
         .def("fit_in_view", &FastLayoutViewer::fit_in_view)
         .def("get_ptr", [](FastLayoutViewer& self) {
             return reinterpret_cast<uintptr_t>(&self);

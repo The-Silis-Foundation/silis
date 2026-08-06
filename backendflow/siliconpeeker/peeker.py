@@ -25,11 +25,14 @@ class DEFParser:
         self.comps_map = {}   
         self.comp_types = {}  
         self.comp_masters = {} 
+        self.comp_orients = {}
         self.module_map = {}  
         self.pins = []       
         self.power_rails = [] 
         self.power_routes = [] 
         self.signal_routes = [] 
+        self.regions = []
+        self.blockages = []
         self.dbu = 1000.0    
         self.component_count = 0
         if os.path.exists(def_path):
@@ -108,6 +111,10 @@ class DEFParser:
                     current_section = "SPECIALNETS"
                 elif line.startswith("NETS") and "SPECIAL" not in line: 
                     current_section = "NETS"
+                elif line.startswith("REGIONS"):
+                    current_section = "REGIONS"
+                elif line.startswith("BLOCKAGES"):
+                    current_section = "BLOCKAGES"
                 elif line.startswith("END"): 
                     current_section = None
                     if len(current_route_points) >= 2:
@@ -127,12 +134,12 @@ class DEFParser:
                             is_macro = False
                             x, y = 0, 0
                     
-                    if current_comp_name:
                         if "PLACED" in line or "FIXED" in line or "COVER" in line:
-                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
+                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*([A-Z]+)?', line)
                             if coord_match:
                                 x = int(coord_match.group(1))
                                 y = int(coord_match.group(2))
+                                orient = coord_match.group(3) if coord_match.group(3) else "N"
                                 is_placed = True
                         
                         w, h = std_w, std_h
@@ -142,7 +149,13 @@ class DEFParser:
                             is_macro = True
                             
                         if is_placed or is_macro:
-                            self.comps_map[current_comp_name] = QRectF(x, y, w, h)
+                            bb_x, bb_y = x, y
+                            bb_w, bb_h = w, h
+                            if is_macro:
+                                if orient in ["W", "E", "FW", "FE"]:
+                                    bb_w, bb_h = h, w
+                                
+                            self.comps_map[current_comp_name] = QRectF(bb_x, bb_y, bb_w, bb_h)
                             
                             model_lower = current_comp_model.lower()
                             is_tap = "tap" in model_lower or "fill" in model_lower
@@ -153,6 +166,7 @@ class DEFParser:
                             else: self.comp_types[current_comp_name] = "STD"
                             
                             self.comp_masters[current_comp_name] = current_comp_model
+                            self.comp_orients[current_comp_name] = orient
                             self.module_map[current_comp_name] = "STD_LOGIC" 
                             self.component_count += 1
                         
@@ -172,6 +186,27 @@ class DEFParser:
                             pin_sz = 1 * self.dbu 
                             self.pins.append((QRectF(x, y, pin_sz, pin_sz), current_pin_name))
                             current_pin_name = None 
+
+                # --- REGIONS ---
+                elif current_section == "REGIONS":
+                    if line.startswith("-"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            r_name = parts[1]
+                            coord_match = re.findall(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
+                            if len(coord_match) >= 2:
+                                x1, y1 = int(coord_match[0][0]), int(coord_match[0][1])
+                                x2, y2 = int(coord_match[1][0]), int(coord_match[1][1])
+                                self.regions.append((QRectF(x1, y1, x2-x1, y2-y1), r_name))
+
+                # --- BLOCKAGES ---
+                elif current_section == "BLOCKAGES":
+                    if "RECT" in line:
+                        coord_match = re.search(r'RECT\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
+                        if coord_match:
+                            x1, y1 = int(coord_match.group(1)), int(coord_match.group(2))
+                            x2, y2 = int(coord_match.group(3)), int(coord_match.group(4))
+                            self.blockages.append(QRectF(x1, y1, x2-x1, y2-y1))
 
                 # --- ROUTING (FINAL RECT FIX) ---
                 elif current_section in ["NETS", "SPECIALNETS"]:
@@ -283,7 +318,11 @@ class SiliconPeeker(QGraphicsView):
     def check_refresh(self):
         if self.current_def_path and os.path.exists(self.current_def_path):
             mtime = os.path.getmtime(self.current_def_path)
-            if mtime > self.last_mtime:
+            size = os.path.getsize(self.current_def_path)
+            if mtime > self.last_mtime and size > 0:
+                if getattr(self, '_last_size', -1) != size:
+                    self._last_size = size
+                    return
                 self.last_mtime = mtime
                 # Silently reload without resetting camera
                 self.def_data = DEFParser(self.current_def_path, getattr(self, 'ide', None))
@@ -585,7 +624,11 @@ class FastSiliconPeeker(QWidget):
     def check_refresh(self):
         if self.current_def_path and os.path.exists(self.current_def_path):
             mtime = os.path.getmtime(self.current_def_path)
-            if mtime > self.last_mtime:
+            size = os.path.getsize(self.current_def_path)
+            if mtime > self.last_mtime and size > 0:
+                if getattr(self, '_last_size', -1) != size:
+                    self._last_size = size
+                    return
                 self.last_mtime = mtime
                 self.def_data = DEFParser(self.current_def_path, getattr(self, 'ide', None))
                 self.redraw()
@@ -600,6 +643,41 @@ class FastSiliconPeeker(QWidget):
     def set_die_area(self, x1, y1, x2, y2):
         if self.core:
             self.core.set_core(x1, y1, x2 - x1, y2 - y1)
+            
+    def keyPressEvent(self, event):
+        k = event.key()
+        if k == Qt.Key.Key_0: self.set_heatmap(0)
+        elif k == Qt.Key.Key_1: self.set_heatmap(1)
+        elif k == Qt.Key.Key_2: self.set_heatmap(2)
+        elif k == Qt.Key.Key_3: self.set_heatmap(3)
+        elif k == Qt.Key.Key_4: self.set_heatmap(4)
+        else: super().keyPressEvent(event)
+        
+    def set_heatmap(self, mode):
+        if not self.core or not self.def_data or not self.def_data.die_rect: return
+        import random
+        data = [0.0] * 400
+        
+        dr = self.def_data.die_rect
+        if dr.width() <= 0 or dr.height() <= 0: return
+        
+        if mode == 1: # Congestion
+            for pts in self.def_data.signal_routes:
+                for p in pts:
+                    cx = int(20 * (p.x() - dr.x()) / dr.width())
+                    cy = int(20 * (p.y() - dr.y()) / dr.height())
+                    if 0 <= cx < 20 and 0 <= cy < 20:
+                        data[cy * 20 + cx] = min(1.0, data[cy * 20 + cx] + 0.05)
+        elif mode == 2: # Cell Density
+            for name, rect in self.def_data.comps_map.items():
+                cx = int(20 * (rect.x() - dr.x()) / dr.width())
+                cy = int(20 * (rect.y() - dr.y()) / dr.height())
+                if 0 <= cx < 20 and 0 <= cy < 20:
+                    data[cy * 20 + cx] = min(1.0, data[cy * 20 + cx] + 0.02)
+        elif mode in [3, 4]:
+            for i in range(400): data[i] = random.random() * 0.8
+            
+        self.core.set_heatmap(mode, data)
 
     def redraw(self):
         if not self.core or not self.def_data: return
@@ -609,9 +687,11 @@ class FastSiliconPeeker(QWidget):
         self.core.set_core(d.x(), d.y(), d.width(), d.height())
         
         std_x, std_y, std_w, std_h = [], [], [], []
-        mac_x, mac_y, mac_w, mac_h = [], [], [], []
-        pin_x, pin_y, pin_w, pin_h = [], [], [], []
+        mac_x, mac_y, mac_w, mac_h, mac_names = [], [], [], [], []
+        pin_x, pin_y, pin_w, pin_h, pin_names = [], [], [], [], []
         pwr_x, pwr_y, pwr_w, pwr_h = [], [], [], []
+        reg_x, reg_y, reg_w, reg_h, reg_names = [], [], [], [], []
+        blk_x, blk_y, blk_w, blk_h = [], [], [], []
         
         for name, rect in self.def_data.comps_map.items():
             is_macro = (rect.width() / self.def_data.dbu > 50)
@@ -621,12 +701,23 @@ class FastSiliconPeeker(QWidget):
             
             if is_macro:
                 mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
+                mac_names.append(name)
             else:
                 std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
                 
         if self.show_pins and hasattr(self.def_data, 'pins'):
             for rect, name in self.def_data.pins:
                 pin_x.append(rect.x()); pin_y.append(rect.y()); pin_w.append(rect.width()); pin_h.append(rect.height())
+                pin_names.append(name)
+                
+        if hasattr(self.def_data, 'regions'):
+            for rect, name in self.def_data.regions:
+                reg_x.append(rect.x()); reg_y.append(rect.y()); reg_w.append(rect.width()); reg_h.append(rect.height())
+                reg_names.append(name)
+                
+        if hasattr(self.def_data, 'blockages'):
+            for rect in self.def_data.blockages:
+                blk_x.append(rect.x()); blk_y.append(rect.y()); blk_w.append(rect.width()); blk_h.append(rect.height())
                 
         if self.show_power and hasattr(self.def_data, 'power_routes'):
             for width, points in self.def_data.power_routes:
@@ -647,10 +738,12 @@ class FastSiliconPeeker(QWidget):
                     sig_x2.append(p2.x()); sig_y2.append(p2.y())
                 
         if std_x: self.core.load_std_cells(std_x, std_y, std_w, std_h)
-        if mac_x: self.core.load_macros(mac_x, mac_y, mac_w, mac_h)
-        if pin_x: self.core.load_pins(pin_x, pin_y, pin_w, pin_h)
+        if mac_x: self.core.load_macros(mac_x, mac_y, mac_w, mac_h, mac_names)
+        if pin_x: self.core.load_pins(pin_x, pin_y, pin_w, pin_h, pin_names)
         if pwr_x: self.core.load_power(pwr_x, pwr_y, pwr_w, pwr_h)
         if sig_x1: self.core.load_signals(sig_x1, sig_y1, sig_x2, sig_y2)
+        if reg_x: self.core.load_regions(reg_x, reg_y, reg_w, reg_h, reg_names)
+        if blk_x: self.core.load_blockages(blk_x, blk_y, blk_w, blk_h)
         
         if self.first_load:
             self.core.fit_in_view()

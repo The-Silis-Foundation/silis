@@ -92,6 +92,7 @@ class PDKManager:
         self.cache_file = os.path.expanduser("~/.silis_pdk_cache.json")
         self.configs = []
         self.load_cache()
+        self.crawl_volare()
 
     def load_cache(self):
         if os.path.exists(self.cache_file):
@@ -126,6 +127,61 @@ class PDKManager:
         self.configs = [c for c in self.configs if c['name'] != name]
         self.configs.insert(0, entry)
         self.save_cache()
+
+    def crawl_volare(self):
+        import glob
+        volare_base = os.path.expanduser("~/.volare/volare/sky130/versions")
+        if not os.path.exists(volare_base):
+            return False
+        
+        versions = os.listdir(volare_base)
+        if not versions:
+            return False
+            
+        latest_version = versions[-1] # Simplistic, just pick the last one
+        pdk_path = os.path.join(volare_base, latest_version, "sky130A")
+        
+        # Standard paths for sky130_fd_sc_hd
+        tlef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "techlef", "*.tlef"))
+        lef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "lef", "*.lef"))
+        gds = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "gds", "*.gds"))
+        tech = glob.glob(os.path.join(pdk_path, "libs.tech", "magic", "*.tech"))
+        
+        libs = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "lib", "*.lib"))
+        
+        corners = {}
+        for l in libs:
+            bn = os.path.basename(l).replace('.lib', '')
+            if "ccsnoise" in bn: continue # Skip ccsnoise for general timing
+            parts = bn.split("__")
+            if len(parts) > 1:
+                corners[parts[1]] = l
+                
+        # Default lib for 'lib' key to keep old code working
+        default_lib = ""
+        for k in ["tt_025C_1v80", "tt_100C_1v80"]:
+            if k in corners:
+                default_lib = corners[k]
+                break
+        if not default_lib and libs:
+            default_lib = libs[0]
+            
+        # RC Corners
+        rc_corners = {"nom": "default"}
+                
+        config = {
+            "name": f"Volare_sky130A_{latest_version[:8]}",
+            "tlef": tlef[0] if tlef else "",
+            "lef": lef[0] if lef else "",
+            "gds": gds[0] if gds else "",
+            "tech": tech[0] if tech else "",
+            "lib": default_lib,
+            "corners": corners,
+            "rc_corners": rc_corners
+        }
+        
+        self.update_config(config)
+        return True
 
 
 class ManualPDKDialog(QDialog):
@@ -213,6 +269,9 @@ class PDKSelector(QDialog):
         btn_add = QPushButton("➕ Add New")
         btn_add.setStyleSheet("color: #2da44e; font-weight: bold;")
         btn_add.clicked.connect(self.trigger_add)
+        btn_auto = QPushButton("🚀 Auto-Crawl Volare")
+        btn_auto.setStyleSheet("color: #00bcd4; font-weight: bold;")
+        btn_auto.clicked.connect(self.trigger_crawl)
         btn_edit = QPushButton("✏️ Edit Selected")
         btn_edit.clicked.connect(self.trigger_edit)
         btn_del = QPushButton("🗑️ Delete Selected")
@@ -222,6 +281,7 @@ class PDKSelector(QDialog):
         self.btn_ok.clicked.connect(self.accept_selection)
         self.btn_ok.setDefault(True)
         btn_lay.addWidget(btn_add)
+        btn_lay.addWidget(btn_auto)
         btn_lay.addWidget(btn_edit)
         btn_lay.addWidget(btn_del)
         btn_lay.addStretch()
@@ -230,6 +290,13 @@ class PDKSelector(QDialog):
 
         self.populate()
         self.table.setFocus()
+
+    def trigger_crawl(self):
+        if self.mgr.crawl_volare():
+            QMessageBox.information(self, "Success", "Crawled Volare PDK successfully!")
+            self.populate()
+        else:
+            QMessageBox.warning(self, "Error", "Could not find Volare PDK at ~/.volare/volare/sky130/versions")
 
     def populate(self):
         self.table.setRowCount(0)

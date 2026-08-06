@@ -168,7 +168,7 @@ class BackendWidget(QWidget):
         r_lay = QHBoxLayout(self.ribbon); r_lay.setContentsMargins(5,2,5,2)
         
         self.steps = ["Init", "Floorplan", "Tapcells", "PDN", "IO Pins", "Place", "CTS", "Route", "GDS"]
-        self.signoff_steps = ["Antenna", "STA", "DRC"] 
+        self.signoff_steps = ["Antenna", "STA", "DRC", "PAT"] 
         
         for step in self.steps:
             btn = QPushButton(step); btn.setStyleSheet("padding: 2px; font-weight: bold; font-size: 11px;")
@@ -416,6 +416,147 @@ class BackendWidget(QWidget):
             self.trigger_magic_drc(proj_root, gds_file)
             return
 
+        if step_name == "PAT":
+            if not self.active_pdk or 'corners' not in self.active_pdk:
+                QMessageBox.critical(self, "Error", "MCMM Corners not found in active PDK. Try auto-crawling Volare.")
+                return
+                
+            self.term_log.append("\n[SIGNOFF] Running MCMM Post-Layout Analysis & Timing...")
+            
+            base = self.ide.get_context()[1] or "design"
+            sdc_path = os.path.join(proj_root, "source", f"{base}.sdc").replace("\\", "/")
+            if not os.path.exists(sdc_path):
+                sdc_files = glob.glob(os.path.join(proj_root, "source", "*.sdc"))
+                if sdc_files: sdc_path = sdc_files[0]
+                
+            tcl_path = os.path.join(proj_root, "pat_mcmm.tcl").replace("\\", "/")
+            corners = self.active_pdk['corners']
+            
+            # Build TCL script
+            tcl_content = f"set_thread_count [exec nproc]\\n"
+            tcl_content += f"read_lef \\\"{self.active_pdk['tlef']}\\\"\\n"
+            tcl_content += f"read_lef \\\"{self.active_pdk['lef']}\\\"\\n"
+            
+            # Read macros if any
+            macros = self.ide.project_config.get('macros', [])
+            if macros:
+                volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
+                for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
+                    if os.path.basename(lef).replace('.lef', '') in macros:
+                        tcl_content += f"read_lef \\\"{lef}\\\"\\n"
+
+            tcl_content += f"read_def \\\"{def_abs_path}\\\"\\n"
+            
+            corner_names = list(corners.keys())
+            tcl_content += f"define_corners " + " ".join(corner_names) + "\\n"
+            
+            for c_name, lib_path in corners.items():
+                tcl_content += f"read_liberty -corner {c_name} \\\"{lib_path}\\\"\\n"
+                
+            if macros:
+                for lib in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")):
+                    name = os.path.basename(lib).replace('.lib', '')
+                    if any(m in name for m in macros):
+                        # Add macro lib to all corners for simplicity
+                        for c_name in corner_names:
+                            tcl_content += f"read_liberty -corner {c_name} \\\"{lib}\\\"\\n"
+                            
+            tcl_content += f"read_sdc \\\"{sdc_path}\\\"\\n"
+            
+            # Setup RC for corners if possible
+            # We skip explicit RC corners for now since they are tied to set_layer_rc commands
+            
+            # Area calculation
+            tcl_content += "set block [::ord::get_db_block]\\n"
+            tcl_content += "set tech [::ord::get_db_tech]\\n"
+            tcl_content += "set dbu [$tech getDbUnitsPerMicron]\\n"
+            tcl_content += "set total_area 0.0\\n"
+            tcl_content += "foreach inst [$block getInsts] {\\n"
+            tcl_content += "    set master [$inst getMaster]\\n"
+            tcl_content += "    set m_area [expr {([$master getWidth] * 1.0 / $dbu) * ([$master getHeight] * 1.0 / $dbu)}]\\n"
+            tcl_content += "    set total_area [expr {$total_area + $m_area}]\\n"
+            tcl_content += "}\\n"
+            tcl_content += "puts \\\"PAT_AREA: $total_area\\\"\\n"
+            
+            tcl_content += "puts \\\"PAT_POWER_START\\\"\\n"
+            tcl_content += "report_power\\n"
+            tcl_content += "puts \\\"PAT_POWER_END\\\"\\n"
+            
+            for c_name in corner_names:
+                tcl_content += f"puts \\\"PAT_CORNER_START: {c_name}\\\"\\n"
+                tcl_content += f"report_checks -path_delay max -corner {c_name}\\n"
+                tcl_content += f"puts \\\"PAT_CORNER_END: {c_name}\\\"\\n"
+                
+            with open(tcl_path, 'w') as f:
+                f.write(tcl_content.replace('\\\\n', '\\n').replace('\\\\\\"', '\\"'))
+                
+            def run_pat():
+                try:
+                    cmd = ["openroad", "-exit", tcl_path]
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    out = proc.stdout
+                    
+                    area = "0.0"
+                    power = "0.0"
+                    
+                    import re
+                    area_match = re.search(r"PAT_AREA:\s*([0-9.]+)", out)
+                    if area_match: area = f"{float(area_match.group(1)):.0f}"
+                    
+                    power_match = re.search(r"Total\s+[0-9.e-]+\s+[0-9.e-]+\s+[0-9.e-]+\s+([0-9.e-]+)", out)
+                    if power_match:
+                        # Convert power from whatever unit OpenSTA uses to mW (OpenSTA default is often W)
+                        # Actually just extract the raw number
+                        try:
+                            p = float(power_match.group(1)) * 1000 # Assuming W -> mW
+                            power = f"{p:.2f}"
+                        except:
+                            power = power_match.group(1)
+                            
+                    corners_data = []
+                    corner_blocks = re.findall(r"PAT_CORNER_START:\s*(\w+)\s*(.*?)PAT_CORNER_END:", out, re.DOTALL)
+                    
+                    timing_failed = False
+                    
+                    for c_name, c_out in corner_blocks:
+                        slack = "N/A"
+                        endpoint = "N/A"
+                        
+                        slack_match = re.search(r"slack\s+\(VIOLATED\)\s+([-\d.]+)", c_out)
+                        if slack_match:
+                            slack = slack_match.group(1)
+                            timing_failed = True
+                        else:
+                            slack_match = re.search(r"slack\s+\(MET\)\s+([-\d.]+)", c_out)
+                            if slack_match: slack = slack_match.group(1)
+                            
+                        ep_match = re.search(r"Endpoint:\s*(\S+)", c_out)
+                        if ep_match: endpoint = ep_match.group(1)
+                        
+                        corners_data.append((c_name, slack, endpoint))
+                        
+                    report = f"Area - {area} µm²\\n"
+                    report += f"Timing - {'Failed' if timing_failed else 'Passed'}\\n"
+                    report += f"Power - {power} mW\\n\\n"
+                    
+                    for i, (c_name, slack, endpoint) in enumerate(corners_data):
+                        report += f"{c_name}\\n"
+                        report += f"Slack\\n{slack}\\n"
+                        report += f"Worst Endpoint\\n{endpoint}\\n"
+                        if i < len(corners_data) - 1:
+                            report += "────────────────────\\n"
+                            
+                    rpt_file = os.path.join(reports_dir, f"{base}_pat_report.rpt")
+                    with open(rpt_file, 'w') as f:
+                        f.write(report.replace('\\\\n', '\\n'))
+                        
+                    self.ide.queue.put(("[BACKEND]", f"PAT Report generated: {rpt_file}"))
+                except Exception as e:
+                    self.ide.queue.put(("[BACKEND]", f"[ERR] PAT Execution Failed: {e}"))
+                    
+            threading.Thread(target=run_pat, daemon=True).start()
+            return
+
         if step_name == "Init":
             db_path = os.path.join(results_dir, "checkpoint.odb")
             if os.path.exists(db_path):
@@ -459,19 +600,51 @@ class BackendWidget(QWidget):
                         
             tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}"\n"""
             tcl_content += f"""
+set block [::ord::get_db_block]
+set tech [::ord::get_db_tech]
+set dbu [$tech getDbUnitsPerMicron]
+
 set macros_json "\\{{\\n  \\"macros\\": \\{{\\n"
-set first 1
-foreach inst [[::ord::get_db_block] getInsts] {{
-    if {{ [[$inst getMaster] isBlock] }} {{
-        if {{ !$first }} {{ append macros_json ",\\n" }}
+set first_macro 1
+set total_std_cell_area 0.0
+array set module_areas {{}}
+
+foreach inst [$block getInsts] {{
+    set master [$inst getMaster]
+    set m_width [$master getWidth]
+    set m_height [$master getHeight]
+    set m_area [expr {{($m_width * 1.0 / $dbu) * ($m_height * 1.0 / $dbu)}}]
+
+    if {{ [$master isBlock] }} {{
+        if {{ !$first_macro }} {{ append macros_json ",\\n" }}
         set inst_name [$inst getName]
         set inst_name [string map [list \\\\ \\\\\\\\ \\" \\\\"] $inst_name]
-        append macros_json "    \\"$inst_name\\": \\"[[$inst getMaster] getName]\\""
-        set first 0
+        append macros_json "    \\"$inst_name\\": \\"[$master getName]\\""
+        set first_macro 0
+    }} else {{
+        set total_std_cell_area [expr {{$total_std_cell_area + $m_area}}]
+        set inst_name [$inst getName]
+        set parts [split $inst_name "/"]
+        if {{ [llength $parts] > 1 }} {{
+            set mod_name [join [lrange $parts 0 end-1] "/"]
+            if {{ ![info exists module_areas($mod_name)] }} {{
+                set module_areas($mod_name) 0.0
+            }}
+            set module_areas($mod_name) [expr {{$module_areas($mod_name) + $m_area}}]
+        }}
     }}
+}}
+append macros_json "\\n  \\}},\\n  \\"total_std_cell_area\\": $total_std_cell_area,\\n  \\"modules\\": \\{{\\n"
+set first_mod 1
+foreach mod_name [array names module_areas] {{
+    if {{ !$first_mod }} {{ append macros_json ",\\n" }}
+    set clean_mod [string map [list \\\\ \\\\\\\\ \\" \\\\"] $mod_name]
+    append macros_json "    \\"$clean_mod\\": $module_areas($mod_name)"
+    set first_mod 0
 }}
 append macros_json "\\n  \\}}\\n\\}}"
 set reports_dir "{os.path.join(proj_root, 'reports').replace(chr(92), '/')}"
+
 file mkdir $reports_dir
 set fp [open "$reports_dir/{base}_sizes.json" w]
 puts $fp $macros_json
