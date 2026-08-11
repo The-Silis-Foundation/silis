@@ -1,4 +1,14 @@
 source "{fix_script}"
+
+# Fix DRT-0305: TritonRoute crashes if regular nets are marked as POWER/GROUND.
+foreach net [[::ord::get_db_block] getNets] {
+    set type [$net getSigType]
+    if {$type == "POWER" || $type == "GROUND"} {
+        $net setSigType "SIGNAL"
+        puts "Fixed sigType of regular net [$net getName] from $type to SIGNAL"
+    }
+}
+
 global_route -guide_file "{guide_path}" -congestion_iterations 50 -verbose
 #global_route -congestion_iterations 100
 detailed_route -output_drc "{drc_path}"

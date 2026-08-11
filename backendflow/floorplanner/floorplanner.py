@@ -59,6 +59,7 @@ class ResizeHandle(QGraphicsRectItem):
         self.setPen(QPen(Qt.GlobalColor.black))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setZValue(100)
         
         if pos_type in ['tl', 'br']: self.setCursor(Qt.CursorShape.SizeFDiagCursor)
         elif pos_type in ['tr', 'bl']: self.setCursor(Qt.CursorShape.SizeBDiagCursor)
@@ -70,6 +71,19 @@ class ResizeHandle(QGraphicsRectItem):
             if hasattr(self.parentItem(), "handle_moved"):
                 self.parentItem().handle_moved(self.pos_type, value)
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        if self.parentItem() and (self.parentItem().flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable):
+            self.parentItem().setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            self.parent_was_movable = True
+        else:
+            self.parent_was_movable = False
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if hasattr(self, 'parent_was_movable') and self.parent_was_movable and self.parentItem():
+            self.parentItem().setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
 
 class ResizableRectItem(QGraphicsRectItem):
     def __init__(self, x, y, w, h, parent=None):
@@ -119,17 +133,18 @@ class ResizableRectItem(QGraphicsRectItem):
         self.update_handle_positions()
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+        if change in (QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged, QGraphicsItem.GraphicsItemChange.ItemSelectedChange):
             selected = bool(value)
             for h in self.handles.values():
                 h.setVisible(selected)
         return super().itemChange(change, value)
 
 class BlockageItem(ResizableRectItem):
-    def __init__(self, x, y, w, h, btype, pct, parent=None):
+    def __init__(self, x, y, w, h, btype, pct, core_rect=None, parent=None):
         super().__init__(x, y, w, h, parent)
         self.btype = btype
         self.pct = pct
+        self.core_rect = core_rect
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         
         if self.btype == "Hard":
@@ -190,10 +205,12 @@ class BlockageItem(ResizableRectItem):
         return super().itemChange(change, value)
 
 class RegionItem(ResizableRectItem):
-    def __init__(self, x, y, w, h, module_name, is_fence=False, parent=None):
+    def __init__(self, x, y, w, h, module_name, is_fence=False, density=0.60, core_rect=None, parent=None):
         super().__init__(x, y, w, h, parent)
         self.module_name = module_name
         self.is_fence = is_fence
+        self.density = density
+        self.core_rect = core_rect
         self.halo = (0, 0, 0, 0)
         self.halo_type = "Routing halo"
         self.halo_rect = QGraphicsRectItem(self)
@@ -216,7 +233,8 @@ class RegionItem(ResizableRectItem):
         
     def update_text(self):
         t = "FENCE" if self.is_fence else "REGION"
-        self.text.setPlainText(f"{t}: {self.module_name}")
+        d = int(self.density * 100)
+        self.text.setPlainText(f"{t}: {self.module_name}\n{d}% Density")
         rect = self.rect()
         br = self.text.boundingRect()
         self.text.setPos(rect.x() + rect.width()/2 - br.width()/2, rect.y() + rect.height()/2 + br.height()/2)
@@ -236,8 +254,23 @@ class RegionItem(ResizableRectItem):
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
             new_pos = value
-            new_pos.setX(round(new_pos.x(), 3))
-            new_pos.setY(round(new_pos.y(), 3))
+            x = round(new_pos.x(), 3)
+            y = round(new_pos.y(), 3)
+            
+            if hasattr(self, 'core_rect') and self.core_rect:
+                w = self.rect().width()
+                h = self.rect().height()
+                min_x = self.core_rect.x() - self.rect().x()
+                min_y = self.core_rect.y() - self.rect().y()
+                max_x = self.core_rect.x() + self.core_rect.width() - self.rect().x() - w
+                max_y = self.core_rect.y() + self.core_rect.height() - self.rect().y() - h
+                if x < min_x: x = min_x
+                if y < min_y: y = min_y
+                if x > max_x: x = max_x
+                if y > max_y: y = max_y
+                
+            new_pos.setX(x)
+            new_pos.setY(y)
             return new_pos
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             if hasattr(self.scene(), "update_utilization"):
@@ -277,11 +310,12 @@ class FloorplanView(InteractiveGraphicsView):
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
-    def start_drawing_region(self, module_name, is_fence):
+    def start_drawing_region(self, module_name, is_fence, density):
         self.drawing_region = True
         self.drawing_blockage = False
         self.region_module = module_name
         self.region_is_fence = is_fence
+        self.region_density = density
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
@@ -294,15 +328,17 @@ class FloorplanView(InteractiveGraphicsView):
 
         if self.drawing_blockage and event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
-            self.blockage_start_pos = QPointF(round(pos.x(), 3), round(pos.y(), 3))
-            self.current_blockage = BlockageItem(self.blockage_start_pos.x(), self.blockage_start_pos.y(), 0, 0, self.btype, self.pct)
+            self.blockage_start_pos = pos
+            cr = getattr(self.parentWidget(), "core_rect", None)
+            self.current_blockage = BlockageItem(pos.x(), pos.y(), 0, 0, self.btype, self.pct, cr)
             self.scene().addItem(self.current_blockage)
             return
             
         if self.drawing_region and event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
-            self.region_start_pos = QPointF(round(pos.x(), 3), round(pos.y(), 3))
-            self.current_region = RegionItem(self.region_start_pos.x(), self.region_start_pos.y(), 0, 0, self.region_module, self.region_is_fence)
+            self.region_start_pos = pos
+            cr = getattr(self.parentWidget(), "core_rect", None)
+            self.current_region = RegionItem(pos.x(), pos.y(), 0, 0, self.region_module, self.region_is_fence, self.region_density, cr)
             self.scene().addItem(self.current_region)
             return
 
@@ -319,17 +355,34 @@ class FloorplanView(InteractiveGraphicsView):
         if self.drawing_blockage and self.current_blockage:
             pos = self.mapToScene(event.pos())
             px, py = round(pos.x(), 3), round(pos.y(), 3)
+            
+            if hasattr(self.parentWidget(), "core_rect") and self.parentWidget().core_rect:
+                cr = self.parentWidget().core_rect
+                if px < cr.x(): px = cr.x()
+                if py < cr.y(): py = cr.y()
+                if px > cr.x() + cr.width(): px = cr.x() + cr.width()
+                if py > cr.y() + cr.height(): py = cr.y() + cr.height()
+                
             x1 = min(px, self.blockage_start_pos.x())
             y1 = min(py, self.blockage_start_pos.y())
             w = abs(px - self.blockage_start_pos.x())
             h = abs(py - self.blockage_start_pos.y())
             self.current_blockage.setRect(x1, y1, w, h)
-            self.current_blockage.update_text()
+            if hasattr(self.parentWidget(), "update_utilization"):
+                self.parentWidget().update_utilization()
             return
             
         if self.drawing_region and self.current_region:
             pos = self.mapToScene(event.pos())
             px, py = round(pos.x(), 3), round(pos.y(), 3)
+            
+            if hasattr(self.parentWidget(), "core_rect") and self.parentWidget().core_rect:
+                cr = self.parentWidget().core_rect
+                if px < cr.x(): px = cr.x()
+                if py < cr.y(): py = cr.y()
+                if px > cr.x() + cr.width(): px = cr.x() + cr.width()
+                if py > cr.y() + cr.height(): py = cr.y() + cr.height()
+                
             x1 = min(px, self.region_start_pos.x())
             y1 = min(py, self.region_start_pos.y())
             w = abs(px - self.region_start_pos.x())
@@ -469,6 +522,25 @@ class MacroItem(QGraphicsRectItem):
         # Center text
         br = self.text.boundingRect()
         self.text.setPos(width/2 - br.width()/2, height/2 + br.height()/2)
+        
+        self.pin_items = []
+        if hasattr(widget_ref, 'macro_pins') and name in widget_ref.macro_pins:
+            for pin in widget_ref.macro_pins[name]:
+                px1, py1, px2, py2 = pin["rect"]
+                pw, ph = px2 - px1, py2 - py1
+                p_item = QGraphicsRectItem(px1, py1, pw, ph, self)
+                p_item.setBrush(QBrush(Qt.GlobalColor.red))
+                p_item.setPen(QPen(Qt.GlobalColor.black, 0))
+                p_item.setToolTip(pin["name"])
+                
+                t_item = QGraphicsTextItem(pin["name"], self)
+                t_item.setDefaultTextColor(Qt.GlobalColor.cyan)
+                f = t_item.font()
+                f.setPixelSize(2) # Very small text for pins
+                t_item.setFont(f)
+                t_item.setTransform(QTransform.fromScale(1, -1))
+                
+                self.pin_items.append({"item": p_item, "text": t_item, "rect": (px1, py1, pw, ph)})
 
     def update_halo(self, l, r, b, t):
         self.halo = (l, r, b, t)
@@ -493,6 +565,36 @@ class MacroItem(QGraphicsRectItem):
             
         l, r, b, t = self.halo
         self.update_halo(l, r, b, t)
+        
+        mw, mh = self.w, self.h
+        for p in getattr(self, 'pin_items', []):
+            px1, py1, pw, ph = p["rect"]
+            nx, ny, nw, nh = px1, py1, pw, ph
+            if orient == "R90": nx, ny, nw, nh = mh - (py1 + ph), px1, ph, pw
+            elif orient == "R180": nx, ny, nw, nh = mw - (px1 + pw), mh - (py1 + ph), pw, ph
+            elif orient == "R270": nx, ny, nw, nh = py1, mw - (px1 + pw), ph, pw
+            elif orient == "MY": nx, ny, nw, nh = mw - (px1 + pw), py1, pw, ph
+            elif orient == "MX": nx, ny, nw, nh = px1, mh - (py1 + ph), pw, ph
+            elif orient == "MX90": nx, ny, nw, nh = mh - (py1 + ph), mw - (px1 + pw), ph, pw
+            elif orient == "MY90": nx, ny, nw, nh = py1, px1, ph, pw
+            p["item"].setRect(nx, ny, nw, nh)
+            
+            t_item = p["text"]
+            br = t_item.boundingRect()
+            
+            # Determine edge
+            actual_h = mw if orient in ["R90", "R270", "MX90", "MY90"] else mh
+            pin_cy = ny + nh / 2.0
+            
+            if pin_cy < actual_h * 0.1: # Bottom edge
+                t_item.setTransform(QTransform().scale(1, -1).rotate(-90))
+                t_item.setPos(nx + nw/2 + br.height()/4, ny + nh)
+            elif pin_cy > actual_h * 0.9: # Top edge
+                t_item.setTransform(QTransform().scale(1, -1).rotate(90))
+                t_item.setPos(nx + nw/2 - br.height()/4, ny)
+            else:
+                t_item.setTransform(QTransform().scale(1, -1))
+                t_item.setPos(nx + nw/2 - br.width()/2, ny + nh/2 + br.height()/2)
         
         br = self.text.boundingRect()
         self.text.setPos(self.rect().width()/2 - br.width()/2, self.rect().height()/2 + br.height()/2)
@@ -598,7 +700,12 @@ class InteractiveFloorplannerWidget(QDialog):
         self.sp_sel_y = QDoubleSpinBox(); self.sp_sel_y.setRange(0, 100000)
         self.cmb_orientation = QComboBox()
         self.cmb_orientation.addItems(["R0", "R90", "R180", "R270", "MX", "MY", "MX90", "MY90"])
+        self.sp_sel_density = QDoubleSpinBox()
+        self.sp_sel_density.setRange(0.0, 1.0)
+        self.sp_sel_density.setSingleStep(0.05)
+        self.sp_sel_density.valueChanged.connect(self.on_sel_density_changed)
         fl_sel.addRow("Macro:", self.lbl_sel_name)
+        fl_sel.addRow("Density:", self.sp_sel_density)
         fl_sel.addRow("Instance:", self.txt_inst_name)
         fl_sel.addRow("Orientation:", self.cmb_orientation)
         fl_sel.addRow("X (µm):", self.sp_sel_x)
@@ -635,7 +742,7 @@ class InteractiveFloorplannerWidget(QDialog):
         
         btn_tcl = QPushButton("Apply Floorplan & Run")
         btn_tcl.setStyleSheet("background: #0078D7; color: white; font-weight: bold;")
-        btn_tcl.clicked.connect(self.generate_floorplan_tcl)
+        btn_tcl.clicked.connect(lambda: self.generate_floorplan_tcl(apply=True))
         left_layout.addWidget(btn_tcl)
         
         btn_fit = QPushButton("Fit Die in View")
@@ -643,7 +750,14 @@ class InteractiveFloorplannerWidget(QDialog):
         left_layout.addWidget(btn_fit)
         
         left_layout.addStretch()
-        splitter.addWidget(left_widget)
+        
+        left_tabs = QTabWidget()
+        left_tabs.addTab(left_widget, "Controls")
+        self.live_tcl_edit = QPlainTextEdit()
+        self.live_tcl_edit.setReadOnly(True)
+        self.live_tcl_edit.setStyleSheet("font-family: Consolas; font-size: 11px;")
+        left_tabs.addTab(self.live_tcl_edit, "Live TCL")
+        splitter.addWidget(left_tabs)
         
         mid_widget = QWidget()
         mid_layout = QVBoxLayout(mid_widget)
@@ -677,14 +791,19 @@ class InteractiveFloorplannerWidget(QDialog):
         gb_region = QGroupBox("Regions & Fences")
         fl_region = QFormLayout(gb_region)
         self.cmb_region_module = QComboBox()
+        self.sp_region_density = QDoubleSpinBox()
+        self.sp_region_density.setRange(0.0, 1.0)
+        self.sp_region_density.setValue(0.60)
+        self.sp_region_density.setSingleStep(0.05)
         self.btn_draw_region = QPushButton("Create Region")
         self.btn_draw_fence = QPushButton("Create Fence")
         self.lbl_region_util = QLabel("Region Utilization: -")
         
-        self.btn_draw_region.clicked.connect(lambda: self.view.start_drawing_region(self.cmb_region_module.currentText(), False))
-        self.btn_draw_fence.clicked.connect(lambda: self.view.start_drawing_region(self.cmb_region_module.currentText(), True))
+        self.btn_draw_region.clicked.connect(lambda: self.view.start_drawing_region(self.cmb_region_module.currentText(), False, self.sp_region_density.value()))
+        self.btn_draw_fence.clicked.connect(lambda: self.view.start_drawing_region(self.cmb_region_module.currentText(), True, self.sp_region_density.value()))
         
         fl_region.addRow("Module:", self.cmb_region_module)
+        fl_region.addRow("Density:", self.sp_region_density)
         fl_region.addRow(self.btn_draw_region, self.btn_draw_fence)
         fl_region.addRow(self.lbl_region_util)
         right_layout.addWidget(gb_region)
@@ -711,6 +830,37 @@ class InteractiveFloorplannerWidget(QDialog):
         splitter.setSizes([250, 600, 200])
         self.tabs.setEnabled(False)
         if self.project_config: self.populate_macro_list(self.project_config)
+        
+        try:
+            proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+            base = self.parent().ide.get_context()[1]
+            save_path = os.path.join(proj_root, "reports", f"{base}_floorplan_save.json").replace("\\", "/")
+            if os.path.exists(save_path):
+                import json
+                with open(save_path, 'r') as f:
+                    state = json.load(f)
+                if 'die' in state:
+                    self.sp_die_w.setValue(state['die']['w'])
+                    self.sp_die_h.setValue(state['die']['h'])
+                    self.sp_marg_t.setValue(state['die']['mt'])
+                    self.sp_marg_b.setValue(state['die']['mb'])
+                    self.sp_marg_l.setValue(state['die']['ml'])
+                    self.sp_marg_r.setValue(state['die']['mr'])
+                    
+                    w = state['die']['w']; h = state['die']['h']
+                    ml = state['die']['ml']; mr = state['die']['mr']
+                    mt = state['die']['mt']; mb = state['die']['mb']
+                    self.die_rect = QRectF(0, 0, w, h)
+                    self.core_rect = QRectF(ml, mb, w - ml - mr, h - mt - mb)
+                    self.view.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
+                    self.floorplan_initialized = True
+                    self.tabs.setEnabled(True)
+                    self.undo_stack.append(state)
+                    self.load_state(state)
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(100, self.fit_die)
+        except Exception as e:
+            print("Failed to load floorplan state:", e)
 
     def on_halo_equal_toggled(self, checked):
         self.sp_halo_r.setEnabled(not checked)
@@ -808,10 +958,19 @@ class InteractiveFloorplannerWidget(QDialog):
                         name = os.path.basename(lef).replace('.lef', '')
                         if name in requested_macros:
                             with open(lef, 'r') as f:
-                                m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', f.read())
+                                content = f.read()
+                                m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
                                 if m:
                                     self.macro_sizes[name] = (float(m.group(1)), float(m.group(2)))
-                                    print(f"Floorplanner: Found LEF size for {name} -> {self.macro_sizes[name]}")
+                                    
+                                if not hasattr(self, 'macro_pins'): self.macro_pins = {}
+                                self.macro_pins[name] = []
+                                pin_blocks = re.findall(r'PIN\s+(\S+)(.*?)END\s+\1', content, re.DOTALL)
+                                for pname, pcontent in pin_blocks:
+                                    rect_match = re.search(r'RECT\s+([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)', pcontent)
+                                    if rect_match:
+                                        px1, py1, px2, py2 = map(float, rect_match.groups())
+                                        self.macro_pins[name].append({"name": pname, "rect": (px1, py1, px2, py2)})
         except Exception as e:
             print("Floorplanner: Error parsing LEF sizes:", e)
             
@@ -956,7 +1115,7 @@ class InteractiveFloorplannerWidget(QDialog):
 
         for b in state['blockages']:
             if b.get('is_region'):
-                r_item = RegionItem(b['x'], b['y'], b['w'], b['h'], b['module_name'], b['is_fence'])
+                r_item = RegionItem(b['x'], b['y'], b['w'], b['h'], b['module_name'], b['is_fence'], b.get('density', 0.60))
                 self.scene.addItem(r_item)
             else:
                 b_item = BlockageItem(b['x'], b['y'], b['w'], b['h'], b['btype'], b['pct'])
@@ -985,7 +1144,11 @@ class InteractiveFloorplannerWidget(QDialog):
 
     def save_state(self):
         if self.is_undoing or not self.floorplan_initialized: return
-        state = {'macros': [], 'blockages': []}
+        self.update_live_tcl()
+        state = {'macros': [], 'blockages': [], 
+                 'die': {'w': self.sp_die_w.value(), 'h': self.sp_die_h.value(),
+                         'mt': self.sp_marg_t.value(), 'mb': self.sp_marg_b.value(),
+                         'ml': self.sp_marg_l.value(), 'mr': self.sp_marg_r.value()}}
         for item in self.scene.items():
             if isinstance(item, MacroItem):
                 state['macros'].append({
@@ -996,16 +1159,17 @@ class InteractiveFloorplannerWidget(QDialog):
                 })
             elif isinstance(item, BlockageItem):
                 state['blockages'].append({
-                    'x': item.rect().x(), 'y': item.rect().y(),
+                    'x': item.rect().x() + item.pos().x(), 'y': item.rect().y() + item.pos().y(),
                     'w': item.rect().width(), 'h': item.rect().height(),
                     'btype': item.btype, 'pct': item.pct
                 })
             elif isinstance(item, RegionItem):
                 state['blockages'].append({
                     'is_region': True,
-                    'x': item.rect().x(), 'y': item.rect().y(),
+                    'x': item.rect().x() + item.pos().x(), 'y': item.rect().y() + item.pos().y(),
                     'w': item.rect().width(), 'h': item.rect().height(),
-                    'module_name': item.module_name, 'is_fence': item.is_fence
+                    'module_name': item.module_name, 'is_fence': item.is_fence,
+                    'density': item.density
                 })
         import json
         if self.undo_stack:
@@ -1014,6 +1178,15 @@ class InteractiveFloorplannerWidget(QDialog):
             if last == curr: return
         self.undo_stack.append(state)
         self.redo_stack.clear()
+        
+        try:
+            proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+            base = self.parent().ide.get_context()[1]
+            save_path = os.path.join(proj_root, "reports", f"{base}_floorplan_save.json").replace("\\", "/")
+            with open(save_path, 'w') as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            pass
 
     def on_macro_dropped(self, name, x, y, inst_name=None):
         if not self.floorplan_initialized: return
@@ -1059,6 +1232,17 @@ class InteractiveFloorplannerWidget(QDialog):
             items[0].set_orientation(text)
             self.save_state()
 
+    def on_sel_density_changed(self):
+        items = self.scene.selectedItems()
+        if not items: return
+        for item in items:
+            if isinstance(item, RegionItem):
+                item.density = self.sp_sel_density.value()
+                if hasattr(item, 'update_text'):
+                    item.update_text()
+        self.update_live_tcl()
+        self.save_state()
+
     def on_spinbox_changed(self):
         items = self.scene.selectedItems()
         if items and isinstance(items[0], MacroItem):
@@ -1069,14 +1253,24 @@ class InteractiveFloorplannerWidget(QDialog):
         try:
             self.update_utilization()
             items = self.scene.selectedItems()
+            if not items:
+                self.lbl_sel_name.setText("None")
+                self.sp_sel_density.setEnabled(False)
+                return
             if items and (isinstance(items[0], MacroItem) or isinstance(items[0], BlockageItem) or isinstance(items[0], RegionItem)):
                 m = items[0]
                 if isinstance(m, MacroItem):
                     self.lbl_sel_name.setText(m.name)
+                    self.sp_sel_density.setEnabled(False)
                 elif isinstance(m, BlockageItem):
                     self.lbl_sel_name.setText(f"Blockage ({m.btype})")
+                    self.sp_sel_density.setEnabled(False)
                 elif isinstance(m, RegionItem):
                     self.lbl_sel_name.setText(f"Region ({m.module_name})")
+                    self.sp_sel_density.setEnabled(True)
+                    self.sp_sel_density.blockSignals(True)
+                    self.sp_sel_density.setValue(m.density)
+                    self.sp_sel_density.blockSignals(False)
                 
                 self.sp_sel_x.blockSignals(True)
                 self.sp_sel_y.blockSignals(True)
@@ -1124,12 +1318,23 @@ class InteractiveFloorplannerWidget(QDialog):
         except RuntimeError:
             pass # Handle C++ object destruction during widget close
 
-    def generate_floorplan_tcl(self):
-        if not self.floorplan_initialized: return
+    def update_live_tcl(self):
+        tcl = self.generate_floorplan_tcl(apply=False)
+        if hasattr(self, 'live_tcl_edit'):
+            self.live_tcl_edit.setPlainText(tcl)
+
+    def generate_floorplan_tcl(self, apply=True):
+        if not self.floorplan_initialized: return ""
         die_w = self.die_rect.width(); die_h = self.die_rect.height()
         core_x1 = self.core_rect.x(); core_y1 = self.core_rect.y()
         core_x2 = core_x1 + self.core_rect.width(); core_y2 = core_y1 + self.core_rect.height()
-        tcl = f"initialize_floorplan -die_area \"0 0 {die_w} {die_h}\" -core_area \"{core_x1} {core_y1} {core_x2} {core_y2}\" -site unithd\n"
+        tcl = "# === INITIALIZATION ===\n"
+        tcl += f"initialize_floorplan -die_area \"0 0 {die_w} {die_h}\" -core_area \"{core_x1} {core_y1} {core_x2} {core_y2}\" -site unithd\n\n"
+        
+        has_macros = any(isinstance(item, MacroItem) for item in self.scene.items())
+        if has_macros:
+            tcl += "# === MACRO PLACEMENT ===\n"
+            
         for item in self.scene.items():
             if isinstance(item, MacroItem):
                 tcl += f"catch {{\n"
@@ -1147,6 +1352,9 @@ class InteractiveFloorplannerWidget(QDialog):
                     oy += item.h
                 elif item.orientation == "MY":
                     ox += item.w
+                
+                ox = round(round(ox / 0.005) * 0.005, 3)
+                oy = round(round(oy / 0.005) * 0.005, 3)
                     
                 tcl += f"  place_inst -name {{{item.inst_name}}} -cell {{{item.name}}} -origin {{{ox} {oy}}} -status FIRM -orientation {item.orientation}\n"
                 tcl += f"}}\n"
@@ -1156,12 +1364,26 @@ class InteractiveFloorplannerWidget(QDialog):
                     by1 = max(0, (item.rect().y() + item.pos().y()) - b)
                     bx2 = min(die_w, (item.rect().x() + item.pos().x()) + item.rect().width() + r)
                     by2 = min(die_h, (item.rect().y() + item.pos().y()) + item.rect().height() + t)
+                    bx1 = round(round(bx1 / 0.005) * 0.005, 3)
+                    by1 = round(round(by1 / 0.005) * 0.005, 3)
+                    bx2 = round(round(bx2 / 0.005) * 0.005, 3)
+                    by2 = round(round(by2 / 0.005) * 0.005, 3)
                     tcl += f"catch {{ create_blockage -region {{{bx1} {by1} {bx2} {by2}}} }}\n"
-            elif isinstance(item, BlockageItem):
+                    
+        has_blockages = any(isinstance(item, BlockageItem) for item in self.scene.items())
+        if has_blockages:
+            tcl += "\n# === BLOCKAGES ===\n"
+            
+        for item in self.scene.items():
+            if isinstance(item, BlockageItem):
                 x1 = item.rect().x() + item.pos().x()
                 y1 = item.rect().y() + item.pos().y()
                 x2 = x1 + item.rect().width()
                 y2 = y1 + item.rect().height()
+                x1 = round(round(x1 / 0.005) * 0.005, 3)
+                y1 = round(round(y1 / 0.005) * 0.005, 3)
+                x2 = round(round(x2 / 0.005) * 0.005, 3)
+                y2 = round(round(y2 / 0.005) * 0.005, 3)
                 tcl += f"catch {{\n"
                 if item.btype == "Partial":
                     tcl += f"  create_blockage -region {{{x1} {y1} {x2} {y2}}} -max_density {item.pct}\n"
@@ -1176,50 +1398,78 @@ class InteractiveFloorplannerWidget(QDialog):
                     by1 = max(0, (item.rect().y() + item.pos().y()) - b)
                     bx2 = min(die_w, (item.rect().x() + item.pos().x()) + item.rect().width() + r)
                     by2 = min(die_h, (item.rect().y() + item.pos().y()) + item.rect().height() + t)
+                    bx1 = round(round(bx1 / 0.005) * 0.005, 3)
+                    by1 = round(round(by1 / 0.005) * 0.005, 3)
+                    bx2 = round(round(bx2 / 0.005) * 0.005, 3)
+                    by2 = round(round(by2 / 0.005) * 0.005, 3)
                     tcl += f"catch {{ create_blockage -region {{{bx1} {by1} {bx2} {by2}}} }}\n"
-            elif isinstance(item, RegionItem):
-                x1 = item.rect().x() + item.pos().x()
-                y1 = item.rect().y() + item.pos().y()
-                x2 = x1 + item.rect().width()
-                y2 = y1 + item.rect().height()
-                reg_name = f"region_{item.module_name.replace('/', '_')}"
-                rtype = "EXCLUSIVE" if item.is_fence else "INCLUSIVE"
-                x1_dbu = int(x1 * 1000)
-                y1_dbu = int(y1 * 1000)
-                x2_dbu = int(x2 * 1000)
-                y2_dbu = int(y2 * 1000)
-                # Use brace-quoting throughout — never backslash-escaped quotes through stdin pipe
+
+        for item in self.scene.items():
+            if isinstance(item, RegionItem) and any(x > 0 for x in item.halo):
+                l, r, b, t = item.halo
+                rx1 = item.rect().x() + item.pos().x()
+                ry1 = item.rect().y() + item.pos().y()
+                rx2 = rx1 + item.rect().width()
+                ry2 = ry1 + item.rect().height()
+                bx1 = max(0, rx1 - l)
+                by1 = max(0, ry1 - b)
+                bx2 = min(die_w, rx2 + r)
+                by2 = min(die_h, ry2 + t)
+                bx1 = round(round(bx1 / 0.005) * 0.005, 3)
+                by1 = round(round(by1 / 0.005) * 0.005, 3)
+                bx2 = round(round(bx2 / 0.005) * 0.005, 3)
+                by2 = round(round(by2 / 0.005) * 0.005, 3)
+                tcl += f"catch {{ create_blockage -region {{{bx1} {by1} {bx2} {by2}}} }}\n"
+            
+        has_regions = any(isinstance(item, RegionItem) for item in self.scene.items())
+        if has_regions:
+            tcl += "\n# === REGIONS & FENCES ===\n"
+            regions_by_module = {}
+            for item in self.scene.items():
+                if isinstance(item, RegionItem):
+                    if item.module_name not in regions_by_module:
+                        regions_by_module[item.module_name] = []
+                    regions_by_module[item.module_name].append(item)
+                    
+            for module_name, items in regions_by_module.items():
+                first_item = items[0]
+                reg_name = f"region_{module_name.replace('/', '_')}"
+                group_name = f"group_{module_name.replace('/', '_')}"
+                rtype = "EXCLUSIVE" if first_item.is_fence else "INCLUSIVE"
+                
                 tcl += f"catch {{\n"
                 tcl += f"  set r [odb::dbRegion_create [::ord::get_db_block] {{{reg_name}}}]\n"
                 tcl += f"  $r setRegionType {{{rtype}}}\n"
-                # dbBox_create isolated — if this build's SWIG crashes on it, addInst still runs
-                tcl += f"  catch {{ odb::dbBox_create $r {x1_dbu} {y1_dbu} {x2_dbu} {y2_dbu} }}\n"
+                for item in items:
+                    x1 = item.rect().x() + item.pos().x()
+                    y1 = item.rect().y() + item.pos().y()
+                    x2 = x1 + item.rect().width()
+                    y2 = y1 + item.rect().height()
+                    x1 = round(round(x1 / 0.005) * 0.005, 3)
+                    y1 = round(round(y1 / 0.005) * 0.005, 3)
+                    x2 = round(round(x2 / 0.005) * 0.005, 3)
+                    y2 = round(round(y2 / 0.005) * 0.005, 3)
+                    x1_dbu = int(x1 * 1000)
+                    y1_dbu = int(y1 * 1000)
+                    x2_dbu = int(x2 * 1000)
+                    y2_dbu = int(y2 * 1000)
+                    tcl += f"  catch {{ odb::dbBox_create $r {x1_dbu} {y1_dbu} {x2_dbu} {y2_dbu} }}\n"
+                tcl += f"  set g [odb::dbGroup_create [::ord::get_db_block] {{{group_name}}}]\n"
+                tcl += f"  $r addGroup $g\n"
                 tcl += f"  foreach inst [[::ord::get_db_block] getInsts] {{\n"
-                tcl += f"    if {{ [string match {{{item.module_name}/*}} [$inst getName]] || [$inst getName] eq {{{item.module_name}}} }} {{\n"
-                tcl += f"      $r addInst $inst\n"
+                tcl += f"    if {{ [string match {{{module_name}/*}} [$inst getName]] || [$inst getName] eq {{{module_name}}} }} {{\n"
+                tcl += f"      $g addInst $inst\n"
                 tcl += f"    }}\n"
                 tcl += f"  }}\n"
                 tcl += f"}}\n"
-                if any(x > 0 for x in item.halo):
-                    l, r, b, t = item.halo
-                    rx1 = item.rect().x() + item.pos().x()
-                    ry1 = item.rect().y() + item.pos().y()
-                    rx2 = rx1 + item.rect().width()
-                    ry2 = ry1 + item.rect().height()
-                    
-                    if l > 0:
-                        tcl += f"catch {{ create_blockage -region {{{max(0, rx1-l)} {max(0, ry1-b)} {rx1} {min(die_h, ry2+t)}}} }}\n"
-                    if r > 0:
-                        tcl += f"catch {{ create_blockage -region {{{rx2} {max(0, ry1-b)} {min(die_w, rx2+r)} {min(die_h, ry2+t)}}} }}\n"
-                    if b > 0:
-                        tcl += f"catch {{ create_blockage -region {{{max(0, rx1)} {max(0, ry1-b)} {min(die_w, rx2)} {ry1}}} }}\n"
-                    if t > 0:
-                        tcl += f"catch {{ create_blockage -region {{{max(0, rx1)} {ry2} {min(die_w, rx2)} {min(die_h, ry2+t)}}} }}\n"
         
-        proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
-        def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
-        tcl += f"\nwrite_def \"{def_abs_path}\""
-        
-        self.parent().term_log.append("[SYS] Applying Custom Floorplan...")
-        self.parent().send_command_internal(tcl)
-        self.accept()
+        if apply:
+            proj_root = self.parent().ide.get_proj_root(self.parent().ide.get_context()[0] or "design")
+            def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
+            
+            self.parent().term_log.append("[SYS] Applying Custom Floorplan...")
+            # Use the live TCL instead so it includes everything correctly.
+            final_tcl = self.live_tcl_edit.toPlainText() + f"\nwrite_def \"{def_abs_path}\"\n"
+            self.parent().send_command_internal(final_tcl)
+            self.accept()
+        return tcl

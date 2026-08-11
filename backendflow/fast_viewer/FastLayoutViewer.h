@@ -11,8 +11,11 @@ public:
     explicit FastLayoutViewer(QWidget* parent = nullptr);
 
     void clear();
+    void set_lod(float std_cell_threshold, float nets_threshold);
     void set_core(float x, float y, float w, float h);
     void load_std_cells(const std::vector<float>& x, const std::vector<float>& y, 
+                        const std::vector<float>& w, const std::vector<float>& h);
+    void load_tap_cells(const std::vector<float>& x, const std::vector<float>& y, 
                         const std::vector<float>& w, const std::vector<float>& h);
     void load_macros(const std::vector<float>& x, const std::vector<float>& y, 
                      const std::vector<float>& w, const std::vector<float>& h,
@@ -41,6 +44,7 @@ protected:
 
 private:
     std::vector<QRectF> std_cells_;
+    std::vector<QRectF> tap_cells_;
     std::vector<QRectF> macros_;
     std::vector<std::string> macro_names_;
     std::vector<QRectF> pins_;
@@ -57,6 +61,8 @@ private:
     bool is_panning_;
     QPointF last_mouse_pos_;
     
+    float lod_std_cells_ = 0.03f;
+    float lod_nets_ = 0.05f;
     int heatmap_mode_ = 0;
     std::vector<float> heatmap_data_;
 };

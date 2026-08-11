@@ -154,10 +154,24 @@ class GDS3DPort(QWidget):
         self.btn_load.setStyleSheet("background: #2da44e; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
         self.btn_load.clicked.connect(self.prompt_load)
         
+        self.btn_close = QPushButton("Close 3D View")
+        self.btn_close.setStyleSheet("background: #d73a49; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
+        self.btn_close.clicked.connect(self.close_viewer)
+        
         h_lay.addWidget(QLabel("<b style='color:#c9d1d9'>Hardware Accelerated GDS3D (Native)</b>"))
         h_lay.addStretch()
         h_lay.addWidget(self.btn_load)
+        h_lay.addWidget(self.btn_close)
         self.layout.addWidget(self.header)
+        
+    def close_viewer(self):
+        parent = self.parent()
+        while parent:
+            from PyQt6.QtWidgets import QTabWidget
+            if isinstance(parent, QTabWidget):
+                parent.setCurrentIndex(0)
+                break
+            parent = parent.parent()
         
         self.canvas = QWidget()
         self.canvas.setStyleSheet("background: #2d2d2d;")

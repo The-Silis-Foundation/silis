@@ -19,7 +19,7 @@ class DEFParser:
     def __init__(self, def_path, ide=None):
         self.path = def_path
         self.ide = ide
-        self.macro_sizes = {}
+        self.comp_sizes = {}
         if self.ide: self.parse_macro_sizes()
         self.die_rect = QRectF(0,0,0,0)
         self.comps_map = {}   
@@ -49,13 +49,15 @@ class DEFParser:
             import os, glob, re
             search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
             for lef in glob.glob(search_path):
-                name = os.path.basename(lef).replace('.lef', '')
-                if name in self.ide.project_config.get('macros', []):
-                    with open(lef, 'r') as f:
-                        content = f.read()
-                        m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
-                        if m:
-                            self.macro_sizes[name] = (float(m.group(1)), float(m.group(2)))
+                with open(lef, 'r') as f:
+                    content = f.read()
+                    name = os.path.basename(lef).replace('.lef', '')
+                    m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
+                    if m:
+                        self.comp_sizes[name] = (float(m.group(1)), float(m.group(2)))
+                    # Find MACRO blocks inside for specific cell sizes (e.g. tap cells in std cell LEF)
+                    for match in re.finditer(r'MACRO\s+([\w\d_]+)[\s\S]*?SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content):
+                        self.comp_sizes[match.group(1)] = (float(match.group(2)), float(match.group(3)))
         except:
             pass
 
@@ -143,15 +145,16 @@ class DEFParser:
                                 is_placed = True
                         
                         w, h = std_w, std_h
-                        if current_comp_model in self.macro_sizes:
-                            w = self.macro_sizes[current_comp_model][0] * self.dbu
-                            h = self.macro_sizes[current_comp_model][1] * self.dbu
-                            is_macro = True
+                        if current_comp_model in self.comp_sizes:
+                            w = self.comp_sizes[current_comp_model][0] * self.dbu
+                            h = self.comp_sizes[current_comp_model][1] * self.dbu
                             
-                        if is_placed or is_macro:
+                        is_macro_by_size = (w / self.dbu > 50)
+                            
+                        if is_placed or is_macro_by_size:
                             bb_x, bb_y = x, y
                             bb_w, bb_h = w, h
-                            if is_macro:
+                            if is_macro_by_size:
                                 if orient in ["W", "E", "FW", "FE"]:
                                     bb_w, bb_h = h, w
                                 
@@ -610,6 +613,9 @@ class FastSiliconPeeker(QWidget):
         
         if fast_layout_viewer:
             self.core = fast_layout_viewer.FastLayoutViewerCore()
+            std_lod = USER_SETTINGS.get("lod_std_cells", 0.002) if USER_SETTINGS.get("lod_enabled", False) else 0.0
+            net_lod = USER_SETTINGS.get("lod_nets", 0.005) if USER_SETTINGS.get("lod_enabled", False) else 0.0
+            self.core.set_lod(std_lod, net_lod)
             ptr = self.core.get_ptr()
             self.native_widget = sip.wrapinstance(ptr, QWidget)
             self.layout.addWidget(self.native_widget)
@@ -692,9 +698,11 @@ class FastSiliconPeeker(QWidget):
         pwr_x, pwr_y, pwr_w, pwr_h = [], [], [], []
         reg_x, reg_y, reg_w, reg_h, reg_names = [], [], [], [], []
         blk_x, blk_y, blk_w, blk_h = [], [], [], []
+        tap_x, tap_y, tap_w, tap_h = [], [], [], []
         
         for name, rect in self.def_data.comps_map.items():
             is_macro = (rect.width() / self.def_data.dbu > 50)
+            is_tap = (self.def_data.comp_types.get(name) == "TAP")
             
             if is_macro and not self.show_macros: continue
             if not is_macro and not self.show_insts: continue
@@ -702,6 +710,8 @@ class FastSiliconPeeker(QWidget):
             if is_macro:
                 mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
                 mac_names.append(name)
+            elif is_tap:
+                tap_x.append(rect.x()); tap_y.append(rect.y()); tap_w.append(rect.width()); tap_h.append(rect.height())
             else:
                 std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
                 
@@ -739,6 +749,7 @@ class FastSiliconPeeker(QWidget):
                 
         if std_x: self.core.load_std_cells(std_x, std_y, std_w, std_h)
         if mac_x: self.core.load_macros(mac_x, mac_y, mac_w, mac_h, mac_names)
+        if tap_x and hasattr(self.core, 'load_tap_cells'): self.core.load_tap_cells(tap_x, tap_y, tap_w, tap_h)
         if pin_x: self.core.load_pins(pin_x, pin_y, pin_w, pin_h, pin_names)
         if pwr_x: self.core.load_power(pwr_x, pwr_y, pwr_w, pwr_h)
         if sig_x1: self.core.load_signals(sig_x1, sig_y1, sig_x2, sig_y2)

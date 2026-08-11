@@ -143,7 +143,8 @@ class PDKManager:
         
         # Standard paths for sky130_fd_sc_hd
         tlef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "techlef", "*.tlef"))
-        lef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "lef", "*.lef"))
+        lef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef"))
+        if not lef: lef = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "lef", "*.lef"))
         gds = glob.glob(os.path.join(pdk_path, "libs.ref", "sky130_fd_sc_hd", "gds", "*.gds"))
         tech = glob.glob(os.path.join(pdk_path, "libs.tech", "magic", "*.tech"))
         

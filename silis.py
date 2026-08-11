@@ -188,6 +188,27 @@ class SettingsDialog(QDialog):
         # External Editor
         self.e_ext_edit = QLineEdit(USER_SETTINGS.get("external_editor", ""))
         form.addRow("External Editor Command:", self.e_ext_edit)
+        
+        # LOD Settings
+        form.addRow(QLabel("<b>Level of Detail (LOD) Thresholds:</b>"))
+        
+        self.chk_lod = QCheckBox("Enable LOD (Disable to always show all)")
+        self.chk_lod.setChecked(USER_SETTINGS.get("lod_enabled", False))
+        form.addRow("", self.chk_lod)
+        
+        self.spin_lod_std = QDoubleSpinBox()
+        self.spin_lod_std.setRange(0.0, 1.0)
+        self.spin_lod_std.setSingleStep(0.0001)
+        self.spin_lod_std.setDecimals(6)
+        self.spin_lod_std.setValue(USER_SETTINGS.get("lod_std_cells", 0.002))
+        form.addRow("Standard/Tap Cells Zoom Threshold:", self.spin_lod_std)
+        
+        self.spin_lod_nets = QDoubleSpinBox()
+        self.spin_lod_nets.setRange(0.0, 1.0)
+        self.spin_lod_nets.setSingleStep(0.0001)
+        self.spin_lod_nets.setDecimals(6)
+        self.spin_lod_nets.setValue(USER_SETTINGS.get("lod_nets", 0.005))
+        form.addRow("Nets/Signals Zoom Threshold:", self.spin_lod_nets)
             
             
         self.tabs.addTab(t_gen, "General Settings")
@@ -276,6 +297,9 @@ class SettingsDialog(QDialog):
         USER_SETTINGS["theme_name"] = theme_name
         USER_SETTINGS["custom_theme"] = THEMES["Custom"]
         USER_SETTINGS["external_editor"] = self.e_ext_edit.text()
+        USER_SETTINGS["lod_enabled"] = self.chk_lod.isChecked()
+        USER_SETTINGS["lod_std_cells"] = self.spin_lod_std.value()
+        USER_SETTINGS["lod_nets"] = self.spin_lod_nets.value()
         save_user_settings(USER_SETTINGS)
 
         
@@ -289,7 +313,13 @@ class SettingsDialog(QDialog):
             
         # Update Silicon Peeker
         if hasattr(self.ide.tab_compile, 'peeker'):
+            if hasattr(self.ide.tab_compile.peeker, 'core') and self.ide.tab_compile.peeker.core:
+                std_lod = USER_SETTINGS["lod_std_cells"] if USER_SETTINGS["lod_enabled"] else 0.0
+                net_lod = USER_SETTINGS["lod_nets"] if USER_SETTINGS["lod_enabled"] else 0.0
+                self.ide.tab_compile.peeker.core.set_lod(std_lod, net_lod)
             self.ide.tab_compile.peeker.update_appearance()
+            if hasattr(self.ide.tab_compile.peeker, 'native_widget'):
+                self.ide.tab_compile.peeker.native_widget.update()
             
         self.accept()
 
@@ -635,7 +665,7 @@ class SilisIDE(QMainWindow):
         self.tab_synth.card_status.setText("RUNNING...")
         self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
-        v_net = f"netlist/{base}_netlist.v"
+        v_net = os.path.join(root, "netlist", f"{base}_netlist.v")
         
         src_v = []
         if hasattr(self, 'project_config') and self.project_config and self.project_config.get("rtl_files"):
@@ -667,17 +697,28 @@ class SilisIDE(QMainWindow):
             read_cmd += f"ghdl --work={work_lib} {' '.join(vhdl_files)} -e {base};\n"
         if vlog_files:
             read_cmd += f"read_verilog {' '.join(vlog_files)};\n"
-        
+        macro_lib_cmds_yosys = ""
+        macro_lib_cmds_sta = ""
+        macros = self.project_config.get('macros', []) if hasattr(self, 'project_config') and self.project_config else []
+        if macros:
+            volare_base = self.pdk_path.split("libs.ref")[0]
+            lib_search = os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")
+            for lib in glob.glob(lib_search):
+                name = os.path.basename(lib).replace('.lib', '')
+                if any(m in name for m in macros):
+                    macro_lib_cmds_yosys += f"read_liberty -lib {lib}\n        "
+                    macro_lib_cmds_sta += f"read_liberty {lib}\n        "
+
         # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
         # Note the 'tee -o reports/area.rpt' to save area stats to a file
         ys = f"""
         read_liberty -lib {self.pdk_path}
-        {read_cmd}
+        {macro_lib_cmds_yosys}{read_cmd}
         synth -top {base}
         dfflibmap -liberty {self.pdk_path}
         abc -liberty {self.pdk_path}
         #flatten
-        tee -o reports/area.rpt stat -liberty {self.pdk_path} -json
+        tee -o {os.path.join(root, 'reports', 'area.rpt')} stat -liberty {self.pdk_path} -json
         write_verilog -noattr {v_net}
         """
         
@@ -716,14 +757,14 @@ class SilisIDE(QMainWindow):
         # --- 2. STA SCRIPT (With Explicit File Dumps) ---
         # Redirects output (>) to timing.rpt and power.rpt
         sdc_files = glob.glob(os.path.join(root, "source", "*.sdc"))
-        rel_sdc = os.path.relpath(sdc_files[0], root) if sdc_files else f"source/{base}.sdc"
+        abs_sdc = sdc_files[0] if sdc_files else os.path.join(root, "source", f"{base}.sdc")
         tcl = f"""sta::set_thread_count [exec nproc]
         read_liberty {self.pdk_path}
-        read_verilog {v_net}
+        {macro_lib_cmds_sta}read_verilog {v_net}
         link_design {base}
-        read_sdc {rel_sdc}
-        report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > reports/timing.rpt
-        report_power > reports/power.rpt
+        read_sdc {abs_sdc}
+        report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -format full_clock_expanded -group_count 100 > {os.path.join(root, 'reports', 'timing.rpt')}
+        report_power > {os.path.join(root, 'reports', 'power.rpt')}
         exit
         """
         with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
@@ -820,7 +861,6 @@ class SilisIDE(QMainWindow):
             log_path = os.path.join(log_dir, "sys.log")
             with open(log_path, "a") as f:
                 f.write(f"[{tag}] {msg}\n")
-            self.tab_compile.terminal.append_output(f"cat {log_path}\n")
         except Exception:
             pass
     def change_directory(self, path):
@@ -918,10 +958,24 @@ class SilisIDE(QMainWindow):
         return m.group(1), m.group(1).replace("tb_", "").replace("_tb", "")
 
     def get_proj_root(self, base):
-        pname = f"{base}_project"; cwd = os.path.abspath(self.cwd)
-        if os.path.basename(cwd) == pname: return cwd
-        if os.path.basename(cwd) in ["source", "netlist"]: return os.path.dirname(cwd)
-        return os.path.join(cwd, pname)
+        cwd = os.path.abspath(self.cwd)
+        
+        # 1. Search upwards for a .silisproj file
+        curr = cwd
+        while curr and curr != '/' and curr != os.path.dirname(curr):
+            try:
+                if any(f.endswith('.silisproj') for f in os.listdir(curr) if os.path.isfile(os.path.join(curr, f))):
+                    return curr
+            except Exception:
+                pass
+            curr = os.path.dirname(curr)
+            
+        # 2. If we are in a known subfolder, the parent is the root
+        if os.path.basename(cwd) in ["source", "netlist", "reports", "results"]:
+            return os.path.dirname(cwd)
+            
+        # 3. Default: the current directory is the project root
+        return cwd
 
     def prep_workspace(self, base):
         root = self.get_proj_root(base)

@@ -6,6 +6,8 @@
 
 FastLayoutViewer::FastLayoutViewer(QWidget* parent) 
     : QWidget(parent), zoom_factor_(1.0), is_panning_(false) {
+    lod_std_cells_ = 0.03f;
+    lod_nets_ = 0.05f;
     setMouseTracking(true);
     setAttribute(Qt::WA_OpaquePaintEvent); // Skip default background drawing for raw speed
 }
@@ -25,6 +27,12 @@ void FastLayoutViewer::clear() {
     update();
 }
 
+void FastLayoutViewer::set_lod(float std_cell_threshold, float nets_threshold) {
+    lod_std_cells_ = std_cell_threshold;
+    lod_nets_ = nets_threshold;
+    update();
+}
+
 void FastLayoutViewer::set_core(float x, float y, float w, float h) {
     core_rect_ = QRectF(x, y, w, h);
     update();
@@ -32,11 +40,15 @@ void FastLayoutViewer::set_core(float x, float y, float w, float h) {
 
 void FastLayoutViewer::load_std_cells(const std::vector<float>& x, const std::vector<float>& y, 
                                      const std::vector<float>& w, const std::vector<float>& h) {
-    size_t count = x.size();
-    std_cells_.reserve(std_cells_.size() + count);
-    for (size_t i = 0; i < count; ++i) {
-        std_cells_.emplace_back(x[i], y[i], w[i], h[i]);
-    }
+    std_cells_.reserve(std_cells_.size() + x.size());
+    for(size_t i=0; i<x.size(); ++i) std_cells_.emplace_back(x[i], y[i], w[i], h[i]);
+    update();
+}
+
+void FastLayoutViewer::load_tap_cells(const std::vector<float>& x, const std::vector<float>& y, 
+                                      const std::vector<float>& w, const std::vector<float>& h) {
+    tap_cells_.reserve(tap_cells_.size() + x.size());
+    for(size_t i=0; i<x.size(); ++i) tap_cells_.emplace_back(x[i], y[i], w[i], h[i]);
     update();
 }
 
@@ -139,41 +151,84 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     painter.translate(-core_rect_.center());
     painter.translate(pan_offset_);
 
-    // Draw Core Box #4A5568
-    QPen core_pen(QColor(74, 85, 104));
-    core_pen.setWidth(0);
+    // Calculate visible viewport for Culling
+    QTransform transform = painter.transform();
+    QTransform inv = transform.inverted();
+    QRectF viewport = inv.mapRect(QRectF(rect()));
+
+    // Draw Core Box
+    QPen core_pen(QColor(100, 100, 100));
     core_pen.setCosmetic(true);
     painter.setPen(core_pen);
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(core_rect_);
     
-    // Draw Power Rails #ffaa00
+    // Draw Power Rails (Orange/Yellow)
     QPen pwr_pen(Qt::NoPen);
     painter.setPen(pwr_pen);
     painter.setBrush(QColor(255, 170, 0, 150));
-    painter.drawRects(power_.data(), power_.size());
     
-    // Draw Signal Routes #4169E1
-    if (!signals_.empty()) {
-        QPen sig_pen(QColor(65, 105, 225, 200));
+    std::vector<QRectF> visible_pwr;
+    visible_pwr.reserve(power_.size() / 10);
+    for (const auto& r : power_) {
+        if (r.intersects(viewport)) visible_pwr.push_back(r);
+    }
+    painter.drawRects(visible_pwr.data(), visible_pwr.size());
+    
+    // Draw Signal Routes
+    if (!signals_.empty() && zoom_factor_ > lod_nets_) {
+        QPen sig_pen(QColor(65, 105, 225, 200)); // Royal Blue
         sig_pen.setCosmetic(true);
         painter.setPen(sig_pen);
-        painter.drawLines(signals_.data(), signals_.size());
+        
+        std::vector<QLineF> visible_sigs;
+        visible_sigs.reserve(signals_.size() / 10);
+        for (const auto& l : signals_) {
+            if (viewport.contains(l.p1()) || viewport.contains(l.p2()) || viewport.intersects(QRectF(l.p1(), l.p2()).normalized())) {
+                visible_sigs.push_back(l);
+            }
+        }
+        painter.drawLines(visible_sigs.data(), visible_sigs.size());
     }
 
-    // Draw Standard Cells #4cc9f0, outline #00509d
-    QPen std_pen(QColor(0, 80, 157, 100));
+    // Draw Standard Cells (Solid cyan-ish with dark border)
+    QPen std_pen(QColor(0, 50, 100, 100));
     std_pen.setCosmetic(true);
     painter.setPen(std_pen);
     painter.setBrush(QColor(76, 201, 240, 255));
-    painter.drawRects(std_cells_.data(), std_cells_.size());
+    
+    if (zoom_factor_ > lod_std_cells_) {
+        std::vector<QRectF> visible_std;
+        visible_std.reserve(std_cells_.size() / 10);
+        for (const auto& r : std_cells_) {
+            if (r.intersects(viewport)) visible_std.push_back(r);
+        }
+        painter.drawRects(visible_std.data(), visible_std.size());
+    }
 
-    // Draw Blockages
-    QPen blk_pen(QColor(150, 150, 150, 255));
-    blk_pen.setCosmetic(true);
-    painter.setPen(blk_pen);
-    painter.setBrush(QColor(100, 100, 100, 100)); // transparent grey
-    painter.drawRects(blockages_.data(), blockages_.size());
+    // Draw Tap Cells (Greayer)
+    if (zoom_factor_ > lod_std_cells_) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(128, 128, 128, 255));
+        std::vector<QRectF> visible_tap;
+        visible_tap.reserve(tap_cells_.size() / 10);
+        for (const auto& r : tap_cells_) {
+            if (r.intersects(viewport)) visible_tap.push_back(r);
+        }
+        painter.drawRects(visible_tap.data(), visible_tap.size());
+    }
+
+    // Draw Macros (Bright Orange/Red, solid)
+    QPen macro_pen(QColor(255, 100, 50));
+    macro_pen.setCosmetic(true);
+    painter.setPen(macro_pen);
+    painter.setBrush(QColor(255, 120, 70, 255));
+    
+    std::vector<QRectF> visible_macros;
+    for (const auto& r : macros_) {
+        if (r.intersects(viewport)) visible_macros.push_back(r);
+    }
+    painter.drawRects(visible_macros.data(), visible_macros.size());
 
     // Draw Regions
     QPen reg_pen(QColor(255, 255, 0, 200)); // Yellow outline
@@ -182,8 +237,8 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     painter.setBrush(QColor(255, 255, 0, 30)); // very transparent yellow
     painter.drawRects(regions_.data(), regions_.size());
 
-    // Draw Macros #4CAF50, outline black
-    QPen macro_pen(QColor(0, 0, 0, 255));
+    // Draw Macros (Bright Orange/Red, solid)
+    macro_pen.setColor(QColor(0, 0, 0, 255));
     macro_pen.setCosmetic(true);
     painter.setPen(macro_pen);
     painter.setBrush(QColor(76, 175, 80, 255));

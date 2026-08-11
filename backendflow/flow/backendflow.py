@@ -14,6 +14,23 @@ from config import USER_SETTINGS, THEMES
 from editor.editor import ScintillaEditor
 from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
 
+class FlowWorker(QThread):
+    finished_signal = pyqtSignal()
+    
+    def __init__(self, func, *args, **kwargs):
+        super().__init__()
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+        
+    def run(self):
+        try:
+            self.func(*self.args, **self.kwargs)
+        except Exception as e:
+            print("Worker Error:", e)
+        finally:
+            self.finished_signal.emit()
+
 class OpenROADPort(QWidget):
     def __init__(self, parent_ide=None):
         super().__init__(parent_ide)
@@ -123,16 +140,21 @@ class BackendWidget(QWidget):
         self.active_pdk = parent_ide.active_pdk
         
         # --- 1. INITIALIZE WIDGETS ---
-        self.peeker = SiliconPeeker()
-        self.peeker.ide = self.ide
         self.fast_peeker = FastSiliconPeeker(self.ide)
         self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
+        
+        self.spinner_timer = QTimer(self)
+        self.spinner_timer.timeout.connect(self.update_spinner)
+        self.spinner_chars = ['|', '/', '-', '\\']
+        self.spinner_idx = 0
+        self.running_steps = 0
         
         self.def_ctrl_widget = QWidget()
         def_layout = QVBoxLayout(self.def_ctrl_widget); def_layout.setContentsMargins(0,0,0,0)
         
         self.chk_inst = QCheckBox("Cells"); self.chk_inst.setChecked(True)
         self.chk_macros = QCheckBox("Macros"); self.chk_macros.setChecked(True)
+        self.chk_tap = QCheckBox("Tapcells"); self.chk_tap.setChecked(True)
         self.chk_pins = QCheckBox("Pins"); self.chk_pins.setChecked(True)
         self.chk_nets = QCheckBox("Nets"); self.chk_nets.setChecked(False)
         self.chk_power = QCheckBox("Power"); self.chk_power.setChecked(True)
@@ -141,8 +163,8 @@ class BackendWidget(QWidget):
         self.btn_heat.setStyleSheet("QPushButton:checked { background-color: #ffcccc; color: red; border: 1px solid red; }")
         
         def_layout.addWidget(QLabel("<b>DEF Layers</b>"))
-        def_layout.addWidget(self.chk_inst); def_layout.addWidget(self.chk_macros); def_layout.addWidget(self.chk_pins)
-        def_layout.addWidget(self.chk_nets); def_layout.addWidget(self.chk_power)
+        def_layout.addWidget(self.chk_inst); def_layout.addWidget(self.chk_macros); def_layout.addWidget(self.chk_tap)
+        def_layout.addWidget(self.chk_pins); def_layout.addWidget(self.chk_nets); def_layout.addWidget(self.chk_power)
         def_layout.addSpacing(10); def_layout.addWidget(QLabel("<b>Overlay</b>"))
         def_layout.addWidget(self.btn_heat); def_layout.addStretch()
 
@@ -204,7 +226,6 @@ class BackendWidget(QWidget):
         
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.viz_tabs.addTab(self.fast_peeker, "Fast Layout Viewer")
-        self.viz_tabs.addTab(self.peeker, "Simplified Viewer")
         self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
         
         # --- NEW: CLOCK TREE VIEWER ---
@@ -234,6 +255,7 @@ class BackendWidget(QWidget):
         # --- 3. CONNECTIONS ---
         self.chk_inst.toggled.connect(self.update_view)
         self.chk_macros.toggled.connect(self.update_view)
+        self.chk_tap.toggled.connect(self.update_view)
         self.chk_pins.toggled.connect(self.update_view)
         self.chk_nets.toggled.connect(self.update_view)
         self.chk_power.toggled.connect(self.update_view)
@@ -254,6 +276,22 @@ class BackendWidget(QWidget):
         
         self.reset_backend() 
         self.viz_tabs.setCurrentIndex(0)
+
+    def update_spinner(self):
+        self.spinner_idx = (self.spinner_idx + 1) % 4
+        self.ide.statusBar().showMessage(f"Running Flow Step... {self.spinner_chars[self.spinner_idx]}")
+
+    def start_spinner(self):
+        self.running_steps += 1
+        if self.running_steps == 1:
+            self.spinner_timer.start(150)
+            
+    def stop_spinner(self):
+        self.running_steps = max(0, self.running_steps - 1)
+        if self.running_steps == 0:
+            self.spinner_timer.stop()
+            self.ide.statusBar().showMessage("Ready")
+
     # === [NEW] MAGIC GUI LAUNCHER ===
     def launch_magic_gui(self):
         """Launches Magic VLSI in GUI mode with the correct Tech file."""
@@ -343,7 +381,7 @@ class BackendWidget(QWidget):
         else:
             self.term_log.append(f"[ERR] GDS not found. Run 'GDS' step first.")
 
-    def run_flow_step(self, step_name):
+    def run_flow_step(self, step_name, bypass_prompt=False):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         results_dir = os.path.join(proj_root, "results"); os.makedirs(results_dir, exist_ok=True)
         reports_dir = os.path.join(proj_root, "reports"); os.makedirs(reports_dir, exist_ok=True)
@@ -554,14 +592,25 @@ class BackendWidget(QWidget):
                 except Exception as e:
                     self.ide.queue.put(("[BACKEND]", f"[ERR] PAT Execution Failed: {e}"))
                     
-            threading.Thread(target=run_pat, daemon=True).start()
+            self.start_spinner()
+            self.pat_worker = FlowWorker(run_pat)
+            self.pat_worker.finished_signal.connect(self.stop_spinner)
+            self.pat_worker.start()
             return
 
         if step_name == "Init":
             db_path = os.path.join(results_dir, "checkpoint.odb")
-            if os.path.exists(db_path):
-                reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.Yes: self.load_checkpoint(); return
+            def_path = os.path.join(results_dir, "temp.def")
+            if not bypass_prompt:
+                self.resume_def = None
+                if os.path.exists(db_path):
+                    reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint.odb. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if reply == QMessageBox.StandardButton.Yes: self.load_checkpoint(); return
+                
+                if os.path.exists(def_path):
+                    reply = QMessageBox.question(self, "Resume from temp.def?", "Found temp.def from a previous step. Resume from it instead?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if reply == QMessageBox.StandardButton.Yes: self.resume_def = def_path.replace("\\", "/")
+
             if not self.active_pdk: 
                  if not self.open_pdk_selector(): return
             tcl_path = os.path.join(proj_root, "init_pdk.tcl").replace("\\", "/")
@@ -650,6 +699,9 @@ set fp [open "$reports_dir/{base}_sizes.json" w]
 puts $fp $macros_json
 close $fp
 """
+            if getattr(self, 'resume_def', None):
+                tcl_content += f'\nread_def "{self.resume_def}"\n'
+                
             try:
                 with open(tcl_path, 'w') as f: f.write(tcl_content)
                 self.pending_init = f"source {tcl_path}"
@@ -710,7 +762,48 @@ write_def "{def_abs_path}"
             drc_path = os.path.join(reports_dir, "drc.rpt").replace("\\", "/")
             fix_script = os.path.join(proj_root, "fix.tcl").replace("\\", "/")
             try: 
-                with open(fix_script, 'w') as f: f.write("set db [ord::get_db]; set chip [$db getChip]; set block [$chip getBlock]; set net_names {zero_ one_ logic0 logic1}; foreach name $net_names { set net [$block findNet $name]; if {$net != \"NULL\"} { $net setSigType \"SIGNAL\" } }")
+                fix_tcl = '''
+# 1. Fix Rogue Power Nets
+foreach net [[::ord::get_db_block] getNets] { 
+    set type [$net getSigType]
+    set name [$net getName]
+    if {($type == "POWER" || $type == "GROUND") && $name != "VDD" && $name != "VSS"} { 
+        $net setSigType "SIGNAL"
+        puts "Fixed rogue power net $name"
+    } 
+}
+
+# 2. Snap IO Pins to Manufacturing Grid (5 DBU) to prevent DRT-0416
+foreach bterm [[::ord::get_db_block] getBTerms] {
+    foreach bpin [$bterm getBPins] {
+        set boxes [$bpin getBoxes]
+        set new_boxes {}
+        set changed 0
+        foreach box $boxes {
+            set layer [$box getTechLayer]
+            set x1 [$box xMin]; set y1 [$box yMin]
+            set x2 [$box xMax]; set y2 [$box yMax]
+            set nx1 [expr {int(round($x1 / 5.0) * 5)}]
+            set ny1 [expr {int(round($y1 / 5.0) * 5)}]
+            set nx2 [expr {int(round($x2 / 5.0) * 5)}]
+            set ny2 [expr {int(round($y2 / 5.0) * 5)}]
+            if {$nx1 != $x1 || $ny1 != $y1 || $nx2 != $x2 || $ny2 != $y2} { set changed 1 }
+            lappend new_boxes [list $layer $nx1 $ny1 $nx2 $ny2]
+        }
+        if {$changed} {
+            set p_status [$bpin getPlacementStatus]
+            odb::dbBPin_destroy $bpin
+            set new_bpin [odb::dbBPin_create $bterm]
+            $new_bpin setPlacementStatus $p_status
+            foreach b $new_boxes {
+                odb::dbBox_create $new_bpin [lindex $b 0] [lindex $b 1] [lindex $b 2] [lindex $b 3] [lindex $b 4]
+            }
+            puts "Snapped off-grid pin for [$bterm getName]"
+        }
+    }
+}
+'''
+                with open(fix_script, 'w') as f: f.write(fix_tcl)
             except: pass
             cmd = f'''source "{fix_script}"
 global_route -guide_file "{guide_path}" -congestion_iterations 50 -verbose
@@ -755,7 +848,11 @@ write_def "{def_abs_path}"
                 proc.wait()
                 self.ide.queue.put(("[BACKEND]", "DRC Run Complete."))
             except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] DRC Execution Failed: {e}"))
-        threading.Thread(target=run_drc, daemon=True).start()
+            
+        self.start_spinner()
+        self.drc_worker = FlowWorker(run_drc)
+        self.drc_worker.finished_signal.connect(self.stop_spinner)
+        self.drc_worker.start()
 
     def trigger_magic_merge(self, root, def_path):
         if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' executable not found.")); return
@@ -807,7 +904,11 @@ write_def "{def_abs_path}"
                     self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
                 else: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{proc.stderr}\n{proc.stdout}"))
             except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Execution Error: {e}"))
-        threading.Thread(target=run_magic, daemon=True).start()
+            
+        self.start_spinner()
+        self.magic_worker = FlowWorker(run_magic)
+        self.magic_worker.finished_signal.connect(self.stop_spinner)
+        self.magic_worker.start()
 
     def open_pdk_selector(self):
         dlg = PDKSelector(self.pdk_mgr, self)
@@ -820,7 +921,10 @@ write_def "{def_abs_path}"
         self.term_log.append(data.strip())
         self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
         if self.pending_init and ("OpenROAD" in data or "openroad>" in data): self.send_command_internal(self.pending_init); self.pending_init = None
-        if self.cmd_active and "openroad>" in data: self.cmd_active = False; self.force_refresh_view()
+        if self.cmd_active and "openroad>" in data: 
+            self.cmd_active = False
+            self.force_refresh_view()
+            self.stop_spinner()
 
     def send_command(self): cmd = self.term_in.text(); self.term_in.clear(); self.send_command_internal(cmd)
         
@@ -835,23 +939,18 @@ write_def "{def_abs_path}"
                     self.peeker.set_die_area(x1, y1, x2, y2)
                     self.fast_peeker.set_die_area(x1, y1, x2, y2)
                 except: pass
-        if self.proc and self.proc.state() == QProcess.ProcessState.Running: self.cmd_active = True; self.proc.write(f"{cmd}\n".encode())
+        if self.proc and self.proc.state() == QProcess.ProcessState.Running: 
+            self.cmd_active = True
+            self.start_spinner()
+            self.proc.write(f"{cmd}\n".encode())
         else: self.term_log.append(f"[ERR] Backend not running. Click Reset.")
     
     def update_view(self):
         try:
-            self.peeker.show_insts = self.chk_inst.isChecked(); self.peeker.show_pins = self.chk_pins.isChecked()
-            self.peeker.show_macros = self.chk_macros.isChecked()
-            self.peeker.show_nets = self.chk_nets.isChecked(); self.peeker.show_power = self.chk_power.isChecked()
-            
             self.fast_peeker.show_insts = self.chk_inst.isChecked(); self.fast_peeker.show_pins = self.chk_pins.isChecked()
-            self.fast_peeker.show_macros = self.chk_macros.isChecked()
+            self.fast_peeker.show_macros = self.chk_macros.isChecked(); self.fast_peeker.show_tapcells = self.chk_tap.isChecked()
             self.fast_peeker.show_nets = self.chk_nets.isChecked(); self.fast_peeker.show_power = self.chk_power.isChecked()
             
-            if hasattr(self, 'btn_heat'): 
-                self.peeker.show_heatmap = self.btn_heat.isChecked()
-                
-            self.peeker.redraw()
             self.fast_peeker.redraw()
         except: pass
     
@@ -860,10 +959,10 @@ write_def "{def_abs_path}"
         def_path = os.path.join(proj_root, "results", "final_routed.def")
         if os.path.exists(def_path): 
             self.term_log.append(f"[SYS] Loading Routed Design from: {def_path}")
-            self.peeker.load_def_file(def_path); self.fast_peeker.load_def_file(def_path)
+            self.fast_peeker.load_def_file(def_path)
             self.chk_nets.setChecked(True)
-            self.peeker.show_nets = True; self.fast_peeker.show_nets = True
-            self.peeker.redraw(); self.fast_peeker.redraw()
+            self.fast_peeker.show_nets = True
+            self.fast_peeker.redraw()
             self.viz_tabs.setCurrentIndex(0)
         else: self.term_log.append(f"[ERR] Routed file not found at: {def_path}")
 
@@ -894,15 +993,44 @@ write_def "{def_abs_path}"
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
         if os.path.exists(def_path): 
-            self.peeker.load_def_file(def_path)
             self.fast_peeker.load_def_file(def_path)
 
     def load_checkpoint(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+        last_step = self.ide.project_config.get('last_backend_step', '')
+        if last_step in ["Place", "CTS"]:
+            def_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
+            if os.path.exists(def_path):
+                self.term_log.append(f"[SYS] Last step was {last_step}. Showing from def instead to avoid DB bugs...")
+                self.resume_def = def_path
+                self.run_flow_step("Init", bypass_prompt=True)
+                return True
+
         db_path = os.path.join(proj_root, "results", "checkpoint.odb").replace("\\", "/")
         if os.path.exists(db_path):
             self.term_log.append(f"[SYS] Loading Checkpoint from {db_path}...")
             self.send_command_internal(f"read_db \"{db_path}\"")
+            
+            # Restore STA context (Liberty & SDC)
+            if self.active_pdk:
+                self.send_command_internal(f"read_liberty \"{self.active_pdk['lib']}\"")
+                macros = self.ide.project_config.get('macros', [])
+                if macros:
+                    lib_path = self.active_pdk.get('lib', '')
+                    volare_base = lib_path.split("libs.ref")[0]
+                    lib_search = os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")
+                    import glob
+                    for lib in glob.glob(lib_search):
+                        name = os.path.basename(lib).replace('.lib', '')
+                        if any(m in name for m in macros):
+                            self.send_command_internal(f"read_liberty \"{lib}\"")
+            
+            ctx = self.ide.get_context()[0] or "top"
+            import glob
+            sdc_files = glob.glob(os.path.join(proj_root, "source", "*.sdc"))
+            if sdc_files:
+                self.send_command_internal(f"read_sdc \"{sdc_files[0].replace(chr(92), '/')}\"")
+                
             self.force_refresh_view(); return True
         return False
 
