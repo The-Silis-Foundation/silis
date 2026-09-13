@@ -197,8 +197,15 @@ cd ../../..
 **Silis** is proudly open-source under the **GNU Affero General Public License v3.0 (AGPL v3)**. 
 
 We believe silicon design tools should be accessible to everyone. The source code is open and will remain open. You are free to modify it for your own workflows!
+## Contributing
 
-*Currently, we are not accepting external contributions as the architecture is still being heavily shaped.*
+Contributions are very welcome! If you’d like to improve something, fix a bug, or add a feature,
+feel free to open an issue or submit a pull request. See how to [contribute](CONTRIBUTING.md).
+A big **thank you** goes out to the community and all contributors who help improve this project:
+
+<a href="https://github.com/The-Silis-Foundation/silis/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=The-Silis-Foundation/silis" />
+</a>
 
 **Conditions:**
 - **License and copyright notice** must be included in all copies.
