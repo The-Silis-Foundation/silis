@@ -4,3 +4,6 @@
 [submodule "third-party/OpenROAD"]
 	path = third-party/OpenROAD
 	url = https://github.com/The-Silis-Foundation/OpenROAD
+[submodule "third-party/siliconcompiler"]
+	path = third-party/siliconcompiler
+	url = https://github.com/siliconcompiler/siliconcompiler.git
