@@ -72,7 +72,7 @@ class DEFParser:
                         except:
                             pass
 
-            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
             bundled_pdk = os.path.join(repo_root, "third-party", "pdks")
             if os.path.isdir(bundled_pdk):
                 search_dirs.append(bundled_pdk)
@@ -900,16 +900,15 @@ class FastSiliconPeeker(QWidget):
         if self.def_data is not None and getattr(self, 'last_mtime', 0) == mtime and getattr(self, '_last_size', 0) == size:
             return
 
+        if hasattr(self, '_load_worker') and self._load_worker and self._load_worker.isRunning():
+            return
+
         self.last_mtime = mtime
         self._last_size = size
 
         # Show non-blocking spinner in status bar if IDE available
         if self.ide and hasattr(self.ide, 'statusBar'):
             self.ide.statusBar().showMessage("Loading DEF layout in background...")
-
-        if hasattr(self, '_load_worker') and self._load_worker and self._load_worker.isRunning():
-            self._load_worker.terminate()
-            self._load_worker.wait()
 
         self._load_worker = DefLoadWorker(path, getattr(self, 'ide', None), self)
         self._load_worker.def_loaded.connect(self._on_def_loaded)
