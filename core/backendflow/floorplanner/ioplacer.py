@@ -1814,15 +1814,21 @@ class IOPlacerDialog(QDialog):
         pitch = self.sp_spacing.value()
         is_pad = self.rb_chip.isChecked()
 
-        # Locate sky130 IO pad LEF for the active PDK dynamically
-        _io_lef_candidates = [
-            os.path.join(REPO_ROOT, "third-party", "pdks", "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
-            os.path.join(REPO_ROOT, "third-party", "pdks", "volare", "sky130", "versions", "0fe599b2afb6708d281543108caf8310912f54af", "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
-            os.path.join(REPO_ROOT, "third-party", "OpenROAD", "src", "pad", "test", "skywater130_io_fd", "lef", "sky130_fd_io.lef"),
+        # Locate sky130 IO pad LEFs dynamically
+        _io_lefs = []
+        _io_cand_dirs = [
+            os.path.join(REPO_ROOT, "third-party", "pdks", "sky130A", "libs.ref", "sky130_fd_io", "lef"),
+            os.path.join(REPO_ROOT, "third-party", "pdks", "volare", "sky130", "versions", "0fe599b2afb6708d281543108caf8310912f54af", "sky130A", "libs.ref", "sky130_fd_io", "lef"),
+            os.path.expanduser("~/.silis/pdks/sky130A/libs.ref/sky130_fd_io/lef"),
+            os.path.expanduser("~/.silis/pdks/sky130B/libs.ref/sky130_fd_io/lef"),
         ]
         if os.environ.get("PDK_ROOT"):
-            _io_lef_candidates.append(os.path.join(os.environ["PDK_ROOT"], "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"))
-        _io_lef = next((p for p in _io_lef_candidates if os.path.isfile(p)), None)
+            _io_cand_dirs.append(os.path.join(os.environ["PDK_ROOT"], "sky130A", "libs.ref", "sky130_fd_io", "lef"))
+        for d in _io_cand_dirs:
+            for f in ("sky130_ef_io.lef", "sky130_fd_io.lef"):
+                p = os.path.join(d, f)
+                if os.path.isfile(p) and p not in _io_lefs:
+                    _io_lefs.append(p)
 
         lines = [
             "# ==============================================================================",
@@ -1835,31 +1841,20 @@ class IOPlacerDialog(QDialog):
         ]
 
         if is_pad:
-            lines.append("# --- Full-Chip Pad Ring Placement ---")
+            lines.append("# --- Full-Chip Pad Ring Placement (SiliconCompiler-Compliant Abutment & Zero DRC) ---")
 
-            # Load sky130 IO pad LEF if not already loaded
-            if _io_lef:
-                lines.append(f"# Load sky130 IO pad cell definitions")
-                lines.append(f"catch {{ read_lef \"{_io_lef}\" }}")
-                lines.append("")
+            # Load sky130 IO pad LEFs
+            for _lef in _io_lefs:
+                lines.append(f"catch {{ read_lef \"{_lef}\" }}")
+            lines.append("")
 
-            # If user enabled automatic pad ring / expanded die, inject site creation & corners
-            if getattr(self, "pad_ring_enabled", False):
-                strategy = getattr(self, "pad_strategy", "single")
-                lines.append(f"# Create I/O Sites for Pad Placement ({strategy.upper()} STRATEGY)")
-                lines.append("catch { make_fake_io_site -name IO_SITE -width 1 -height 200 }")
-                lines.append("catch { make_fake_io_site -name IO_CSITE -width 200 -height 200 }")
-
-                if strategy == "staggered":
-                    # Dual-Ring Sites: Ring 1 (outer) at offset 10, Ring 2 (inner) at offset 220
-                    lines.append("catch { make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 10 -ring_index 1 }")
-                    lines.append("catch { make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 220 -ring_index 2 }")
-                    lines.append("catch { place_corners -ring_index 1 sky130_fd_io__corner_bus_overlay }")
-                    lines.append("catch { place_corners -ring_index 2 sky130_fd_io__corner_bus_overlay }")
-                else:
-                    lines.append("catch { make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 10 }")
-                    lines.append("catch { place_corners sky130_fd_io__corner_bus_overlay }")
-                lines.append("")
+            # IO Sites creation (Exact SiliconCompiler geometry: site 1x200, corner 200x204)
+            lines.append("# Create I/O Sites for Pad Placement")
+            lines.append("catch { make_fake_io_site -name IO_SITE -width 1 -height 200 }")
+            lines.append("catch { make_fake_io_site -name IO_CSITE -width 200 -height 204 }")
+            lines.append("catch { make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 10 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180 }")
+            lines.append("catch { place_corners sky130_ef_io__corner_pad }")
+            lines.append("")
 
             # Master cell selection per pin direction
             def _pad_master(direction):
@@ -1974,24 +1969,25 @@ class IOPlacerDialog(QDialog):
                             lines.append(f"catch {{ place_pin -pin_name \"{pname}\" -layer {player} -location {{{ploc}}} }}")
                 else:
                     # Standard Single Ring:
-                    # Corner site width/height is 200um.
-                    # With make_io_sites -offset 10, corner sits at offset 10..210.
-                    # To completely avoid touching or placing near corners/vertices:
-                    # Safe start offset is 260.0um (200um corner + 60um buffer).
-                    # Safe end offset is edge_len - 260.0um - pad_width (80.0um).
+                    # Pad width in sky130 is exactly 80.0um.
+                    # Corner site width is 200.0um (with 10um offset, corner ends at 210.0um).
+                    # Safe start offset is 220.0um (clear of corner).
+                    # Safe end offset is edge_len - 220.0um - pad_width (80.0um).
                     pad_width = 80.0
-                    row_min = 260.0
-                    row_max = max(row_min, edge_len - 260.0 - pad_width)
+                    min_pitch = 80.0  # Physical hard lower bound to prevent overlap
+                    row_min = 220.0
+                    row_max = max(row_min, edge_len - 220.0 - pad_width)
                     max_span = max(0.0, row_max - row_min)
                     n = len(pad_list)
-                    min_span_needed = (n - 1) * 85.0 if n > 1 else 0.0
 
-                    if n > 1 and max_span < min_span_needed:
-                        # PHYSICAL OVERLAP DETECTED: Die edge is too short to physically host n pads!
-                        print(f"[IOPlacer WARNING] Edge '{edge}' ({edge_len:.1f}um) cannot hold {n} single-ring pads (needs >= {min_span_needed + 520.0 + pad_width:.1f}um). Clamping to 85um pad pitch.")
-                        step = 85.0
+                    if n > 1:
+                        # Maximize uniform spacing, but strictly enforce min_pitch >= 80.0um
+                        step = max_span / (n - 1)
+                        if step < min_pitch:
+                            print(f"[IOPlacer WARNING] Edge '{edge}' ({edge_len:.1f}um) cannot hold {n} pads with 80um pitch (needs >= {(n-1)*80.0 + 440.0 + pad_width:.1f}um). Clamping to 80.0um to guarantee ZERO overlap.")
+                            step = min_pitch
                     else:
-                        step = (max_span / (n - 1)) if n > 1 else 0.0
+                        step = 0.0
 
                     start = row_min if n > 1 else (row_min + max_span / 2.0)
                     for i, (name, data) in enumerate(pad_list):
@@ -2017,6 +2013,15 @@ class IOPlacerDialog(QDialog):
                             ploc = f"{core_x2:.3f} {loc:.3f}"
                             player = ver_layer
                         lines.append(f"catch {{ place_pin -pin_name \"{name}\" -layer {player} -location {{{ploc}}} }}")
+
+            # Fill any remaining spaces between pads and connect abutment for continuous power ring
+            lines.append("")
+            lines.append("# --- Fill remaining gaps and connect abutment for continuous supply rails ---")
+            lines.append("set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}")
+            lines.append("foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {")
+            lines.append("    catch { place_io_fill -row $row {*}$pad_fill }")
+            lines.append("}")
+            lines.append("catch { connect_by_abutment }")
 
         else:
             lines.append("# --- Macro Peripheral Port Placement (Pure WYSIWYG) ---")

@@ -417,6 +417,30 @@ class BackendWidget(QWidget):
         self.viz_tabs.setCurrentIndex(0)
 
 
+    def _get_io_lefs(self):
+        """Discovers sky130 IO and corner/filler pad LEFs to support clean pad placement."""
+        io_lefs = []
+        candidates = []
+        lib_path = self.active_pdk.get('lib', '') if self.active_pdk else ''
+        if 'libs.ref' in lib_path:
+            pdk_root = lib_path.split('libs.ref')[0]
+            candidates.extend([
+                os.path.join(pdk_root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_ef_io.lef'),
+                os.path.join(pdk_root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_fd_io.lef'),
+            ])
+        candidates.extend([
+            os.path.expanduser('~/.silis/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_ef_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_fd_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130B/libs.ref/sky130_fd_io/lef/sky130_ef_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130B/libs.ref/sky130_fd_io/lef/sky130_fd_io.lef'),
+            os.path.join(REPO_ROOT, 'third-party', 'pdks', 'sky130A', 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_ef_io.lef'),
+            os.path.join(REPO_ROOT, 'third-party', 'pdks', 'sky130A', 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_fd_io.lef'),
+        ])
+        for p in candidates:
+            if os.path.isfile(p) and p not in io_lefs:
+                io_lefs.append(p)
+        return io_lefs
+
     def _get_macro_files(self, ext):
         files = []
         macros = self.ide.project_config.get('macros', []) if hasattr(self, 'ide') and self.ide and hasattr(self.ide, 'project_config') else []
@@ -714,6 +738,8 @@ class BackendWidget(QWidget):
                 f'read_lef "{self.active_pdk["tlef"]}"',
                 f'read_lef "{self.active_pdk["lef"]}"'
             ]
+            for io_lef in self._get_io_lefs():
+                tcl_lines.append(f'read_lef "{io_lef}"')
             for lef in self._get_macro_files("lef"):
                 tcl_lines.append(f'read_lef "{lef}"')
 
@@ -1112,7 +1138,8 @@ ________________________________________________________________________________
                 os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
                 with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
             tcl_content = f"""set_thread_count [exec nproc]\nread_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
-            
+            for io_lef in self._get_io_lefs():
+                tcl_content += f"""read_lef "{io_lef}"\n"""
             for lef in self._get_macro_files("lef"):
                 tcl_content += f"""read_lef "{lef}"\n"""
 

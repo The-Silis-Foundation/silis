@@ -355,6 +355,30 @@ if {[info commands gds] eq ""} {
         print("─" * 65 + "\n")
         return metrics['status'] != "FAILED" and os.path.exists(v_net)
 
+    def _get_io_lefs(self):
+        """Discovers sky130 IO and corner/filler pad LEFs to support clean pad placement."""
+        io_lefs = []
+        candidates = []
+        lib_path = self.ide.active_pdk.get('lib', '') if hasattr(self, 'ide') and getattr(self.ide, 'active_pdk', None) else ''
+        if 'libs.ref' in lib_path:
+            pdk_root = lib_path.split('libs.ref')[0]
+            candidates.extend([
+                os.path.join(pdk_root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_ef_io.lef'),
+                os.path.join(pdk_root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_fd_io.lef'),
+            ])
+        candidates.extend([
+            os.path.expanduser('~/.silis/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_ef_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_fd_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130B/libs.ref/sky130_fd_io/lef/sky130_ef_io.lef'),
+            os.path.expanduser('~/.silis/pdks/sky130B/libs.ref/sky130_fd_io/lef/sky130_fd_io.lef'),
+            os.path.join(REPO_ROOT, 'third-party', 'pdks', 'sky130A', 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_ef_io.lef'),
+            os.path.join(REPO_ROOT, 'third-party', 'pdks', 'sky130A', 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_fd_io.lef'),
+        ])
+        for p in candidates:
+            if os.path.isfile(p) and p not in io_lefs:
+                io_lefs.append(p)
+        return io_lefs
+
     def _get_macro_lefs_and_libs(self):
         macro_lefs = []
         macro_libs = []
@@ -403,12 +427,14 @@ if {[info commands gds] eq ""} {
         if os.path.isfile(def_path):
             print(f"\n[ASIC BACKEND] Resuming design checkpoint: {def_path}")
             m_lefs, m_libs = self._get_macro_lefs_and_libs()
+            io_lefs = self._get_io_lefs()
+            io_lef_cmd = "".join(f'read_lef "{l}"\n' for l in io_lefs)
             macro_lef_cmd = "".join(f'read_lef "{l}"\n' for l in m_lefs)
             macro_lib_cmd = "".join(f'read_liberty "{l}"\n' for l in m_libs)
             tcl = f"""set_thread_count [exec nproc]
 read_lef "{self.ide.active_pdk['tlef']}"
 read_lef "{self.ide.active_pdk['lef']}"
-{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
+{io_lef_cmd}{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
 {macro_lib_cmd}read_def "{def_path}"
 read_sdc "{sdc_path}"
 """
@@ -433,13 +459,15 @@ read_sdc "{sdc_path}"
         reports_dir = os.path.join(root, "reports").replace("\\", "/")
 
         m_lefs, m_libs = self._get_macro_lefs_and_libs()
+        io_lefs = self._get_io_lefs()
+        io_lef_cmd = "".join(f'read_lef "{l}"\n' for l in io_lefs)
         macro_lef_cmd = "".join(f'read_lef "{l}"\n' for l in m_lefs)
         macro_lib_cmd = "".join(f'read_liberty "{l}"\n' for l in m_libs)
 
         init_tcl = f"""set_thread_count [exec nproc]
 read_lef "{self.ide.active_pdk['tlef']}"
 read_lef "{self.ide.active_pdk['lef']}"
-{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
+{io_lef_cmd}{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
 {macro_lib_cmd}read_verilog "{netlist}"
 link_design {base}
 read_sdc "{sdc}"
