@@ -867,6 +867,15 @@ class SilisIDE(QMainWindow):
         if hasattr(self, 'project_config') and self.project_config and self.project_config.get("rtl_files"):
             for f_path in self.project_config.get("rtl_files", []):
                 abs_path = os.path.join(self.cwd, f_path) if not os.path.isabs(f_path) else f_path
+                if not os.path.exists(abs_path):
+                    # Smart healing: check relative to root or root/source
+                    cand = os.path.join(root, "source", os.path.basename(f_path))
+                    if os.path.exists(cand):
+                        abs_path = cand
+                    else:
+                        cand2 = os.path.join(root, os.path.basename(f_path))
+                        if os.path.exists(cand2):
+                            abs_path = cand2
                 src_v.append(abs_path)
         else:
             src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
