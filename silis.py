@@ -1037,8 +1037,26 @@ class SilisIDE(QMainWindow):
                 # --- STEP 2: OPENSTA ---
                 try:
                     base_dir = os.path.dirname(os.path.abspath(__file__))
-                    sta_bin = os.path.join(base_dir, "synthengine", "build", "OpenSTA_build", "sta")
-                    p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    # Check candidate OpenSTA binary locations:
+                    # 1. Vendored third-party build
+                    # 2. Core synthengine build
+                    # 3. System PATH (e.g. /usr/local/bin/sta or /usr/bin/sta)
+                    sta_candidates = [
+                        os.path.join(REPO_ROOT, "third-party", "OpenSTA", "build", "sta"),
+                        os.path.join(REPO_ROOT, "core", "synthengine", "build", "OpenSTA_build", "sta"),
+                        os.path.join(base_dir, "core", "synthengine", "build", "OpenSTA_build", "sta"),
+                        shutil.which("sta"),
+                        "sta",
+                    ]
+                    sta_bin = None
+                    for c in sta_candidates:
+                        if c and (os.path.isabs(c) and os.path.isfile(c) and os.access(c, os.X_OK)):
+                            sta_bin = c
+                            break
+                    if not sta_bin:
+                        sta_bin = shutil.which("sta") or "sta"
+
+                    p2 = subprocess.Popen(f'"{sta_bin}" sta.tcl', shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
                     for line in iter(p2.stdout.readline, ''):
                         line = line.strip()
                         if line:
