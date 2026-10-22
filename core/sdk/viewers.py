@@ -31,7 +31,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction, QIcon
 
-from cli_flow import find_project_file
+try:
+    from cli_flow import find_project_file
+except ImportError:
+    from core.cli.flow import find_project_file
 
 
 import subprocess
@@ -442,7 +445,7 @@ def open_gui(
     import silis
     SilisIDE = getattr(silis, "SilisIDE", None)
     if not SilisIDE:
-        from silis.silis import SilisIDE
+        from silis import SilisIDE
     from pdkmanagers.pdk.manager import SSAForge
 
     SSAForge.load_aliases()
@@ -484,9 +487,9 @@ def open_floorplanner(
     halo margin adjustments, and blockage creation.
     """
     app = _ensure_app()
-    from silis.sdk.project import Project, find_project_file
-    from silis.pdkmanagers.pdk.manager import SSAForge
-    from silis.backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
+    from sdk.project import Project, find_project_file
+    from pdkmanagers.pdk.manager import SSAForge
+    from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
 
     pdk_mgr = SSAForge()
     proj = None
@@ -516,9 +519,9 @@ def open_ioplacer(
     wirebond pad ring generation (Single & Dual Staggered), and macro packaging.
     """
     app = _ensure_app()
-    from silis.sdk.project import Project, find_project_file
-    from silis.pdkmanagers.pdk.manager import SSAForge
-    from silis.backendflow.floorplanner.ioplacer import IOPlacerDialog
+    from sdk.project import Project, find_project_file
+    from pdkmanagers.pdk.manager import SSAForge
+    from backendflow.floorplanner.ioplacer import IOPlacerDialog
 
     pdk_mgr = SSAForge()
     proj = None

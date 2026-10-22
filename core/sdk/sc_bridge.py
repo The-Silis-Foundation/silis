@@ -65,9 +65,15 @@ class SilisSCPDKAdapter:
             matched = None
             for c in mgr.configs:
                 cname = c.get("name", "").lower()
-                if self.silis_pdk_name in cname:
+                if self.silis_pdk_name in cname and c.get("tlef") and c.get("lib"):
                     matched = c
                     break
+            if not matched:
+                for c in mgr.configs:
+                    cname = c.get("name", "").lower()
+                    if self.silis_pdk_name in cname:
+                        matched = c
+                        break
             if matched:
                 self._config = dict(matched)
                 return
@@ -243,9 +249,9 @@ def from_sc(chip, work_dir: Optional[str] = None):
     Translates a SiliconCompiler Project or ASIC object into an initialized Silis Pipeline.
     """
     _require_sc()
-    from silis.sdk.pipeline import Pipeline
-    from silis.sdk.project import Project
-    from silis.sdk.sdc import SDCBuilder
+    from sdk.pipeline import Pipeline
+    from sdk.project import Project
+    from sdk.sdc import SDCBuilder
 
     design = getattr(chip, "name", None) or getattr(chip, "design", None)
     if not design:

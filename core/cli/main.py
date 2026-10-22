@@ -9,8 +9,8 @@ import os
 import sys
 import argparse
 
-import cli_project
-import cli_flow
+from . import project as cli_project
+from . import flow as cli_flow
 
 
 def parse_macro_flag(macro_strings):
@@ -248,7 +248,7 @@ def handle_cli(args_list):
     # Interactive Shell mode
     if getattr(args, "interactive_shell", None) is not None:
         target_proj = args.interactive_shell if args.interactive_shell != "__DEFAULT__" else None
-        import tui_repl
+        from . import tui_repl
         tui_repl.run_interactive_shell(target_proj)
         return True
 

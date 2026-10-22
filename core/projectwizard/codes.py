@@ -481,7 +481,7 @@ class SilisLauncher(QDialog):
         layout = QVBoxLayout(self)
 
         banner = QLabel()
-        banner_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "banneriguess.png"))
+        banner_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "banneriguess.png"))
         pm = QPixmap(banner_path)
         if not pm.isNull():
             banner.setPixmap(pm.scaledToWidth(580, Qt.TransformationMode.SmoothTransformation))

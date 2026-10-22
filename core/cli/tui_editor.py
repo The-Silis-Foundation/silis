@@ -13,7 +13,7 @@ import sys
 # Comprehensive EDA & TCL Auto-completion dictionary
 def _get_expanded_eda_keywords():
     try:
-        from tui_repl import SILIS_COMMANDS, TCL_KEYWORDS, BUILTIN_EDA_COMMANDS, EDA_FLAGS, load_dynamic_openroad_commands
+        from .tui_repl import SILIS_COMMANDS, TCL_KEYWORDS, BUILTIN_EDA_COMMANDS, EDA_FLAGS, load_dynamic_openroad_commands
         return sorted(list(set(SILIS_COMMANDS + TCL_KEYWORDS + BUILTIN_EDA_COMMANDS + EDA_FLAGS + load_dynamic_openroad_commands())))
     except Exception:
         pass

@@ -13,11 +13,17 @@ import os as _os
 # SCINT Phase 0: Auto-inject vendored SiliconCompiler
 # ============================================================
 _SDK_DIR = _os.path.dirname(_os.path.abspath(__file__))
-_REPO_ROOT = _os.path.dirname(_SDK_DIR)
-_SC_PATH = _os.path.normpath(_os.path.join(_REPO_ROOT, "third-party", "siliconcompiler"))
+# Check both repo root and parent of core/ for third-party/siliconcompiler
+_CANDIDATE_ROOTS = [
+    _os.path.dirname(_os.path.dirname(_SDK_DIR)),
+    _os.path.dirname(_SDK_DIR),
+]
+for _root in _CANDIDATE_ROOTS:
+    _sc_cand = _os.path.normpath(_os.path.join(_root, "third-party", "siliconcompiler"))
+    if _os.path.isdir(_sc_cand) and _sc_cand not in _sys.path:
+        _sys.path.insert(0, _sc_cand)
+        break
 
-if _os.path.isdir(_SC_PATH) and _SC_PATH not in _sys.path:
-    _sys.path.insert(0, _SC_PATH)
 
 try:
     import siliconcompiler as sc
@@ -26,7 +32,7 @@ except ImportError:
     sc = None
     _SC_AVAILABLE = False
 
-del _sys, _os, _SDK_DIR, _REPO_ROOT
+del _sys, _os, _SDK_DIR, _CANDIDATE_ROOTS
 
 from .project import Project
 from .pipeline import Pipeline

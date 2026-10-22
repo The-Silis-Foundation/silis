@@ -12,8 +12,12 @@ import json
 import shutil
 from typing import Dict, List, Optional, Tuple, Any, Union
 
-from cli_flow import find_project_file
-from cli_project import run_cli_init, create_project_structure, resolve_pdk_name
+try:
+    from cli_flow import find_project_file
+    from cli_project import run_cli_init, create_project_structure, resolve_pdk_name
+except ImportError:
+    from core.cli.flow import find_project_file
+    from core.cli.project import run_cli_init, create_project_structure, resolve_pdk_name
 import project_registry
 from pdkmanagers.pdk.manager import PDKManager
 from .report import SynthesisReport, SignoffReport, DRCReport, DFTSignoffReport
@@ -285,17 +289,17 @@ class Project:
 
     def get_lvs_report(self) -> Any:
         """Loads and returns the LVSSignoffReport for this project."""
-        from silis.sdk.report import LVSSignoffReport
+        from sdk.report import LVSSignoffReport
         return LVSSignoffReport.load(self.reports_dir, design_name=self.top_module)
 
     def get_gls_report(self) -> Any:
         """Loads and returns the GLSSignoffReport for this project."""
-        from silis.sdk.report import GLSSignoffReport
+        from sdk.report import GLSSignoffReport
         return GLSSignoffReport.load(self.reports_dir, design_name=self.top_module)
 
     def get_tapeout_report(self) -> Any:
         """Loads and returns the TapeoutManifestReport for this project."""
-        from silis.sdk.report import TapeoutManifestReport
+        from sdk.report import TapeoutManifestReport
         return TapeoutManifestReport.load(self.reports_dir, design_name=self.top_module)
 
     def get_reports(self) -> Dict[str, Any]:

@@ -2,6 +2,16 @@
 import os
 import sys
 
+# Bootstrap repository root and core package paths
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+_CORE_DIR = os.path.join(_REPO_ROOT, "core")
+_CLI_DIR = os.path.join(_CORE_DIR, "cli")
+
+for _p in [_REPO_ROOT, _CORE_DIR, _CLI_DIR]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+
 import qt_setup
 REPO_ROOT = qt_setup.REPO_ROOT
 
@@ -18,7 +28,7 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-# Importing extracted modules
+# Importing extracted modules from core
 from config import THEMES, USER_SETTINGS, save_user_settings
 from editor.editor import CommandPalette, FileSearchPalette, VSCodeEditorTabs, ScintillaEditor
 from terminal.terminal import VSCodeTerminalWidget
@@ -38,6 +48,7 @@ try:
         Pipeline,
         SignoffReport,
         SynthesisReport,
+
         DRCReport,
         view_layout,
         view_gds3d,
@@ -1040,7 +1051,7 @@ class SilisIDE(QMainWindow):
                 if dft_active:
                     try:
                         try:
-                            from silis.dft.dft_engine import DFTEngine
+                            from dft.dft_engine import DFTEngine
                         except (ImportError, ModuleNotFoundError):
                             from dft.dft_engine import DFTEngine
                         pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
@@ -1544,7 +1555,7 @@ class SilisIDE(QMainWindow):
 
 if __name__ == "__main__":
     import sys
-    from cli_main import handle_cli
+    from core.cli.main import handle_cli
     if handle_cli(sys.argv[1:]):
         sys.exit(0)
 

@@ -1406,7 +1406,7 @@ class InteractiveFloorplannerWidget(QDialog):
                         pass
             if not pins_found and hasattr(self, 'top_module') and self.top_module and proj_root:
                 try:
-                    from silis.backendflow.floorplanner.ioplacer import natural_sort_key
+                    from backendflow.floorplanner.ioplacer import natural_sort_key
                     netlist_dir = os.path.join(proj_root, "netlist")
                     candidates = [
                         os.path.join(netlist_dir, f"{self.top_module}_netlist.v"),
@@ -2315,7 +2315,7 @@ class InteractiveFloorplannerWidget(QDialog):
         try:
             from backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
         except ImportError:
-            from silis.backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
+            from backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
 
         force_dens = (self.sp_force_density.value() / 100.0) if self.chk_force_place_all.isChecked() else None
         cached_graph = getattr(self, "_cached_interconnect_graph", None)
@@ -2934,7 +2934,7 @@ def generate_floorplan_tcl_from_data(die_area, core_margin, macros=None, regions
                 from backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
             except ImportError:
                 try:
-                    from silis.backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
+                    from backendflow.floorplanner.region_autoplacer import HierarchicalAutoRegionPlacer
                 except ImportError:
                     from .region_autoplacer import HierarchicalAutoRegionPlacer
             from PyQt6.QtCore import QRectF

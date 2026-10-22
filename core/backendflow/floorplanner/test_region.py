@@ -1,7 +1,7 @@
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QRectF
-import silis.backendflow.floorplanner.floorplanner as floorplanner
+import backendflow.floorplanner.floorplanner as floorplanner
 
 app = QApplication.instance() or QApplication(sys.argv)
 scene = floorplanner.QGraphicsScene()

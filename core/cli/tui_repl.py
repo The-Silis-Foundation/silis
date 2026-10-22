@@ -459,7 +459,7 @@ class SilisInteractiveShell:
                     self.runner.execute_tcl(arg, "interactive")
             elif cmd in ["editor", "set-editor"]:
                 # Configure or inspect external terminal editor
-                import tui_editor
+                from . import tui_editor
                 if not arg.strip():
                     current_ed = tui_editor.get_preferred_editor()
                     print(f"{C_CYAN}[SILIS] Current editor:{C_RESET} {C_GREEN}{current_ed}{C_RESET}")
@@ -469,7 +469,7 @@ class SilisInteractiveShell:
                     tui_editor.set_preferred_editor(new_ed)
                     print(f"{C_GREEN}[SUCCESS] External editor set to: {new_ed}{C_RESET}")
             elif cmd == "edit":
-                import tui_editor
+                from . import tui_editor
                 preferred = tui_editor.get_preferred_editor() or "editor"
                 step_to_edit = arg if arg else "floorplan"
                 print(f"{C_CYAN}[SILIS] Opening editor ({preferred}) for '{step_to_edit}'...{C_RESET}")
@@ -477,7 +477,7 @@ class SilisInteractiveShell:
                     self.runner.run_step(step_to_edit, tcl_arg="__EDIT__")
             elif cmd == "edrun":
                 # edrun [tcl / file]: opens terminal editor (nano with vi fallback / custom) and executes on save & exit
-                import tui_editor
+                from . import tui_editor
                 preferred = tui_editor.get_preferred_editor() or "editor"
                 init_script = arg.strip()
                 # Check if arg is a path to an existing TCL file

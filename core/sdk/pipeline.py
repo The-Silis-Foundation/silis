@@ -17,7 +17,10 @@ from PyQt6.QtCore import QCoreApplication
 if "QT_QPA_PLATFORM" not in os.environ:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from cli_flow import HeadlessASICRunner
+try:
+    from cli_flow import HeadlessASICRunner
+except ImportError:
+    from core.cli.flow import HeadlessASICRunner
 from .project import Project
 from .report import (
     SynthesisReport,

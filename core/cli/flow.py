@@ -16,7 +16,7 @@ import logging
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QProcess
 
-import tui_editor
+from . import tui_editor
 from backendflow.floorplanner.floorplanner import generate_floorplan_tcl_from_data, compute_peripheral_macro_placement
 from synthesisscripts.synthesisthread import ReportEngine
 

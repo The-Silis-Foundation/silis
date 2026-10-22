@@ -943,8 +943,8 @@ ________________________________________________________________________________
             pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
             try:
                 try:
-                    from silis.dft.dft_engine import DFTEngine
-                    from silis.dft.dft_viewer import DFTSignoffViewer
+                    from dft.dft_engine import DFTEngine
+                    from dft.dft_viewer import DFTSignoffViewer
                 except (ImportError, ModuleNotFoundError):
                     from dft.dft_engine import DFTEngine
                     from dft.dft_viewer import DFTSignoffViewer
@@ -987,8 +987,8 @@ ________________________________________________________________________________
             pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
             try:
                 try:
-                    from silis.lvs.lvs_engine import LVSEngine
-                    from silis.lvs.lvs_viewer import LVSSignoffViewer
+                    from lvs.lvs_engine import LVSEngine
+                    from lvs.lvs_viewer import LVSSignoffViewer
                 except (ImportError, ModuleNotFoundError):
                     from lvs.lvs_engine import LVSEngine
                     from lvs.lvs_viewer import LVSSignoffViewer
@@ -1012,8 +1012,8 @@ ________________________________________________________________________________
             pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
             try:
                 try:
-                    from silis.simulation.gls_engine import GLSEngine
-                    from silis.simulation.gls_viewer import GLSSignoffViewer
+                    from simulation.gls_engine import GLSEngine
+                    from simulation.gls_viewer import GLSSignoffViewer
                 except (ImportError, ModuleNotFoundError):
                     from simulation.gls_engine import GLSEngine
                     from simulation.gls_viewer import GLSSignoffViewer
@@ -1043,7 +1043,7 @@ ________________________________________________________________________________
             pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
             try:
                 try:
-                    from silis.tapeout.fill_engine import TapeoutEngine
+                    from tapeout.fill_engine import TapeoutEngine
                 except (ImportError, ModuleNotFoundError):
                     from tapeout.fill_engine import TapeoutEngine
 
@@ -1062,8 +1062,8 @@ ________________________________________________________________________________
             pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
             try:
                 try:
-                    from silis.tapeout.fill_engine import TapeoutEngine
-                    from silis.tapeout.manifest_viewer import TapeoutManifestViewer
+                    from tapeout.fill_engine import TapeoutEngine
+                    from tapeout.manifest_viewer import TapeoutManifestViewer
                 except (ImportError, ModuleNotFoundError):
                     from tapeout.fill_engine import TapeoutEngine
                     from tapeout.manifest_viewer import TapeoutManifestViewer
