@@ -19,7 +19,10 @@ public:
     }
     
     ~ClockTreeViewerCore() {
-        delete viewer;
+        if (viewer && !viewer->parent()) {
+            delete viewer;
+        }
+        viewer = nullptr;
         if (owns_app && app) {
             delete app;
             app = nullptr;
@@ -38,6 +41,18 @@ public:
         viewer->show();
     }
     
+    void zoom_in() {
+        viewer->zoom_in();
+    }
+
+    void zoom_out() {
+        viewer->zoom_out();
+    }
+
+    void fit_view() {
+        viewer->fit_view();
+    }
+
     // Returns pointer as uintptr_t for PyQt6 sip wrapping
     uintptr_t get_ptr() {
         return reinterpret_cast<uintptr_t>(viewer);
@@ -62,6 +77,9 @@ PYBIND11_MODULE(clocktree_engine, m) {
         .def("load_tree_data", &ClockTreeViewerCore::load_tree_data)
         .def("clear", &ClockTreeViewerCore::clear)
         .def("show", &ClockTreeViewerCore::show)
+        .def("zoom_in", &ClockTreeViewerCore::zoom_in)
+        .def("zoom_out", &ClockTreeViewerCore::zoom_out)
+        .def("fit_view", &ClockTreeViewerCore::fit_view)
         .def("get_ptr", &ClockTreeViewerCore::get_ptr)
         .def("process_events", &ClockTreeViewerCore::process_events);
 }

@@ -21,3 +21,12 @@ target_include_directories(terminal_engine PRIVATE
 target_link_libraries(terminal_engine PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
+
+set_target_properties(terminal_engine PROPERTIES
+    BUILD_RPATH "$ORIGIN;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
+    INSTALL_RPATH "$ORIGIN;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
+)
+
+add_custom_command(TARGET terminal_engine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:terminal_engine> ${CMAKE_SOURCE_DIR}/
+)

@@ -1,20 +1,14 @@
+#!/usr/bin/env python3
 import os
 import sys
 
-# --- Fix for PyQt6 missing symbol error ---
-qt_lib_path = "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib"
-current_ld = os.environ.get("LD_LIBRARY_PATH", "")
-os.environ["QTWEBENGINEPROCESS_PATH"] = "/usr/lib/qt6/libexec/QtWebEngineProcess"
-os.environ["QTWEBENGINE_RESOURCES_PATH"] = "/usr/share/qt6/resources"
-os.environ["QTWEBENGINE_LOCALES_PATH"] = "/usr/share/qt6/translations/qtwebengine_locales"
-if qt_lib_path not in current_ld:
-    os.environ["LD_LIBRARY_PATH"] = f"{qt_lib_path}:{current_ld}" if current_ld else qt_lib_path
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-# ------------------------------------------
+import qt_setup
+REPO_ROOT = qt_setup.REPO_ROOT
 
 import json
 import glob
 import subprocess
+import shlex
 import time
 import queue
 import threading
@@ -37,6 +31,23 @@ from synthesisscripts.synthesisthread import SynthesisTab
 from backendflow.flow.backendflow import BackendWidget
 from projectwizard.codes import SilisProjectWizard, SilisLauncher
 
+# Re-export Python SDK layer
+try:
+    from sdk import (
+        Project,
+        Pipeline,
+        SignoffReport,
+        SynthesisReport,
+        DRCReport,
+        view_layout,
+        view_gds3d,
+        view_waveforms,
+        view_schematic,
+        open_gui,
+    )
+except Exception:
+    pass
+
 class SilisExplorer(QTreeView):
     fileOpened = pyqtSignal(str)
     dirChanged = pyqtSignal(str)
@@ -44,6 +55,7 @@ class SilisExplorer(QTreeView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.ide = parent
         self.fs_model = QFileSystemModel()
         self.fs_model.setRootPath(QDir.currentPath())
         self.setModel(self.fs_model)
@@ -79,6 +91,16 @@ class SilisExplorer(QTreeView):
     def set_cwd(self, path):
         self.setRootIndex(self.fs_model.index(path))
 
+    def _get_project_root(self):
+        if self.ide:
+            proj = getattr(self.ide, 'project_path', None)
+            if proj and os.path.exists(proj):
+                return os.path.realpath(proj)
+            cwd = getattr(self.ide, 'cwd', None)
+            if cwd and os.path.exists(cwd):
+                return os.path.realpath(cwd)
+        return os.path.realpath(os.getcwd())
+
     def keyPressEvent(self, event):
         idx = self.currentIndex()
         path = self.fs_model.filePath(idx)
@@ -89,9 +111,13 @@ class SilisExplorer(QTreeView):
             else: self.fileOpened.emit(path) 
             event.accept()
         elif key in [Qt.Key.Key_Backspace, Qt.Key.Key_Escape]:
-            # UX: Go up one directory
-            parent_dir = os.path.dirname(self.fs_model.filePath(self.rootIndex()))
-            self.dirChanged.emit(parent_dir)
+            # UX: Go up one directory (prevent navigating above project_path)
+            current_dir = os.path.realpath(self.fs_model.filePath(self.rootIndex()))
+            proj_root = self._get_project_root()
+            if current_dir != proj_root and os.path.commonpath([current_dir, proj_root]) == proj_root:
+                parent_dir = os.path.dirname(current_dir)
+                if os.path.commonpath([parent_dir, proj_root]) == proj_root:
+                    self.dirChanged.emit(parent_dir)
             event.accept()
         elif key == Qt.Key.Key_Delete:
             # UX: Delete file protection
@@ -102,6 +128,13 @@ class SilisExplorer(QTreeView):
 
     def ask_delete(self, path):
         if not path or not os.path.exists(path): return
+        real_path = os.path.realpath(path)
+        proj_root = self._get_project_root()
+        # Security SEC-06: Do not delete files outside project root or the project root itself
+        if real_path == proj_root or os.path.commonpath([real_path, proj_root]) != proj_root:
+            QMessageBox.warning(self, "Delete Forbidden", "Cannot delete files or directories outside the active project root.")
+            return
+
         name = os.path.basename(path)
         reply = QMessageBox.question(self, "Delete", f"Are you sure you want to delete '{name}'?",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -231,6 +264,15 @@ class SettingsDialog(QDialog):
         self.cb_theme.setCurrentText(self.ide.tab_compile.editor.theme_name)
         form_app.addRow("Color Theme:", self.cb_theme)
         
+        # Editor Engine Backend (QScintilla vs Monaco)
+        self.cb_editor_backend = QComboBox()
+        self.cb_editor_backend.addItem("QScintilla (Fast, Native)", "qscintilla")
+        self.cb_editor_backend.addItem("Monaco (WebEngine, VS Code)", "monaco")
+        curr_backend = USER_SETTINGS.get("editor_backend", "qscintilla").lower()
+        idx_backend = 1 if curr_backend == "monaco" else 0
+        self.cb_editor_backend.setCurrentIndex(idx_backend)
+        form_app.addRow("Editor Engine:", self.cb_editor_backend)
+        
         self.custom_colors = {}
         for key in ["bg", "fg", "sel", "kw", "kw2", "str", "comment", "num", "ident"]:
             c_val = THEMES["Custom"].get(key, "")
@@ -295,6 +337,8 @@ class SettingsDialog(QDialog):
         USER_SETTINGS["font_family"] = font_family
         USER_SETTINGS["font_size"] = font_size
         USER_SETTINGS["theme_name"] = theme_name
+        editor_backend = self.cb_editor_backend.currentData() or "qscintilla"
+        USER_SETTINGS["editor_backend"] = editor_backend
         USER_SETTINGS["custom_theme"] = THEMES["Custom"]
         USER_SETTINGS["external_editor"] = self.e_ext_edit.text()
         USER_SETTINGS["lod_enabled"] = self.chk_lod.isChecked()
@@ -305,7 +349,7 @@ class SettingsDialog(QDialog):
         
         # Update Editor
         if hasattr(self.ide.tab_compile, 'editor'):
-            self.ide.tab_compile.editor.update_appearance(font_family, font_size, theme_name)
+            self.ide.tab_compile.editor.update_appearance(font_family, font_size, theme_name, editor_backend=editor_backend)
             
         # Update Terminal
         if hasattr(self.ide.tab_compile, 'terminal'):
@@ -328,28 +372,101 @@ class SettingsDialog(QDialog):
 
 
 class SilisIDE(QMainWindow):
-    def __init__(self):
+    def set_active_pdk(self, pdk_config):
+        self.active_pdk = pdk_config
+        if hasattr(self, 'backend_widget') and self.backend_widget:
+            self.backend_widget.active_pdk = pdk_config
+        if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'lbl_pdk'):
+            pname = pdk_config.get('name', 'None') if pdk_config else 'None'
+            self.tab_synth.lbl_pdk.setText(f"<b>Active PDK:</b> {pname}")
+
+    def resolve_and_set_pdk(self, pdk_name=None):
+        if not pdk_name and hasattr(self, 'project_config') and self.project_config:
+            pdk_name = self.project_config.get("pdk", "sky130")
+        if not pdk_name:
+            pdk_name = "sky130"
+
+        target = None
+        for cfg in self.pdk_mgr.configs:
+            if cfg['name'] == pdk_name or pdk_name.lower() in cfg['name'].lower():
+                target = cfg
+                break
+
+        if not target:
+            self.pdk_mgr.crawl_volare()
+            for cfg in self.pdk_mgr.configs:
+                if cfg['name'] == pdk_name or pdk_name.lower() in cfg['name'].lower():
+                    target = cfg
+                    break
+
+        if not target and self.pdk_mgr.configs:
+            target = self.pdk_mgr.configs[0]
+
+        if target:
+            self.set_active_pdk(target)
+            return target
+        return None
+
+    def __init__(self, project_file=None, headless=False):
         super().__init__()
         self.setWindowTitle("Silis — Silicon Scaffold v2.1")
         self.resize(1400, 900)
         self.cwd = os.getcwd(); self.current_file = None; self.pdk_path = ""
+        self.project_path = self.cwd
         self.project_config = None; self.active_pdk = None
+        self.headless = headless
         self.pdk_mgr = PDKManager()
-        
-        launcher = SilisLauncher(self)
-        if launcher.exec() == QDialog.DialogCode.Accepted:
-            self.cwd = launcher.selected_project_path
+
+
+        if project_file:
+            proj_path = os.path.abspath(project_file)
+            if os.path.isdir(proj_path):
+                cand = os.path.join(proj_path, "silis.silisproj")
+                if os.path.isfile(cand):
+                    proj_path = cand
+            self.cwd = os.path.dirname(proj_path)
+            self.project_path = self.cwd
             os.chdir(self.cwd)
-            self.project_config = launcher.selected_project_config
-            pdk_name = self.project_config.get("pdk")
-            self.active_pdk = next((cfg for cfg in self.pdk_mgr.configs if cfg['name'] == pdk_name), None)
-            if not self.active_pdk:
-                QMessageBox.warning(None, "PDK Missing", f"The project's PDK '{pdk_name}' was not found in your cache.")
+            import json
+            with open(proj_path, 'r') as f:
+                self.project_config = json.load(f)
+            import project_registry
+            project_registry.register_project(proj_path)
+            pdk_name = self.project_config.get("pdk", "sky130")
+            self.resolve_and_set_pdk(pdk_name)
             proj_name = self.project_config.get("project_name", "Unknown")
             self.setWindowTitle(f"Silis — Silicon Scaffold v2.1 - [{proj_name}]")
         else:
-            import sys
-            sys.exit(0)
+            cand_cwd = os.path.join(os.getcwd(), "silis.silisproj")
+            if os.path.isfile(cand_cwd):
+                self.cwd = os.getcwd()
+                self.project_path = self.cwd
+                import json
+                with open(cand_cwd, 'r') as f:
+                    self.project_config = json.load(f)
+                import project_registry
+                project_registry.register_project(self.cwd)
+                pdk_name = self.project_config.get("pdk", "sky130")
+                self.resolve_and_set_pdk(pdk_name)
+                proj_name = self.project_config.get("project_name", "Unknown")
+                self.setWindowTitle(f"Silis — Silicon Scaffold v2.1 - [{proj_name}]")
+            elif not headless:
+                launcher = SilisLauncher(None)
+                launcher.raise_()
+                launcher.activateWindow()
+                if launcher.exec() == QDialog.DialogCode.Accepted:
+                    self.cwd = launcher.selected_project_path
+                    self.project_path = self.cwd
+                    os.chdir(self.cwd)
+                    self.project_config = launcher.selected_project_config
+                    import project_registry
+                    project_registry.register_project(self.cwd)
+                    pdk_name = self.project_config.get("pdk", "sky130")
+                    self.resolve_and_set_pdk(pdk_name)
+                    proj_name = self.project_config.get("project_name", "Unknown")
+                    self.setWindowTitle(f"Silis — Silicon Scaffold v2.1 - [{proj_name}]")
+                else:
+                    self.project_config = None
         self.schem_engine = "Auto"; self.term_mode = "SHELL"; self.queue = queue.Queue()
         
         # === UX: Keybind State ===
@@ -361,6 +478,8 @@ class SilisIDE(QMainWindow):
         }
         self.sk_active = False
         self.schem_running = False 
+        self.synth_running = False
+        self.synth_error = None
         self.sk_timer = QTimer(); self.sk_timer.setSingleShot(True); self.sk_timer.timeout.connect(self.reset_sk)
 
         # === UI LAYOUT ===
@@ -393,176 +512,227 @@ class SilisIDE(QMainWindow):
         self.log_system(f"Silis Initialized. CWD: {self.cwd}")
         self.check_dependencies()
 
+        # Propagate active PDK
+        if self.project_config:
+            self.resolve_and_set_pdk()
+        elif self.active_pdk:
+            self.set_active_pdk(self.active_pdk)
+
         if self.cwd:
             if hasattr(self.tab_compile, 'file_system_model') and hasattr(self.tab_compile, 'tree_view'):
                 self.tab_compile.file_system_model.setRootPath(self.cwd)
                 self.tab_compile.tree_view.setRootIndex(self.tab_compile.file_system_model.index(self.cwd))
             top_mod = self.project_config.get("top_module") if self.project_config else None
             if top_mod:
-                for f_path in self.project_config.get("rtl_files", []):
-                    if top_mod in os.path.basename(f_path):
-                        target_name = os.path.basename(f_path)
-                        found = False
-                        for root_dir, _, files in os.walk(self.cwd):
-                            if target_name in files:
-                                self.open_file_in_editor(os.path.join(root_dir, target_name))
-                                found = True
-                                break
-                        if found: break
+                target_file = None
+                rtl_files = self.project_config.get("rtl_files", []) if self.project_config else []
+                # 1. Direct match from rtl_files list
+                for f_path in rtl_files:
+                    abs_candidate = f_path if os.path.isabs(f_path) else os.path.join(self.cwd, f_path)
+                    if top_mod in os.path.basename(f_path) and os.path.isfile(abs_candidate):
+                        target_file = abs_candidate
+                        break
+
+                # 2. Shallow check in source/ or top-level project root
+                if not target_file:
+                    for ext in [".v", ".sv", ".vhd", ".vhdl"]:
+                        cand_src = os.path.join(self.cwd, "source", f"{top_mod}{ext}")
+                        if os.path.isfile(cand_src):
+                            target_file = cand_src
+                            break
+                        cand_root = os.path.join(self.cwd, f"{top_mod}{ext}")
+                        if os.path.isfile(cand_root):
+                            target_file = cand_root
+                            break
+
+                # 3. Shallow search in source/ directory if top module specific file not matched
+                if not target_file:
+                    src_dir = os.path.join(self.cwd, "source")
+                    if os.path.isdir(src_dir):
+                        try:
+                            for entry in os.listdir(src_dir):
+                                if top_mod in entry and os.path.isfile(os.path.join(src_dir, entry)):
+                                    target_file = os.path.join(src_dir, entry)
+                                    break
+                        except Exception:
+                            pass
+
+                if target_file and os.path.isfile(target_file):
+                    self.open_file_in_editor(target_file)
+
+        # Auto-coordinate with CLI deliverables on disk (GUI mode only)
+        if not self.headless:
+            QTimer.singleShot(200, self._coordinate_cli_state)
+
+    def _coordinate_cli_state(self):
+        if self.headless:
+            return
+        try:
+            if hasattr(self, 'tab_synth') and self.tab_synth:
+                self.tab_synth.update_dashboard()
+            if hasattr(self, 'backend_widget') and self.backend_widget:
+                self.backend_widget.force_refresh_view()
+            if hasattr(self, 'tab_waves') and self.tab_waves:
+                self.tab_waves.auto_load()
+        except Exception as e:
+            pass
 
     # === UX: SMART SHORTCUTS ===
     def eventFilter(self, source, event):
-        if event.type() == QEvent.Type.KeyPress:
-            key = event.key()
-            modifiers = event.modifiers()
-            
-            # --- COMMAND PALETTE ---
-            if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and (modifiers & Qt.KeyboardModifier.ShiftModifier):
-                focused = QApplication.focusWidget()
-                if focused and (self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor):
-                    current_ed = self.tab_compile.editor.current_editor()
-                    if current_ed and hasattr(current_ed, 'run_js'):
-                        current_ed.run_js("editor.trigger('keyboard', 'editor.action.quickCommand')")
-                    return True
-                    
-                commands = [
-                    ("View: Toggle Fullscreen", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen()),
-                    ("View: Open Settings", self.open_settings),
-                    ("Go to: Compile Tab", lambda: self.frontend_tabs.setCurrentIndex(0)),
-                    ("Go to: Waveform Tab", lambda: self.frontend_tabs.setCurrentIndex(1)),
-                    ("Go to: Schematic Tab", lambda: self.frontend_tabs.setCurrentIndex(2)),
-                    ("Go to: Synthesis Dashboard", lambda: self.frontend_tabs.setCurrentIndex(3)),
-                    ("Go to: 3D Viewer", lambda: (self.switch_world(1), self.backend_widget.viz_tabs.setCurrentIndex(2))),
-                    ("Backend: Reset Flow", self.backend_widget.reset_backend),
-                ]
-                pal = CommandPalette(self, commands)
-                pal.move(self.geometry().center() - pal.rect().center())
-                if pal.exec():
-                    func = pal.get_selected()
-                    if func: func()
-                return True
-                
-            # --- FILE SEARCH (Ctrl+P) ---
-            if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and not (modifiers & Qt.KeyboardModifier.ShiftModifier):
-                from editor.editor import FileSearchPalette
-                pal = FileSearchPalette(self, self.cwd)
-                
-                # Position and size perfectly over the file explorer
-                explorer_rect = self.tab_compile.explorer_container.geometry()
-                global_pos = self.tab_compile.mapToGlobal(explorer_rect.topLeft())
-                pal.move(global_pos)
-                pal.setFixedSize(explorer_rect.width(), explorer_rect.height())
-                
-                if pal.exec():
-                    selected_file = pal.get_selected()
-                    if selected_file:
-                        self.open_file_in_editor(selected_file)
-                return True
-            
-            # --- FULLSCREEN TOGGLE ---
-            if key == Qt.Key.Key_F11:
-                if self.isFullScreen():
-                    self.showNormal()
-                else:
-                    self.showFullScreen()
-                return True
-            
-            # --- GLOBAL F-KEYS (Smart Toggle) ---
-            if self.stack.currentIndex() == 0:
-                if key == Qt.Key.Key_F1:
-                    if self.frontend_tabs.currentIndex() != 0: self.frontend_tabs.setCurrentIndex(0)
-                    else: self.run_simulation()
-                    return True
-                
-                elif key == Qt.Key.Key_F2:
-                    if self.frontend_tabs.currentIndex() != 1: 
-                        self.frontend_tabs.setCurrentIndex(1)
-                        self.tab_waves.auto_load() 
-                    else: 
-                        self.tab_waves.manual_load() 
-                    return True
-                
-                elif key == Qt.Key.Key_F3:
-                    if self.frontend_tabs.currentIndex() != 2: self.frontend_tabs.setCurrentIndex(2)
-                    else: self.generate_schematic()
-                    return True
-                
-                elif key == Qt.Key.Key_F4:
-                    if self.frontend_tabs.currentIndex() != 3: self.frontend_tabs.setCurrentIndex(3)
-                    else:
-                        if not self.active_pdk: self.open_pdk_selector()
-                        else: self.run_synthesis_flow()
-                    return True
+        if event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(source, event)
 
-                elif key == Qt.Key.Key_F5:
-                    self.switch_world(1)
-                    self.backend_widget.viz_tabs.setCurrentIndex(2)
-                    return True
-
-            # --- SUPER KEY LOGIC (` + Key) ---
-            if key == Qt.Key.Key_QuoteLeft: # Backtick `
-                if getattr(self, '_ignore_next_sk', False):
-                    self._ignore_next_sk = False
-                    return False
-                if self.sk_active:
-                    self.reset_sk()
-                    focused = QApplication.focusWidget()
-                    if focused:
-                        self._ignore_next_sk = True
-                        if self.tab_compile.terminal.isAncestorOf(focused) or focused is self.tab_compile.terminal:
-                            self.tab_compile.terminal.core.send_text("`")
-                        elif self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor:
-                            current_ed = self.tab_compile.editor.current_editor()
-                            if current_ed and hasattr(current_ed, 'run_js'):
-                                current_ed.run_js("editor.trigger('keyboard', 'type', {text: '`'})")
-                        elif hasattr(focused, 'insert'):
-                            focused.insert("`")
-                        elif hasattr(focused, 'insertPlainText'):
-                            focused.insertPlainText("`")
-                    return True
-                else:
-                    self.sk_active = True
-                    self.statusBar().showMessage("SUPER KEY ACTIVE")
-                    self.show_sk_overlays()
-                    self.sk_timer.start(1000)
-                    return True 
+        key = event.key()
+        modifiers = event.modifiers()
+        
+        # --- COMMAND PALETTE ---
+        if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and (modifiers & Qt.KeyboardModifier.ShiftModifier):
+            focused = QApplication.focusWidget()
+            if focused and (self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor):
+                current_ed = self.tab_compile.editor.current_editor()
+                if current_ed and hasattr(current_ed, 'run_js'):
+                    current_ed.run_js("editor.trigger('keyboard', 'editor.action.quickCommand')")
+                return True
+                
+            commands = [
+                ("View: Toggle Fullscreen", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen()),
+                ("View: Open Settings", self.open_settings),
+                ("Go to: Compile Tab", lambda: self.frontend_tabs.setCurrentIndex(0)),
+                ("Go to: Waveform Tab", lambda: self.frontend_tabs.setCurrentIndex(1)),
+                ("Go to: Schematic Tab", lambda: self.frontend_tabs.setCurrentIndex(2)),
+                ("Go to: Synthesis Dashboard", lambda: self.frontend_tabs.setCurrentIndex(3)),
+                ("Go to: 3D Viewer", lambda: (self.switch_world(1), self.backend_widget.viz_tabs.setCurrentIndex(1))),
+                ("Backend: Reset Flow", self.backend_widget.reset_backend),
+            ]
+            pal = CommandPalette(self, commands)
+            pal.move(self.geometry().center() - pal.rect().center())
+            if pal.exec():
+                func = pal.get_selected()
+                if func: func()
+            return True
             
+        # --- FILE SEARCH (Ctrl+P) ---
+        if key == Qt.Key.Key_P and (modifiers & Qt.KeyboardModifier.ControlModifier) and not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+            from editor.editor import FileSearchPalette
+            pal = FileSearchPalette(self, self.cwd)
+            pal.setFixedSize(600, 400)
+            pal.move(self.geometry().center() - pal.rect().center())
+            
+            if pal.exec():
+                selected_file = pal.get_selected()
+                if selected_file:
+                    self.open_file_in_editor(selected_file)
+            return True
+        
+        # --- FULLSCREEN TOGGLE ---
+        if key == Qt.Key.Key_F11:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+            return True
+        
+        # --- GLOBAL F-KEYS (Smart Toggle) ---
+        if self.stack.currentIndex() == 0:
+            if key == Qt.Key.Key_F1:
+                if self.frontend_tabs.currentIndex() != 0: self.frontend_tabs.setCurrentIndex(0)
+                else: self.run_simulation()
+                return True
+            
+            elif key == Qt.Key.Key_F2:
+                if self.frontend_tabs.currentIndex() != 1: 
+                    self.frontend_tabs.setCurrentIndex(1)
+                    self.tab_waves.auto_load() 
+                else: 
+                    self.tab_waves.manual_load() 
+                return True
+            
+            elif key == Qt.Key.Key_F3:
+                if self.frontend_tabs.currentIndex() != 2: self.frontend_tabs.setCurrentIndex(2)
+                else: self.generate_schematic()
+                return True
+            
+            elif key == Qt.Key.Key_F4:
+                if self.frontend_tabs.currentIndex() != 3: self.frontend_tabs.setCurrentIndex(3)
+                else:
+                    if not self.active_pdk: self.open_pdk_selector()
+                    else: self.run_synthesis_flow()
+                return True
+
+            elif key == Qt.Key.Key_F5:
+                self.switch_world(1)
+                self.backend_widget.viz_tabs.setCurrentIndex(2)
+                return True
+
+        # --- SUPER KEY LOGIC (` + Key) ---
+        if key == Qt.Key.Key_QuoteLeft: # Backtick `
+            if getattr(self, '_ignore_next_sk', False):
+                self._ignore_next_sk = False
+                return False
             if self.sk_active:
-                txt = event.text().lower()
-                
-                # World Switching
-                if txt == '1': self.switch_world(0)
-                elif txt == '2': self.switch_world(1)
-                
-                # Widget Focus (Customizable)
-                elif txt == self.key_map["focus_explorer"]: 
-                    self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
-                    self.tab_compile.explorer.setFocus()
-                elif txt == self.key_map["focus_editor"]: 
-                    self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
-                    current_ed = self.tab_compile.editor.current_editor()
-                    if current_ed:
-                        if hasattr(current_ed, 'run_js'): current_ed.run_js("editor.focus()")
-                        if hasattr(current_ed, 'editor') and hasattr(current_ed.editor, 'web_view'): current_ed.editor.web_view.setFocus()
-                    else:
-                        self.tab_compile.editor.setFocus()
-                elif txt == self.key_map["focus_terminal"]: 
-                    self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
-                    self.tab_compile.terminal.setFocus()
-                elif txt == self.key_map["term_toggle"]:
-                    pass # term toggle removed
-                elif txt == 'e':
-                    cmd = USER_SETTINGS.get("external_editor", "")
-                    path = self.tab_compile.editor.current_file_path()
-                    if cmd and path:
-                        import subprocess
-                        subprocess.Popen(f"{cmd} {path}", shell=True)
-                    else:
-                        QMessageBox.warning(self, "Error", "No external editor configured or no active file.")
+                self.reset_sk()
+                focused = QApplication.focusWidget()
+                if focused:
+                    self._ignore_next_sk = True
+                    if self.tab_compile.terminal.isAncestorOf(focused) or focused is self.tab_compile.terminal:
+                        self.tab_compile.terminal.core.send_text("`")
+                    elif self.tab_compile.editor.isAncestorOf(focused) or focused is self.tab_compile.editor:
+                        current_ed = self.tab_compile.editor.current_editor()
+                        if current_ed and hasattr(current_ed, 'run_js'):
+                            current_ed.run_js("editor.trigger('keyboard', 'type', {text: '`'})")
+                    elif hasattr(focused, 'insert'):
+                        focused.insert("`")
+                    elif hasattr(focused, 'insertPlainText'):
+                        focused.insertPlainText("`")
+                return True
+            else:
+                self.sk_active = True
+                self.statusBar().showMessage("SUPER KEY ACTIVE")
+                self.show_sk_overlays()
+                self.sk_timer.start(1000)
+                return True 
+        
+        if self.sk_active:
+            txt = event.text().lower()
+            
+            # World Switching
+            if txt == '1': self.switch_world(0)
+            elif txt == '2': self.switch_world(1)
+            
+            # Widget Focus (Customizable)
+            elif txt == self.key_map["focus_explorer"]: 
+                self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
+                self.tab_compile.explorer.setFocus()
+            elif txt == self.key_map["focus_editor"]: 
+                self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
+                current_ed = self.tab_compile.editor.current_editor()
+                if current_ed:
+                    if hasattr(current_ed, 'run_js'): current_ed.run_js("editor.focus()")
+                    if hasattr(current_ed, 'editor') and hasattr(current_ed.editor, 'web_view'): current_ed.editor.web_view.setFocus()
+                else:
+                    self.tab_compile.editor.setFocus()
+            elif txt == self.key_map["focus_terminal"]: 
+                self.switch_world(0); self.frontend_tabs.setCurrentIndex(0)
+                self.tab_compile.terminal.setFocus()
+            elif txt == self.key_map["term_toggle"]:
+                pass # term toggle removed
+            elif txt == 'e':
+                cmd = USER_SETTINGS.get("external_editor", "")
+                path = self.tab_compile.editor.current_file_path()
+                if cmd and path:
+                    import subprocess
+                    import shlex
+                    try:
+                        cmd_args = shlex.split(cmd) + [path]
+                        subprocess.Popen(cmd_args, shell=False)
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to launch editor: {e}")
+                else:
+                    QMessageBox.warning(self, "Error", "No external editor configured or no active file.")
 
-                
-                self.reset_sk(); return True
-                
+            
+            self.reset_sk(); return True
+            
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
@@ -584,14 +754,23 @@ class SilisIDE(QMainWindow):
             
             if reply == QMessageBox.StandardButton.Yes:
                 self.backend_widget.save_checkpoint()
-                # Give it a moment to write (simple block)
-                self.backend_widget.proc.waitForReadyRead(3000) 
-                
+                # Wait for OpenROAD to finish writing the checkpoint database
+                import time
+                t0 = time.time()
+                while getattr(self.backend_widget, 'cmd_active', False) and (time.time() - t0 < 10.0):
+                    QApplication.processEvents()
+                    self.backend_widget.proc.waitForReadyRead(200)
+
+            # Attempt graceful exit of OpenROAD backend
+            if self.backend_widget.proc and self.backend_widget.proc.state() == QProcess.ProcessState.Running:
+                self.backend_widget.send_command_internal("exit")
+                self.backend_widget.proc.waitForFinished(2000)
+
         import os
         import subprocess
         try:
             pid = os.getpid()
-            # Find all child processes using pgrep
+            # Clean up any remaining child processes
             out = subprocess.check_output(['pgrep', '-P', str(pid)]).decode('utf-8').strip()
             for child_pid in out.split():
                 if child_pid:
@@ -630,6 +809,10 @@ class SilisIDE(QMainWindow):
         self.stack.setCurrentIndex(index)
         self.btn_front.setChecked(index == 0)
         self.btn_back.setChecked(index == 1)
+        if index == 1 and hasattr(self, 'backend_widget') and self.backend_widget:
+            self.backend_widget.force_refresh_view()
+        elif index == 0 and hasattr(self, 'tab_synth') and self.tab_synth:
+            self.tab_synth.update_dashboard()
 
     # === CORE LOGIC ===
 
@@ -640,7 +823,7 @@ class SilisIDE(QMainWindow):
             return
         self.tab_schem.go_home()
 
-    def run_synthesis_flow(self):
+    def run_synthesis_flow(self, bypass_prompt=False):
         base = None
         if hasattr(self, 'project_config') and self.project_config:
             base = self.project_config.get("top_module")
@@ -653,13 +836,15 @@ class SilisIDE(QMainWindow):
             
         root = self.prep_workspace(base)
         if not self.active_pdk:
+            self.resolve_and_set_pdk()
+        if not self.active_pdk:
             self.log_system("[ERR] No Active PDK selected.")
             return
             
         self.pdk_path = self.active_pdk['lib']
-        self.run_synthesis_thread(root, base)
+        self.run_synthesis_thread(root, base, bypass_prompt=bypass_prompt)
 
-    def run_synthesis_thread(self, root, base):
+    def run_synthesis_thread(self, root, base, bypass_prompt=False):
         # Clear the unified log before starting
         self.tab_synth.log_main.clear()
         self.tab_synth.card_status.setText("RUNNING...")
@@ -678,25 +863,53 @@ class SilisIDE(QMainWindow):
                     glob.glob(os.path.join(root, "source", "*.vhd")) + \
                     glob.glob(os.path.join(root, "source", "*.vhdl"))
                     
-        src_v = [s for s in src_v if "tb_" not in os.path.basename(s).lower()]
-        
         vhdl_files = [s for s in src_v if s.endswith('.vhd') or s.endswith('.vhdl')]
         vlog_files = [s for s in src_v if not (s.endswith('.vhd') or s.endswith('.vhdl'))]
+
+        # Prioritize packages and core types before entities
+        def vhdl_sort_key(p):
+            fn = os.path.basename(p).lower()
+            if any(k in fn for k in ['package', 'pkg', 'types', 'const']):
+                return 0
+            if 'sys' in fn or 'prim' in fn:
+                return 1
+            if fn.endswith('_top.vhd') or fn.endswith('_wrapper.vhd'):
+                return 3
+            return 2
+        vhdl_files = sorted(vhdl_files, key=vhdl_sort_key)
         
-        # Sort VHDL files: packages must be compiled first!
-        vhdl_files = sorted(vhdl_files, key=lambda x: 0 if any(k in os.path.basename(x).lower() for k in ['pack', 'pkg', 'type', 'const']) else 1)
-        
-        read_cmd = "plugin -i ghdl;\n" if vhdl_files else ""
+        plugin_path = os.path.abspath(os.path.join(REPO_ROOT, "third-party", "plugins", "ghdl.so"))
+        plugin_cmd = f"plugin -i {plugin_path};\n" if os.path.exists(plugin_path) else "plugin -i ghdl;\n"
+        read_cmd = plugin_cmd if vhdl_files else ""
         if vhdl_files:
             work_lib = os.path.basename(root)
             if hasattr(self, 'project_config') and self.project_config:
                 work_lib = self.project_config.get("vhdl_work", self.project_config.get("project_name", work_lib))
-                # For NeoRV32 specifically, the VHDL library must be 'neorv32'
-                if "neorv32" in root.lower() or "neorv32" in work_lib.lower():
-                    work_lib = "neorv32"
-            read_cmd += f"ghdl --work={work_lib} {' '.join(vhdl_files)} -e {base};\n"
+            # If the design or any VHDL file is from neorv32, library must be 'neorv32'
+            if any("neorv32" in str(x).lower() for x in [root, base, work_lib] + vhdl_files):
+                work_lib = "neorv32"
+            
+            vhdl_std = "08"
+            if hasattr(self, 'project_config') and self.project_config:
+                vhdl_std = self.project_config.get("vhdl_std", "08")
+                
+            is_vhdl_top = False
+            for vf in vhdl_files:
+                try:
+                    with open(vf, "r", errors="ignore") as vfh:
+                        c = vfh.read().lower()
+                        if f"entity {base.lower()} " in c or f"entity {base.lower()}\n" in c or f"entity {base.lower()};" in c:
+                            is_vhdl_top = True
+                            break
+                except Exception:
+                    pass
+
+            e_flag = f" -e {base}" if is_vhdl_top else ""
+            read_cmd += f"ghdl --std={vhdl_std} --work={work_lib} {' '.join(vhdl_files)}{e_flag};\n"
         if vlog_files:
-            read_cmd += f"read_verilog {' '.join(vlog_files)};\n"
+            has_sv = any(f.endswith('.sv') for f in vlog_files)
+            sv_flag = "-sv " if has_sv else ""
+            read_cmd += f"read_verilog {sv_flag}{' '.join(vlog_files)};\n"
         macro_lib_cmds_yosys = ""
         macro_lib_cmds_sta = ""
         macros = self.project_config.get('macros', []) if hasattr(self, 'project_config') and self.project_config else []
@@ -722,36 +935,38 @@ class SilisIDE(QMainWindow):
         write_verilog -noattr {v_net}
         """
         
-        # --- USER CONFIRMATION DIALOG ---
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Confirm Yosys Synthesis Script")
-        dlg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
-        dlg.resize(700, 350)
-        
-        theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
-        theme = THEMES.get(theme_name, THEMES["Catppuccin Mocha"])
-        dlg.setStyleSheet(f"QDialog {{ background-color: {theme['bg']}; color: {theme['fg']}; }} QLabel {{ color: {theme['fg']}; }}")
-        
-        dlg_layout = QVBoxLayout(dlg)
-        dlg_layout.addWidget(QLabel("Edit the Yosys commands below. (Uncomment 'flatten' to extract complete clock tree hierarchy)"))
-        
-        editor = ScintillaEditor(is_minimap=False, font_family=USER_SETTINGS.get("font_family", "Consolas"), font_size=USER_SETTINGS.get("font_size", 11), theme_name=theme_name)
-        editor.set_lexer(".tcl")
-        editor.setText(ys.strip())
-        dlg_layout.addWidget(editor)
-        
-        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        bbox.accepted.connect(dlg.accept)
-        bbox.rejected.connect(dlg.reject)
-        dlg_layout.addWidget(bbox)
-        
-        QShortcut(QKeySequence("Ctrl+Return"), dlg).activated.connect(dlg.accept)
-        
-        if not dlg.exec():
-            self.tab_synth.card_status.setText("CANCELLED")
-            return
+        if not bypass_prompt:
+            # --- USER CONFIRMATION DIALOG ---
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Confirm Yosys Synthesis Script")
+            dlg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+            dlg.resize(700, 350)
             
-        ys = editor.text()
+            theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
+            theme = THEMES.get(theme_name, THEMES["Catppuccin Mocha"])
+            dlg.setStyleSheet(f"QDialog {{ background-color: {theme['bg']}; color: {theme['fg']}; }} QLabel {{ color: {theme['fg']}; }}")
+            
+            dlg_layout = QVBoxLayout(dlg)
+            dlg_layout.addWidget(QLabel("Edit the Yosys commands below. (Uncomment 'flatten' to extract complete clock tree hierarchy)"))
+            
+            editor = ScintillaEditor(is_minimap=False, font_family=USER_SETTINGS.get("font_family", "Consolas"), font_size=USER_SETTINGS.get("font_size", 11), theme_name=theme_name)
+            editor.set_lexer(".tcl")
+            editor.setText(ys.strip())
+            dlg_layout.addWidget(editor)
+            
+            bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            bbox.accepted.connect(dlg.accept)
+            bbox.rejected.connect(dlg.reject)
+            dlg_layout.addWidget(bbox)
+            
+            QShortcut(QKeySequence("Ctrl+Return"), dlg).activated.connect(dlg.accept)
+            
+            if not dlg.exec():
+                self.tab_synth.card_status.setText("CANCELLED")
+                return
+                
+            ys = editor.text()
+
         with open(os.path.join(root, "synth.ys"), 'w') as f: f.write(ys)
         
         # --- 2. STA SCRIPT (With Explicit File Dumps) ---
@@ -770,62 +985,146 @@ class SilisIDE(QMainWindow):
         with open(os.path.join(root, "sta.tcl"), 'w') as f: f.write(tcl)
 
         def task():
-            self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
-            
-            # --- STEP 1: YOSYS ---
+            self.synth_running = True
+            self.synth_error = None
             try:
-                # We pipe output to a file AND the GUI queue
-                log_path = os.path.join(root, "reports/synthesis.log")
-                with open(log_path, "w") as log_file:
-                    p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                    
-                    for line in iter(p1.stdout.readline, ''):
+                self.queue.put(("[SYS]", "Starting Synthesis Flow..."))
+                
+                # --- STEP 1: YOSYS ---
+                try:
+                    # We pipe output to a file AND the GUI queue
+                    plugins_dir = os.path.abspath(os.path.join(REPO_ROOT, "third-party", "plugins"))
+                    ghdl_prefix = os.path.join(plugins_dir, "ghdl")
+                    synth_env = os.environ.copy()
+                    synth_env["GHDL_PREFIX"] = ghdl_prefix
+                    curr_ld = synth_env.get("LD_LIBRARY_PATH", "")
+                    synth_env["LD_LIBRARY_PATH"] = f"{plugins_dir}:{curr_ld}" if curr_ld else plugins_dir
+                    log_path = os.path.join(root, "reports", "synthesis.log")
+                    with open(log_path, "w") as log_file:
+                        p1 = subprocess.Popen(f"yosys synth.ys", shell=True, cwd=root, env=synth_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                        
+                        for line in iter(p1.stdout.readline, ''):
+                            line = line.strip()
+                            if line:
+                                self.queue.put(("[YOSYS]", line)) 
+                                log_file.write(line + "\n")
+                        p1.wait()
+                        if p1.returncode != 0: raise Exception("Yosys Failed")
+                except Exception as e:
+                    self.synth_error = f"Yosys Crash: {e}"
+                    self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
+
+                # --- STEP 2: OPENSTA ---
+                try:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    sta_bin = os.path.join(base_dir, "synthengine", "build", "OpenSTA_build", "sta")
+                    p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    for line in iter(p2.stdout.readline, ''):
                         line = line.strip()
                         if line:
-                            self.queue.put(("[YOSYS]", line)) 
-                            log_file.write(line + "\n")
-                    p1.wait()
-                    if p1.returncode != 0: raise Exception("Yosys Failed")
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] Yosys Crash: {e}")); return
+                            self.queue.put(("[STA]", line)) 
+                    p2.wait()
+                    if p2.returncode != 0: raise Exception("OpenSTA Failed")
+                except Exception as e:
+                    self.synth_error = f"STA Crash: {e}"
+                    self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
 
-            # --- STEP 2: OPENSTA ---
-            try:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                sta_bin = os.path.join(base_dir, "synthengine", "build", "OpenSTA_build", "sta")
-                p2 = subprocess.Popen(f"{sta_bin} sta.tcl", shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                for line in iter(p2.stdout.readline, ''):
-                    line = line.strip()
-                    if line:
-                        self.queue.put(("[STA]", line)) 
-                p2.wait()
-            except Exception as e:
-                self.queue.put(("[SYS]", f"[ERR] STA Crash: {e}")); return
+                self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
 
-            self.queue.put(("[SYS]", "Synthesis & Timing Complete."))
-            self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
+                # --- STEP 3: DFT SCAN INSERTION (If Enabled) ---
+                dft_active = getattr(self, 'enable_dft', False) or (
+                    hasattr(self, 'tab_synth')
+                    and getattr(self.tab_synth, 'chk_dft', None)
+                    and self.tab_synth.chk_dft.isChecked()
+                )
+                if dft_active:
+                    try:
+                        try:
+                            from silis.dft.dft_engine import DFTEngine
+                        except (ImportError, ModuleNotFoundError):
+                            from dft.dft_engine import DFTEngine
+                        pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+                        
+                        s_in = self.tab_synth.in_scan_in.text().strip() if hasattr(self.tab_synth, 'in_scan_in') else "scan_in"
+                        s_out = self.tab_synth.in_scan_out.text().strip() if hasattr(self.tab_synth, 'in_scan_out') else "scan_out"
+                        s_en = self.tab_synth.in_scan_en.text().strip() if hasattr(self.tab_synth, 'in_scan_en') else "scan_en"
+                        s_clk = self.tab_synth.in_scan_clk.text().strip() if hasattr(self.tab_synth, 'in_scan_clk') else "clk"
+                        clamp = self.tab_synth.chk_clamp.isChecked() if hasattr(self.tab_synth, 'chk_clamp') else True
+                        
+                        dft_eng = DFTEngine(
+                            netlist_path=v_net,
+                            top_module=base,
+                            pdk=pdk_name,
+                            scan_in_port=s_in or "scan_in",
+                            scan_out_port=s_out or "scan_out",
+                            scan_en_port=s_en or "scan_en",
+                            scan_clk_port=s_clk or "clk",
+                            clamp_macros=clamp,
+                        )
+                        scandef_file = os.path.join(root, "results", "design.scandef")
+                        scan_net_file = os.path.join(root, "netlist", f"{base}_scan.v")
+                        dft_eng.stitch_scan_chain(scan_net_file, scandef_file)
+                        self.queue.put(("[DFT]", f"Generated SCANDEF: {scandef_file} ({len(dft_eng.scan_cells)} scan cells)"))
+                    except Exception as e:
+                        self.queue.put(("[DFT]", f"[WARN] DFT Scan Insertion Warning: {e}"))
+
+                self.queue.put(("UPDATE_DASHBOARD", None)) # Trigger UI update
+            except Exception as e:
+                self.synth_error = str(e)
+                self.queue.put(("[SYS]", f"[ERR] Synthesis Flow Error: {e}"))
+            finally:
+                self.synth_running = False
         
+        self.synth_running = True
+        self.synth_error = None
         threading.Thread(target=task, daemon=True).start()
 
     def run_simulation(self):
         if self.current_file: self.save_file()
         _, base = self.get_context()
-        if not base: return
+        if not base:
+            if hasattr(self, 'project_config') and self.project_config:
+                base = self.project_config.get("top_module")
+        if not base:
+            self.log_system("[ERR] Cannot determine top module for simulation.")
+            return
+
         root = self.prep_workspace(base)
         src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
-                glob.glob(os.path.join(root, "source", "*.sv")) + \
-                glob.glob(os.path.join(root, "source", "*.vhd")) + \
-                glob.glob(os.path.join(root, "source", "*.vhdl"))
-        if not src_v: self.log_system("No source files!", "ERR"); return
-        cmd = ["iverilog", "-g2012", "-o", f"{base}.out"] + src_v
+                glob.glob(os.path.join(root, "source", "*.sv"))
+        if not src_v:
+            self.log_system("No source files found in source/!", "ERR")
+            return
+
+        out_bin = os.path.join(root, f"{base}.out")
+        cmd = ["iverilog", "-g2012", "-o", out_bin] + src_v
+
         def task():
             try:
-                self.queue.put("[SYS] Compiling...")
-                subprocess.run(cmd, cwd=root, capture_output=True)
-                self.queue.put("[SYS] Simulating...")
-                proc = subprocess.Popen(["vvp", f"{base}.out"], cwd=root, stdout=subprocess.PIPE, text=True, bufsize=1)
-                for line in iter(proc.stdout.readline, ''): self.queue.put(line.strip())
-            except Exception as e: self.queue.put(f"[ERR] {e}")
+                self.queue.put(("[SYS]", f"Compiling RTL & Testbenches ({len(src_v)} files)..."))
+                comp = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+                if comp.returncode != 0:
+                    err_msg = comp.stderr.strip() or comp.stdout.strip()
+                    self.queue.put(("[SYS]", f"[ERR] iverilog compilation failed:\n{err_msg}"))
+                    return
+
+                self.queue.put(("[SYS]", "Simulating with vvp..."))
+                proc = subprocess.Popen(["vvp", out_bin], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                for line in iter(proc.stdout.readline, ''):
+                    self.queue.put(("[SYS]", line.strip()))
+                proc.wait()
+
+                # Find generated VCD
+                vcd_candidates = glob.glob(os.path.join(root, "*.vcd")) + glob.glob(os.path.join(root, "source", "*.vcd"))
+                if vcd_candidates:
+                    latest_vcd = max(vcd_candidates, key=os.path.getmtime)
+                    self.queue.put(("LOAD_WAVES", latest_vcd))
+                    self.queue.put(("[SYS]", f"[OK] Waveform successfully loaded: {os.path.basename(latest_vcd)}"))
+                else:
+                    self.queue.put(("[SYS]", "[WARN] Simulation finished, but no .vcd was generated. Ensure testbench calls $dumpfile and $dumpvars."))
+            except Exception as e:
+                self.queue.put(("[SYS]", f"[ERR] Simulation Error: {e}"))
+
         threading.Thread(target=task, daemon=True).start()
 
     # --- HELPERS (Copied & Cleaned) ---
@@ -833,6 +1132,25 @@ class SilisIDE(QMainWindow):
         tb = QToolBar(); self.addToolBar(tb); tb.setMovable(False)
         act_new = QAction("New", self); act_new.setShortcut("Ctrl+N"); act_new.triggered.connect(self.new_file); tb.addAction(act_new)
         act_save = QAction("Save", self); act_save.setShortcut("Ctrl+S"); act_save.triggered.connect(self.save_file); tb.addAction(act_save)
+        
+        act_new_proj = QAction("New Project...", self)
+        act_new_proj.setShortcut("Ctrl+Shift+N")
+        act_new_proj.triggered.connect(self.new_project)
+        tb.addAction(act_new_proj)
+
+        act_open = QAction("Open Project", self)
+        act_open.setShortcut("Ctrl+Shift+O")
+        act_open.triggered.connect(lambda: self.open_project())
+        tb.addAction(act_open)
+
+        self.btn_recent_menu = QToolButton(self)
+        self.btn_recent_menu.setText("Recent Projects")
+        self.btn_recent_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_recent = QMenu(self)
+        self.btn_recent_menu.setMenu(self.menu_recent)
+        self.menu_recent.aboutToShow.connect(self._populate_recent_menu)
+        tb.addWidget(self.btn_recent_menu)
+
         tb.addSeparator()
         self.btn_front = QPushButton("Frontend"); self.btn_front.setCheckable(True); self.btn_front.setChecked(True)
         self.btn_front.clicked.connect(lambda: self.switch_world(0))
@@ -842,7 +1160,149 @@ class SilisIDE(QMainWindow):
         tb.addSeparator()
         self.lbl_proj = QLabel(" Untitled "); tb.addWidget(self.lbl_proj)
         tb.addSeparator()
-        act_set = QAction("⚙ Settings", self); act_set.triggered.connect(self.open_settings); tb.addAction(act_set)
+        act_set = QAction("Settings", self); act_set.triggered.connect(self.open_settings); tb.addAction(act_set)
+
+    def _populate_recent_menu(self):
+        self.menu_recent.clear()
+        import project_registry
+        projects = project_registry.get_registered_projects()
+        if not projects:
+            act = self.menu_recent.addAction("No Recent Projects")
+            act.setEnabled(False)
+            return
+
+        for p in projects:
+            title = f"{p['name']} ({p['top']} | {p['pdk']})"
+            act = self.menu_recent.addAction(title)
+            act.setToolTip(p['path'])
+            target_path = p['path']
+            act.triggered.connect(lambda checked, path=target_path: self.open_project(path))
+
+    def new_project(self):
+        from projectwizard.codes import SilisProjectWizard
+        wizard = SilisProjectWizard(self)
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            self.open_project(wizard.project_path)
+
+    def open_project(self, project_path=None):
+        import project_registry
+        if not project_path:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Open Silis Project", os.path.expanduser("~"), "Silis Project (*.silisproj);;All Files (*)"
+            )
+            if not file_path:
+                return
+            project_path = file_path
+
+        if os.path.isdir(project_path):
+            proj_file = os.path.join(project_path, "silis.silisproj")
+        else:
+            proj_file = project_path
+
+        if not os.path.isfile(proj_file):
+            QMessageBox.warning(self, "Error", f"Project file not found:\n{proj_file}")
+            return
+
+        try:
+            with open(proj_file, 'r') as f:
+                self.project_config = json.load(f)
+
+            self.cwd = os.path.dirname(os.path.abspath(proj_file))
+            self.project_path = self.cwd
+            os.chdir(self.cwd)
+            project_registry.register_project(self.cwd)
+
+            pdk_name = self.project_config.get("pdk", "sky130")
+            self.active_pdk = next((cfg for cfg in self.pdk_mgr.configs if cfg['name'] == pdk_name), None)
+            if not self.active_pdk:
+                self.pdk_mgr.crawl_volare()
+                self.active_pdk = next((cfg for cfg in self.pdk_mgr.configs if pdk_name in cfg['name'].lower()), None)
+            if hasattr(self, 'backend_widget') and self.backend_widget:
+                self.backend_widget.active_pdk = self.active_pdk
+                if hasattr(self.backend_widget, 'reset_backend'):
+                    self.backend_widget.reset_backend()
+
+            # Clear synthesis dashboard logs and error lists
+            if hasattr(self, 'tab_synth') and self.tab_synth:
+                if hasattr(self.tab_synth, 'log_main'):
+                    self.tab_synth.log_main.clear()
+                if hasattr(self.tab_synth, 'list_err'):
+                    self.tab_synth.list_err.clear()
+                if hasattr(self.tab_synth, 'card_status'):
+                    self.tab_synth.card_status.setText("READY")
+                    self.tab_synth.card_status.setStyleSheet("font-size:14px; font-weight:bold; padding:10px; border-radius:6px; border: 1px solid gray;")
+                if hasattr(self.tab_synth, 'val_wns'):
+                    self.tab_synth.val_wns.setText("--")
+                if hasattr(self.tab_synth, 'val_area'):
+                    self.tab_synth.val_area.setText("--")
+                if hasattr(self.tab_synth, 'val_gates'):
+                    self.tab_synth.val_gates.setText("--")
+                if hasattr(self.tab_synth, 'preview'):
+                    self.tab_synth.preview.clear()
+
+            self.tab_compile.explorer.set_cwd(self.cwd)
+            proj_name = self.project_config.get("project_name", os.path.basename(self.cwd))
+            self.setWindowTitle(f"Silis — Silicon Scaffold v2.1 - [{proj_name}]")
+            self.lbl_proj.setText(f" {proj_name} ")
+
+            # Close / clean editor tabs before loading new primary source file
+            if hasattr(self.tab_compile, 'editor') and self.tab_compile.editor:
+                for i in range(self.tab_compile.editor.count() - 1, -1, -1):
+                    self.tab_compile.editor.close_tab(i)
+                self.current_file = None
+
+            top_mod = self.project_config.get("top_module", "")
+            top_v = os.path.join(self.cwd, "source", f"{top_mod}.v")
+            top_vhd = os.path.join(self.cwd, "source", f"{top_mod}.vhd")
+            if os.path.isfile(top_v):
+                self.open_file_in_editor(top_v)
+            elif os.path.isfile(top_vhd):
+                self.open_file_in_editor(top_vhd)
+            else:
+                src_dir = os.path.join(self.cwd, "source")
+                if os.path.isdir(src_dir):
+                    v_files = [os.path.join(src_dir, f) for f in os.listdir(src_dir) if f.endswith(('.v', '.sv', '.vhd', '.vhdl'))]
+                    if v_files:
+                        self.open_file_in_editor(v_files[0])
+
+            self.log_system(f"Loaded Project: {proj_name} at {self.cwd}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load project:\n{e}")
+
+    def open_intake_wizard(self):
+        from intake.intake_dialog import IntakeWizardDialog
+        dlg = IntakeWizardDialog(self, self.project_config)
+        dlg.intake_completed.connect(self._apply_intake_result)
+        dlg.exec()
+
+    def _apply_intake_result(self, result: dict):
+        if not self.project_config:
+            self.project_config = {}
+
+        self.project_config["top_module"] = result.get("top_module", "")
+        self.project_config["rtl_files"] = result.get("rtl_files", [])
+        self.project_config["vhdl_work"] = result.get("vhdl_work", "work")
+        self.project_config["vhdl_std"] = result.get("vhdl_std", "08")
+
+        # Save project config to silis.silisproj if cwd is set
+        if hasattr(self, 'cwd') and os.path.isdir(self.cwd):
+            proj_file = os.path.join(self.cwd, "silis.silisproj")
+            try:
+                with open(proj_file, "w") as f:
+                    json.dump(self.project_config, f, indent=2)
+            except Exception as e:
+                print(f"[INTAKE] Note saving project config: {e}")
+
+        # Open the generated Verilog file in the editor
+        rtl_files = result.get("rtl_files", [])
+        if rtl_files and os.path.isfile(rtl_files[0]):
+            self.open_file_in_editor(rtl_files[0])
+
+        # Switch to synthesis tab
+        if hasattr(self, 'frontend_tabs'):
+            self.frontend_tabs.setCurrentIndex(3)
+
+        self.log_system(f"Ingested & Lowered Top Module: {result.get('top_module', '')}")
 
     def open_settings(self):
         dlg = SettingsDialog(self)
@@ -877,7 +1337,7 @@ class SilisIDE(QMainWindow):
         if os.path.exists(path):
             self.backend_widget.gds3d_port.load_gds(path)
             self.switch_world(1)
-            self.backend_widget.viz_tabs.setCurrentIndex(2)
+            self.backend_widget.viz_tabs.setCurrentIndex(1)
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
 
     def handle_terminal_input(self):
@@ -945,14 +1405,28 @@ class SilisIDE(QMainWindow):
             f, _ = QFileDialog.getSaveFileName(self, "Save", self.cwd)
             if f: self.current_file = f
         if self.current_file:
-            with open(self.current_file, 'w') as f: f.write(self.tab_compile.editor.toPlainText())
+            content = self.tab_compile.editor.toPlainText()
+            # Safety Guard: Never overwrite non-empty disk files with empty content from an unready editor widget
+            if not content and os.path.exists(self.current_file) and os.path.getsize(self.current_file) > 0:
+                self.log_system(f"Warning: Editor content was empty; preserved existing {os.path.basename(self.current_file)}", "WARN")
+                return
+            with open(self.current_file, 'w') as f: f.write(content)
             self.log_system(f"Saved {os.path.basename(self.current_file)}")
             self.lbl_proj.setText(os.path.basename(self.current_file))
             if self.current_file.endswith(('.v', '.sv')):
                 self.tab_schem.invalidate_cache()
 
     def get_context(self):
+        if hasattr(self, 'project_config') and self.project_config and self.project_config.get("top_module"):
+            top = self.project_config["top_module"]
+            return top, top.replace("tb_", "").replace("_tb", "")
         content = self.tab_compile.editor.toPlainText()
+        if not content and self.current_file and os.path.exists(self.current_file):
+            try:
+                with open(self.current_file, 'r') as f:
+                    content = f.read()
+            except Exception:
+                pass
         m = re.search(r'(?:module|entity)\s+(\w+)', content, re.IGNORECASE)
         if not m: return None, None
         return m.group(1), m.group(1).replace("tb_", "").replace("_tb", "")
@@ -1008,7 +1482,9 @@ class SilisIDE(QMainWindow):
     # --- FIXED QUEUE PROCESSOR ---
     # === REPLACE IN SilisIDE CLASS ===
     def process_queue(self):
+        had_items = False
         while not self.queue.empty():
+            had_items = True
             item = self.queue.get()
             
             if isinstance(item, tuple): tag, content = item
@@ -1020,11 +1496,22 @@ class SilisIDE(QMainWindow):
 
             # [NEW] Route Backend-specific messages to Backend Terminal
             elif tag == "[BACKEND]":
-                self.backend_widget.append_output(content)
+                if hasattr(self, 'backend_widget') and self.backend_widget:
+                    if hasattr(self.backend_widget, 'append_output'):
+                        self.backend_widget.append_output(content)
+                    elif hasattr(self.backend_widget, 'term_log'):
+                        self.backend_widget.term_log.append(str(content))
             elif tag == "[BACKEND_GDS_DONE]":
-                QMessageBox.information(self, "GDS Generation Complete", f"GDS layout successfully exported to:\n\n{content}")
+                if not getattr(self, "headless", False):
+                    QMessageBox.information(self, "GDS Generation Complete", f"GDS layout successfully exported to:\n\n{content}")
+                else:
+                    print(f"[BACKEND_GDS_DONE] GDS layout successfully exported to: {content}")
 
             # Existing Routing...
+            elif tag == "LOAD_WAVES":
+                self.tab_waves.load_file(content)
+                self.frontend_tabs.setCurrentIndex(1)
+
             elif tag == "UPDATE_DASHBOARD":
                 self.tab_synth.update_dashboard()
                 
@@ -1039,6 +1526,13 @@ class SilisIDE(QMainWindow):
             else:
                 self.log_system(str(item))
 
+        # Dynamic poll backoff: throttle when idle, accelerate when active
+        if hasattr(self, 'queue_timer'):
+            if had_items and self.queue_timer.interval() != 40:
+                self.queue_timer.setInterval(40)
+            elif not had_items and self.queue_timer.interval() != 200:
+                self.queue_timer.setInterval(200)
+
     def load_violation_log(self): 
         self.frontend_tabs.setCurrentIndex(3)
         self.harvest_logs(self.get_proj_root(self.get_context()[1] or "design"))
@@ -1050,19 +1544,74 @@ class SilisIDE(QMainWindow):
 
 if __name__ == "__main__":
     import sys
+    from cli_main import handle_cli
+    if handle_cli(sys.argv[1:]):
+        sys.exit(0)
+
+    # Enable OpenGL context sharing & pre-import WebEngine before QApplication
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    try:
+        import PyQt6.QtWebEngineWidgets
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     
     # Try loading settings
     font_fam = USER_SETTINGS.get("font_family", "Consolas")
     font_size = USER_SETTINGS.get("font_size", 11)
     
+    # Check if a project file or initial tab was requested for GUI launch
+    proj_to_open = None
+    target_tab = None
+    argv_copy = list(sys.argv[1:])
+    idx = 0
+    while idx < len(argv_copy):
+        arg = argv_copy[idx]
+        if arg in ["--tab", "-t"] and idx + 1 < len(argv_copy):
+            target_tab = argv_copy[idx + 1].lower()
+            argv_copy.pop(idx)
+            argv_copy.pop(idx)
+        elif not arg.startswith("-") and (arg.endswith(".json") or os.path.isdir(arg)):
+            proj_to_open = arg
+            argv_copy.pop(idx)
+        else:
+            idx += 1
+
     # Pre-load alias database so IDE doesn't block later
     SSAForge.load_aliases()
     
-    window = SilisIDE()
-    window.show()
+    window = SilisIDE(project_file=proj_to_open)
     
-    # Launch Wizard if no project loaded
-    QTimer.singleShot(100, lambda: SilisLauncher(window).exec() if not window.current_file else None)
+    # If initial tab was requested, or auto-detect current project stage
+    if target_tab:
+        if target_tab in ["synth", "synthesis", "4"]:
+            window.switch_world(0)
+            window.frontend_tabs.setCurrentIndex(3)
+        elif target_tab in ["schem", "schematic", "3"]:
+            window.switch_world(0)
+            window.frontend_tabs.setCurrentIndex(2)
+        elif target_tab in ["waves", "waveform", "2"]:
+            window.switch_world(0)
+            window.frontend_tabs.setCurrentIndex(1)
+        elif target_tab in ["compile", "editor", "1"]:
+            window.switch_world(0)
+            window.frontend_tabs.setCurrentIndex(0)
+        elif target_tab in ["layout", "backend", "floorplan", "place", "route"]:
+            window.switch_world(1)
+            window.backend_widget.viz_tabs.setCurrentIndex(0)
+    elif proj_to_open and window.project_config:
+        # Smart auto-detection: if DEF exists, open Layout view; else if netlist exists, open Synthesis view
+        top = window.project_config.get("top_module", "design")
+        root = os.path.dirname(os.path.abspath(proj_to_open)) if proj_to_open.endswith(".json") else os.path.abspath(proj_to_open)
+        if os.path.exists(os.path.join(root, "results", "temp.def")) or os.path.exists(os.path.join(root, "results", "design.def")):
+            window.switch_world(1)
+        elif os.path.exists(os.path.join(root, "netlist", f"{top}_netlist.v")) or os.path.exists(os.path.join(root, "netlist", "design.v")):
+            window.switch_world(0)
+            window.frontend_tabs.setCurrentIndex(3) # SYNTHESIS TAB
+
+    window.show()
+    window.raise_()
+    window.activateWindow()
     
     sys.exit(app.exec())

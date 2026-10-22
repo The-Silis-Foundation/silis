@@ -82,11 +82,11 @@ class Page2Sources(QWizardPage):
         layout.addWidget(self.list_widget)
 
         btn_layout = QHBoxLayout()
-        add_btn = QPushButton("[+] Add Existing Files")
+        add_btn = QPushButton("Add Files...")
         add_btn.clicked.connect(self.add_files)
-        add_folder_btn = QPushButton("[+] Add Folder")
+        add_folder_btn = QPushButton("Add Folder...")
         add_folder_btn.clicked.connect(self.add_folder)
-        new_btn = QPushButton("[+] Create New File")
+        new_btn = QPushButton("Create New File...")
         new_btn.clicked.connect(self.create_file)
         
         btn_layout.addWidget(add_btn)
@@ -100,7 +100,7 @@ class Page2Sources(QWizardPage):
         layout.addWidget(self.copy_check)
 
     def add_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Select RTL Files", "", "Verilog (*.v *.sv);;All Files (*)")
+        files, _ = QFileDialog.getOpenFileNames(self, "Select RTL Files", "", "HDL Files (*.v *.sv *.vhd *.vhdl);;Verilog (*.v *.sv);;VHDL (*.vhd *.vhdl);;All Files (*)")
         for f in files:
             self.list_widget.addItem(f)
 
@@ -108,6 +108,8 @@ class Page2Sources(QWizardPage):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Source Directory")
         if dir_path:
             for root, _, files in os.walk(dir_path):
+                if '/.' in root or '/build' in root:
+                    continue
                 for f in files:
                     if f.endswith('.v') or f.endswith('.sv') or f.endswith('.vhd') or f.endswith('.vhdl'):
                         self.list_widget.addItem(os.path.join(root, f))
@@ -137,9 +139,9 @@ class Page3Constraints(QWizardPage):
         layout.addWidget(self.list_widget)
 
         btn_layout = QHBoxLayout()
-        add_btn = QPushButton("[+] Add .sdc File")
+        add_btn = QPushButton("Add SDC File...")
         add_btn.clicked.connect(self.add_files)
-        new_btn = QPushButton("[+] Create New File")
+        new_btn = QPushButton("Create New File...")
         new_btn.clicked.connect(self.create_file)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(new_btn)
@@ -175,9 +177,9 @@ class Page4Testbenches(QWizardPage):
         layout.addWidget(self.list_widget)
 
         btn_layout = QHBoxLayout()
-        add_btn = QPushButton("[+] Add Testbench")
+        add_btn = QPushButton("Add Testbench...")
         add_btn.clicked.connect(self.add_files)
-        new_btn = QPushButton("[+] Create New File")
+        new_btn = QPushButton("Create New File...")
         new_btn.clicked.connect(self.create_file)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(new_btn)
@@ -307,32 +309,46 @@ class Page6Summary(QWizardPage):
     def initializePage(self):
         wizard = self.wizard()
         rtl_files = wizard.page(1).get_files()
-        
-        modules = set()
-        module_pattern = re.compile(r'\bmodule\s+([a-zA-Z_][a-zA-Z0-9_]*)\b')
-        entity_pattern = re.compile(r'\bentity\s+([a-zA-Z_][a-zA-Z0-9_]*)\b', re.IGNORECASE)
-        for f in rtl_files:
-            try:
-                with open(f, 'r', encoding='utf-8', errors='ignore') as file:
-                    for _ in range(1500):
-                        line = file.readline()
-                        if not line: break
-                        
-                        # Strip inline comments to avoid natural language matches
-                        line = line.split('//')[0].split('--')[0]
-                        
-                        match_m = module_pattern.search(line)
-                        if match_m:
-                            modules.add(match_m.group(1))
-                            
-                        match_e = entity_pattern.search(line)
-                        if match_e:
-                            modules.add(match_e.group(1))
-            except Exception:
-                pass
-        
+
+        # Run intelligent source scanner and topological sorter if available
+        candidates = []
+        try:
+            from intake.source_scanner import scan_sources
+            from intake.dependency_graph import topological_sort
+            from intake.top_finder import find_top_candidates
+
+            valid_paths = [f for f in rtl_files if not f.startswith("[NEW] ") and os.path.exists(f)]
+            if valid_paths:
+                sources = scan_sources(valid_paths)
+                sorted_sources = topological_sort(sources)
+                cands = find_top_candidates(sorted_sources)
+                candidates = [c[0] for c in cands]
+        except Exception:
+            candidates = []
+
+        if not candidates:
+            modules = set()
+            module_pattern = re.compile(r'\bmodule\s+([a-zA-Z_][a-zA-Z0-9_]*)\b')
+            entity_pattern = re.compile(r'\bentity\s+([a-zA-Z_][a-zA-Z0-9_]*)\b', re.IGNORECASE)
+            for f in rtl_files:
+                try:
+                    with open(f, 'r', encoding='utf-8', errors='ignore') as file:
+                        for _ in range(1500):
+                            line = file.readline()
+                            if not line: break
+                            line = line.split('//')[0].split('--')[0]
+                            match_m = module_pattern.search(line)
+                            if match_m:
+                                modules.add(match_m.group(1))
+                            match_e = entity_pattern.search(line)
+                            if match_e:
+                                modules.add(match_e.group(1))
+                except Exception:
+                    pass
+            candidates = list(modules)
+
         self.top_module_combo.clear()
-        self.top_module_combo.addItems(list(modules))
+        self.top_module_combo.addItems(candidates)
 
         name = wizard.field("project_name")
         loc = wizard.field("project_loc")
@@ -381,7 +397,7 @@ class SilisProjectWizard(QWizard):
                 routed = []
                 for f in files:
                     if f.startswith("[NEW] "):
-                        basename = f[6:]
+                        basename = os.path.basename(f[6:])
                         if prefix and not basename.startswith(prefix):
                             basename = prefix + basename
                         dest = os.path.join(loc, dest_dir, basename)
@@ -424,6 +440,10 @@ class SilisProjectWizard(QWizard):
                     f.write(f"create_clock -name clk -period 10.0 [get_ports clk]\n")
                 sdc_files.append(default_sdc)
 
+            # Detect VHDL / Mixed sources and auto-populate vhdl_work and vhdl_std
+            has_vhdl = any(f.lower().endswith(('.vhd', '.vhdl', '.vhd2008')) for f in rtl_files)
+            work_lib = "neorv32" if any("neorv32" in f.lower() for f in rtl_files) else "work"
+
             config = {
                 "project_name": name,
                 "top_module": p6.get_top_module(),
@@ -434,6 +454,9 @@ class SilisProjectWizard(QWizard):
                 "sdc_files": sdc_files,
                 "tb_files": tb_files
             }
+            if has_vhdl:
+                config["vhdl_work"] = work_lib
+                config["vhdl_std"] = "08"
             
             proj_file = os.path.join(loc, "silis.silisproj")
             with open(proj_file, 'w') as f:
@@ -441,6 +464,8 @@ class SilisProjectWizard(QWizard):
 
             self.project_path = loc
             self.project_config = config
+            import project_registry
+            project_registry.register_project(loc)
             super().accept()
 
         except Exception as e:
@@ -451,29 +476,31 @@ class SilisLauncher(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Welcome to Silis")
-        self.resize(550, 400)
+        self.resize(600, 420)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
         layout = QVBoxLayout(self)
 
         banner = QLabel()
-        pm = QPixmap("/home/jerome/silis/banneriguess.png")
+        banner_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "banneriguess.png"))
+        pm = QPixmap(banner_path)
         if not pm.isNull():
-            banner.setPixmap(pm.scaledToWidth(530, Qt.TransformationMode.SmoothTransformation))
+            banner.setPixmap(pm.scaledToWidth(580, Qt.TransformationMode.SmoothTransformation))
             banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(banner)
 
         title = QLabel("Silis - Silicon Scaffold")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = title.font()
-        font.setPointSize(24)
+        font.setPointSize(22)
         title.setFont(font)
         layout.addWidget(title)
 
         btn_new = QPushButton("Create New Project")
-        btn_new.setMinimumHeight(50)
+        btn_new.setMinimumHeight(45)
         btn_new.clicked.connect(self.new_project)
         layout.addWidget(btn_new)
 
-        layout.addWidget(QLabel("Recent Projects:"))
+        layout.addWidget(QLabel("Registered Projects (CLI & GUI):"))
         self.recent_list = QListWidget()
         self.recent_list.itemDoubleClicked.connect(self.open_recent)
         layout.addWidget(self.recent_list)
@@ -484,34 +511,26 @@ class SilisLauncher(QDialog):
         
         self.selected_project_path = None
         self.selected_project_config = None
-        self.cache_file = os.path.expanduser("~/.silis_recent.json")
         self.load_recent()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
 
     def load_recent(self):
         self.recent_list.clear()
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, 'r') as f:
-                    recent_paths = json.load(f)
-                for p in recent_paths:
-                    if os.path.exists(p):
-                        self.recent_list.addItem(p)
-            except Exception:
-                pass
+        import project_registry
+        for proj in project_registry.get_registered_projects():
+            display_text = f"{proj['name']} [{proj['top']} | {proj['pdk']}]  —  {proj['path']}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, proj['path'])
+            item.setToolTip(f"Path: {proj['path']}\nTop: {proj['top']}\nPDK: {proj['pdk']}")
+            self.recent_list.addItem(item)
 
     def save_recent(self, path):
-        recent = []
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, 'r') as f:
-                    recent = json.load(f)
-            except Exception:
-                pass
-        if path in recent:
-            recent.remove(path)
-        recent.insert(0, path)
-        with open(self.cache_file, 'w') as f:
-            json.dump(recent[:10], f)
+        import project_registry
+        project_registry.register_project(path)
 
     def new_project(self):
         wizard = SilisProjectWizard(self)
@@ -522,7 +541,7 @@ class SilisLauncher(QDialog):
             self.accept()
 
     def open_recent(self, item):
-        path = item.text()
+        path = item.data(Qt.ItemDataRole.UserRole) or item.text()
         self.load_project_file(os.path.join(path, "silis.silisproj"))
 
     def open_project(self):

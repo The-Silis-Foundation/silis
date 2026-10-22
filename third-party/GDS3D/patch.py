@@ -1,6 +1,11 @@
+import os
 import re
 
-with open("/home/jerome/silis/third-party/GDS3D/gdsoglviewer/renderer.h", "r") as f:
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+renderer_h_path = os.path.join(REPO_ROOT, "third-party", "GDS3D", "gdsoglviewer", "renderer.h")
+renderer_cpp_path = os.path.join(REPO_ROOT, "third-party", "GDS3D", "gdsoglviewer", "renderer.cpp")
+
+with open(renderer_h_path, "r") as f:
     content = f.read()
 
 # Add vector include
@@ -21,10 +26,10 @@ if "instance_data_t" not in content:
 if "GLuint instanceVBO;" not in content:
     content = content.replace("    GLuint	FBO2;\n	GLuint  RBO2_color;\n    \n    // Vertex creation", "    GLuint	FBO2;\n	GLuint  RBO2_color;\n    \n    GLuint instanceVBO;\n    // Vertex creation")
 
-with open("/home/jerome/silis/third-party/GDS3D/gdsoglviewer/renderer.h", "w") as f:
+with open(renderer_h_path, "w") as f:
     f.write(content)
 
-with open("/home/jerome/silis/third-party/GDS3D/gdsoglviewer/renderer.cpp", "r") as f:
+with open(renderer_cpp_path, "r") as f:
     content = f.read()
 
 exts = """
@@ -83,5 +88,6 @@ vs = 'const char vertexProgramSource[1024] = "attribute vec4 instanceMat0; attri
 if "instanceMat0" not in content:
     content = re.sub(r'const char vertexProgramSource\[.*?\] = .*?;', vs, content, count=1)
 
-with open("/home/jerome/silis/third-party/GDS3D/gdsoglviewer/renderer.cpp", "w") as f:
+with open(renderer_cpp_path, "w") as f:
     f.write(content)
+

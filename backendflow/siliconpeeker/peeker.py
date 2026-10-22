@@ -20,7 +20,7 @@ class DEFParser:
         self.path = def_path
         self.ide = ide
         self.comp_sizes = {}
-        if self.ide: self.parse_macro_sizes()
+        self.parse_macro_sizes()
         self.die_rect = QRectF(0,0,0,0)
         self.comps_map = {}   
         self.comp_types = {}  
@@ -40,24 +40,72 @@ class DEFParser:
 
     def parse_macro_sizes(self):
         try:
-            if not getattr(self.ide, 'project_config', None): return
-            pdk_name = self.ide.project_config.get('pdk', '')
-            cfg = next((c for c in self.ide.pdk_mgr.configs if c['name'] == pdk_name), None)
-            if not cfg: return
-            lib_path = cfg.get('lib', '')
-            volare_base = lib_path.split("libs.ref")[0]
-            import os, glob, re
-            search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
-            for lef in glob.glob(search_path):
-                with open(lef, 'r') as f:
-                    content = f.read()
-                    name = os.path.basename(lef).replace('.lef', '')
-                    m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
-                    if m:
-                        self.comp_sizes[name] = (float(m.group(1)), float(m.group(2)))
-                    # Find MACRO blocks inside for specific cell sizes (e.g. tap cells in std cell LEF)
-                    for match in re.finditer(r'MACRO\s+([\w\d_]+)[\s\S]*?SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content):
-                        self.comp_sizes[match.group(1)] = (float(match.group(2)), float(match.group(3)))
+            import os, glob, re, json
+            search_dirs = []
+            proj_d = None
+            if self.ide and getattr(self.ide, 'current_project_dir', None):
+                proj_d = self.ide.current_project_dir
+            elif self.path:
+                cand = os.path.dirname(os.path.dirname(os.path.abspath(self.path)))
+                if cand not in ["/", "/tmp", "/var", "/home", "/usr", "/etc"] and os.path.isdir(cand):
+                    proj_d = cand
+                else:
+                    cand2 = os.path.dirname(os.path.abspath(self.path))
+                    if cand2 not in ["/", "/tmp", "/var", "/home", "/usr", "/etc"] and os.path.isdir(cand2):
+                        proj_d = cand2
+
+            if proj_d and os.path.isdir(proj_d):
+                search_dirs.append(proj_d)
+                src = os.path.join(proj_d, "source")
+                if os.path.isdir(src): search_dirs.append(src)
+                
+                # Preload sizes from reports if available
+                rep_dir = os.path.join(proj_d, "reports")
+                if os.path.isdir(rep_dir):
+                    for fp_sf in glob.glob(os.path.join(rep_dir, "*_floorplan_save.json")):
+                        try:
+                            with open(fp_sf, 'r') as f:
+                                fp_data = json.load(f)
+                            for m in fp_data.get("macros", []):
+                                if "name" in m and "w" in m and "h" in m:
+                                    self.comp_sizes[m["name"]] = (float(m["w"]), float(m["h"]))
+                        except:
+                            pass
+
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            bundled_pdk = os.path.join(repo_root, "third-party", "pdks")
+            if os.path.isdir(bundled_pdk):
+                search_dirs.append(bundled_pdk)
+
+            if getattr(self.ide, 'active_pdk', None):
+                lib_path = self.ide.active_pdk.get('lib', '')
+                if "libs.ref" in lib_path:
+                    search_dirs.append(lib_path.split("libs.ref")[0])
+
+            env_pdk = os.environ.get("PDK_ROOT")
+            if env_pdk and os.path.isdir(env_pdk):
+                search_dirs.append(env_pdk)
+
+            for d in search_dirs:
+                if not os.path.exists(d): continue
+                for root, _, files in os.walk(d):
+                    rel = os.path.relpath(root, d)
+                    if rel.count(os.sep) > 3:
+                        continue
+                    for file in files:
+                        if file.endswith(".lef"):
+                            lef = os.path.join(root, file)
+                            try:
+                                with open(lef, 'r') as f:
+                                    content = f.read()
+                                name = os.path.basename(lef).replace('.lef', '')
+                                m = re.search(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content)
+                                if m:
+                                    self.comp_sizes[name] = (float(m.group(1)), float(m.group(2)))
+                                for match in re.finditer(r'MACRO\s+([\w\d_]+)[\s\S]*?SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)', content):
+                                    self.comp_sizes[match.group(1)] = (float(match.group(2)), float(match.group(3)))
+                            except:
+                                pass
         except:
             pass
 
@@ -118,10 +166,10 @@ class DEFParser:
                 elif line.startswith("BLOCKAGES"):
                     current_section = "BLOCKAGES"
                 elif line.startswith("END"): 
-                    current_section = None
                     if len(current_route_points) >= 2:
                         if current_section == "SPECIALNETS": self.power_routes.append((current_route_width, current_route_points))
                         elif current_section == "NETS": self.signal_routes.append(current_route_points)
+                    current_section = None
                     current_route_points = []
                     parsing_route = False
 
@@ -137,7 +185,7 @@ class DEFParser:
                             x, y = 0, 0
                     
                         if "PLACED" in line or "FIXED" in line or "COVER" in line:
-                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*([A-Z]+)?', line)
+                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*([A-Za-z0-9_]+)?', line)
                             if coord_match:
                                 x = int(coord_match.group(1))
                                 y = int(coord_match.group(2))
@@ -149,13 +197,13 @@ class DEFParser:
                             w = self.comp_sizes[current_comp_model][0] * self.dbu
                             h = self.comp_sizes[current_comp_model][1] * self.dbu
                             
-                        is_macro_by_size = (w / self.dbu > 50)
+                        is_macro_by_size = (w / self.dbu > 20 or h / self.dbu > 20)
                             
-                        if is_placed or is_macro_by_size:
+                        if is_placed:
                             bb_x, bb_y = x, y
                             bb_w, bb_h = w, h
                             if is_macro_by_size:
-                                if orient in ["W", "E", "FW", "FE"]:
+                                if orient in ["W", "E", "FW", "FE", "R90", "R270", "MYR90", "MXR90", "MX90", "MY90"]:
                                     bb_w, bb_h = h, w
                                 
                             self.comps_map[current_comp_name] = QRectF(bb_x, bb_y, bb_w, bb_h)
@@ -164,7 +212,9 @@ class DEFParser:
                             is_tap = "tap" in model_lower or "fill" in model_lower
                             is_clock = "clk" in model_lower and not current_comp_name.startswith("_")
                             
-                            if is_tap: self.comp_types[current_comp_name] = "TAP"
+                            if (current_comp_model in self.comp_sizes) or is_macro_by_size:
+                                self.comp_types[current_comp_name] = "MACRO"
+                            elif is_tap: self.comp_types[current_comp_name] = "TAP"
                             elif is_clock: self.comp_types[current_comp_name] = "CLOCK"
                             else: self.comp_types[current_comp_name] = "STD"
                             
@@ -178,17 +228,32 @@ class DEFParser:
                 # --- PINS ---
                 elif current_section == "PINS":
                     parts = line.split()
-                    if line.startswith("-") and len(parts) > 2:
+                    if line.startswith("-") and len(parts) > 1:
                         current_pin_name = parts[1]
-                    
+                        current_pin_port_rect = None
+
+                    # Check for LAYER port dimensions: + LAYER <name> ( x1 y1 ) ( x2 y2 )
+                    if "LAYER" in line:
+                        layer_box = re.search(r'LAYER\s+\S+\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
+                        if layer_box:
+                            lx1, ly1, lx2, ly2 = map(int, layer_box.groups())
+                            current_pin_port_rect = (lx1, ly1, lx2 - lx1, ly2 - ly1)
+
                     if current_pin_name and ("PLACED" in line or "FIXED" in line):
                         coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
                         if coord_match:
                             x = int(coord_match.group(1))
                             y = int(coord_match.group(2))
-                            pin_sz = 1 * self.dbu 
-                            self.pins.append((QRectF(x, y, pin_sz, pin_sz), current_pin_name))
-                            current_pin_name = None 
+                            if current_pin_port_rect:
+                                ox, oy, pw, ph = current_pin_port_rect
+                                px = x + ox
+                                py = y + oy
+                                self.pins.append((QRectF(px, py, pw, ph), current_pin_name))
+                            else:
+                                pin_sz = 1.0 * self.dbu
+                                self.pins.append((QRectF(x - pin_sz/2, y - pin_sz/2, pin_sz, pin_sz), current_pin_name))
+                            current_pin_name = None
+                            current_pin_port_rect = None 
 
                 # --- REGIONS ---
                 elif current_section == "REGIONS":
@@ -197,9 +262,9 @@ class DEFParser:
                         if len(parts) >= 2:
                             r_name = parts[1]
                             coord_match = re.findall(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
-                            if len(coord_match) >= 2:
-                                x1, y1 = int(coord_match[0][0]), int(coord_match[0][1])
-                                x2, y2 = int(coord_match[1][0]), int(coord_match[1][1])
+                            for c_i in range(0, len(coord_match) - 1, 2):
+                                x1, y1 = int(coord_match[c_i][0]), int(coord_match[c_i][1])
+                                x2, y2 = int(coord_match[c_i+1][0]), int(coord_match[c_i+1][1])
                                 self.regions.append((QRectF(x1, y1, x2-x1, y2-y1), r_name))
 
                 # --- BLOCKAGES ---
@@ -293,7 +358,7 @@ class SiliconPeeker(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Optimization
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setOptimizationFlags(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing)
         
         # Flip Y (CAD Coordinates)
@@ -316,7 +381,18 @@ class SiliconPeeker(QGraphicsView):
         self.last_mtime = 0
         self.auto_refresh_timer = QTimer(self)
         self.auto_refresh_timer.timeout.connect(self.check_refresh)
-        self.auto_refresh_timer.start(1000)
+        # Note: Do not start timer until widget is visible (see showEvent/hideEvent)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'auto_refresh_timer') and not self.auto_refresh_timer.isActive():
+            self.check_refresh()
+            self.auto_refresh_timer.start(2000)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, 'auto_refresh_timer') and self.auto_refresh_timer.isActive():
+            self.auto_refresh_timer.stop()
 
     def check_refresh(self):
         if self.current_def_path and os.path.exists(self.current_def_path):
@@ -434,13 +510,19 @@ class SiliconPeeker(QGraphicsView):
 
     def load_def_file(self, path):
         self.current_def_path = path
-        if os.path.exists(path):
-            self.last_mtime = os.path.getmtime(path)
-            self.def_data = DEFParser(path, getattr(self, 'ide', None))
-            self.redraw()
-            if self.first_load:
-                self.fit_with_slack()
-                self.first_load = False
+        if not os.path.exists(path):
+            return
+        mtime = os.path.getmtime(path)
+        size = os.path.getsize(path)
+        if self.def_data is not None and getattr(self, 'last_mtime', 0) == mtime and getattr(self, '_last_size', 0) == size:
+            return
+        self.last_mtime = mtime
+        self._last_size = size
+        self.def_data = DEFParser(path, getattr(self, 'ide', None))
+        self.redraw()
+        if self.first_load:
+            self.fit_with_slack()
+            self.first_load = False
 
     def redraw(self):
         try:
@@ -509,7 +591,7 @@ class SiliconPeeker(QGraphicsView):
                         ctype = self.def_data.comp_types.get(name, "STD")
                         item = QGraphicsRectItem(rect)
                         
-                        is_macro = (rect.width() / self.def_data.dbu > 50)
+                        is_macro = (ctype == "MACRO") or (rect.width() / self.def_data.dbu > 20) or (rect.height() / self.def_data.dbu > 20)
                         
                         if is_macro and not self.show_macros: continue
                         if not is_macro and not self.show_insts: continue
@@ -593,6 +675,22 @@ class SiliconPeeker(QGraphicsView):
                 self.scene.addItem(item)
 
 
+class DefLoadWorker(QThread):
+    def_loaded = pyqtSignal(object)
+
+    def __init__(self, def_path, ide=None, parent=None):
+        super().__init__(parent)
+        self.def_path = def_path
+        self.ide = ide
+
+    def run(self):
+        try:
+            parsed = DEFParser(self.def_path, self.ide)
+            self.def_loaded.emit(parsed)
+        except Exception as e:
+            self.def_loaded.emit(None)
+
+
 class FastSiliconPeeker(QWidget):
     def __init__(self, ide=None, parent=None):
         super().__init__(parent)
@@ -607,10 +705,11 @@ class FastSiliconPeeker(QWidget):
         
         self.show_insts = True
         self.show_macros = True
+        self.show_tapcells = True
         self.show_pins = True
         self.show_nets = True
         self.show_power = True
-        
+
         if fast_layout_viewer:
             self.core = fast_layout_viewer.FastLayoutViewerCore()
             std_lod = USER_SETTINGS.get("lod_std_cells", 0.002) if USER_SETTINGS.get("lod_enabled", False) else 0.0
@@ -623,9 +722,163 @@ class FastSiliconPeeker(QWidget):
             self.layout.addWidget(QLabel("FastLayoutViewer C++ extension not found!"))
             self.core = None
 
+        # --- Tiny Floating Search Overlay (Leaves 100% Canvas Space Free) ---
+        self.search_overlay = QWidget(self)
+        self.search_overlay.setStyleSheet("background: transparent;")
+        so_layout = QHBoxLayout(self.search_overlay)
+        so_layout.setContentsMargins(0, 0, 0, 0)
+        so_layout.setSpacing(4)
+
+        self.btn_search_toggle = QPushButton("🔍", self.search_overlay)
+        self.btn_search_toggle.setFixedSize(26, 26)
+        self.btn_search_toggle.setToolTip("Search instance / macro (Ctrl+F)")
+        self.btn_search_toggle.setStyleSheet("""
+            QPushButton {
+                background: rgba(30, 30, 30, 0.85);
+                color: #e0e0e0;
+                border: 1px solid #555;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: rgba(50, 50, 50, 0.95);
+                border: 1px solid #777;
+            }
+        """)
+        self.btn_search_toggle.clicked.connect(self.toggle_search_input)
+
+        self.search_input_container = QWidget(self.search_overlay)
+        sic_layout = QHBoxLayout(self.search_input_container)
+        sic_layout.setContentsMargins(4, 2, 4, 2)
+        sic_layout.setSpacing(4)
+        self.search_input_container.setStyleSheet("""
+            QWidget {
+                background: rgba(24, 24, 24, 0.92);
+                border: 1px solid #4a5568;
+                border-radius: 4px;
+            }
+        """)
+
+        self.search_input = QLineEdit(self.search_input_container)
+        self.search_input.setPlaceholderText("Find instance...")
+        self.search_input.setFixedWidth(160)
+        self.search_input.setFixedHeight(22)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background: transparent;
+                color: #f7fafc;
+                border: none;
+                font-family: monospace;
+                font-size: 11px;
+            }
+        """)
+
+        self.completer = QCompleter([])
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.setMaxVisibleItems(15)
+        self.search_input.setCompleter(self.completer)
+        self.search_input.returnPressed.connect(self.on_search_instance)
+        self.completer.activated.connect(self.on_search_instance)
+
+        self.btn_clear_search = QPushButton("✕", self.search_input_container)
+        self.btn_clear_search.setFixedSize(16, 16)
+        self.btn_clear_search.setToolTip("Close Search")
+        self.btn_clear_search.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #a0aec0;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                color: #fc8181;
+            }
+        """)
+        self.btn_clear_search.clicked.connect(self.clear_and_collapse_search)
+
+        sic_layout.addWidget(self.search_input)
+        sic_layout.addWidget(self.btn_clear_search)
+        self.search_input_container.setVisible(False)
+
+        so_layout.addWidget(self.btn_search_toggle)
+        so_layout.addWidget(self.search_input_container)
+        self.reposition_search_overlay()
+
         self.auto_refresh_timer = QTimer(self)
         self.auto_refresh_timer.timeout.connect(self.check_refresh)
-        self.auto_refresh_timer.start(1000)
+        # Note: Do not start timer unconditionally to prevent background polling.
+        # Timer starts in showEvent and stops in hideEvent.
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'auto_refresh_timer') and not self.auto_refresh_timer.isActive():
+            self.check_refresh()
+            self.auto_refresh_timer.start(2000)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, 'auto_refresh_timer') and self.auto_refresh_timer.isActive():
+            self.auto_refresh_timer.stop()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reposition_search_overlay()
+
+    def reposition_search_overlay(self):
+        if hasattr(self, 'search_overlay'):
+            self.search_overlay.adjustSize()
+            w = self.search_overlay.width()
+            self.search_overlay.move(max(10, self.width() - w - 14), 10)
+            self.search_overlay.raise_()
+
+    def toggle_search_input(self):
+        is_vis = self.search_input_container.isVisible()
+        self.search_input_container.setVisible(not is_vis)
+        self.reposition_search_overlay()
+        if not is_vis:
+            self.search_input.setFocus()
+            self.search_input.selectAll()
+
+    def clear_and_collapse_search(self):
+        self.clear_search()
+        self.search_input_container.setVisible(False)
+        self.reposition_search_overlay()
+
+    def on_search_instance(self, text=None):
+        if not text or not isinstance(text, str):
+            text = self.search_input.text().strip()
+        if not text or not self.def_data or not self.core:
+            return
+            
+        matched = None
+        if text in self.def_data.comps_map:
+            matched = text
+        else:
+            for k in self.def_data.comps_map.keys():
+                if text.lower() in k.lower():
+                    matched = k
+                    break
+                    
+        if matched:
+            rect = self.def_data.comps_map[matched]
+            cx = rect.center().x()
+            cy = rect.center().y()
+            w = rect.width()
+            h = rect.height()
+            
+            target_zoom = min(25.0, max(0.8, (self.width() * 0.35) / max(w, 8.0 * self.def_data.dbu)))
+            self.core.pan_to(cx, cy, target_zoom)
+            self.core.highlight_box(rect.x(), rect.y(), w, h, matched)
+        else:
+            if hasattr(self, 'search_input'):
+                self.search_input.setPlaceholderText("Not found...")
+
+    def clear_search(self):
+        self.search_input.clear()
+        if self.core:
+            self.core.clear_highlight()
 
     def check_refresh(self):
         if self.current_def_path and os.path.exists(self.current_def_path):
@@ -635,16 +888,39 @@ class FastSiliconPeeker(QWidget):
                 if getattr(self, '_last_size', -1) != size:
                     self._last_size = size
                     return
-                self.last_mtime = mtime
-                self.def_data = DEFParser(self.current_def_path, getattr(self, 'ide', None))
-                self.redraw()
+                self.load_def_file(self.current_def_path)
 
     def load_def_file(self, path):
         self.current_def_path = path
-        if os.path.exists(path):
-            self.last_mtime = os.path.getmtime(path)
-            self.def_data = DEFParser(path, getattr(self, 'ide', None))
+        if not os.path.exists(path):
+            return
+        mtime = os.path.getmtime(path)
+        size = os.path.getsize(path)
+        # Fast exit if file hasn't changed at all (instant world/tab switch)
+        if self.def_data is not None and getattr(self, 'last_mtime', 0) == mtime and getattr(self, '_last_size', 0) == size:
+            return
+
+        self.last_mtime = mtime
+        self._last_size = size
+
+        # Show non-blocking spinner in status bar if IDE available
+        if self.ide and hasattr(self.ide, 'statusBar'):
+            self.ide.statusBar().showMessage("Loading DEF layout in background...")
+
+        if hasattr(self, '_load_worker') and self._load_worker and self._load_worker.isRunning():
+            self._load_worker.terminate()
+            self._load_worker.wait()
+
+        self._load_worker = DefLoadWorker(path, getattr(self, 'ide', None), self)
+        self._load_worker.def_loaded.connect(self._on_def_loaded)
+        self._load_worker.start()
+
+    def _on_def_loaded(self, parsed_def):
+        if parsed_def:
+            self.def_data = parsed_def
             self.redraw()
+        if self.ide and hasattr(self.ide, 'statusBar'):
+            self.ide.statusBar().showMessage("DEF Layout Ready", 3000)
 
     def set_die_area(self, x1, y1, x2, y2):
         if self.core:
@@ -701,19 +977,20 @@ class FastSiliconPeeker(QWidget):
         tap_x, tap_y, tap_w, tap_h = [], [], [], []
         
         for name, rect in self.def_data.comps_map.items():
-            is_macro = (rect.width() / self.def_data.dbu > 50)
-            is_tap = (self.def_data.comp_types.get(name) == "TAP")
-            
-            if is_macro and not self.show_macros: continue
-            if not is_macro and not self.show_insts: continue
+            ctype = self.def_data.comp_types.get(name, "STD")
+            is_macro = (ctype == "MACRO") or (rect.width() / self.def_data.dbu > 20) or (rect.height() / self.def_data.dbu > 20)
+            is_tap = (ctype == "TAP")
             
             if is_macro:
-                mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
-                mac_names.append(name)
+                if self.show_macros:
+                    mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
+                    mac_names.append(name)
             elif is_tap:
-                tap_x.append(rect.x()); tap_y.append(rect.y()); tap_w.append(rect.width()); tap_h.append(rect.height())
+                if self.show_tapcells:
+                    tap_x.append(rect.x()); tap_y.append(rect.y()); tap_w.append(rect.width()); tap_h.append(rect.height())
             else:
-                std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
+                if self.show_insts:
+                    std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
                 
         if self.show_pins and hasattr(self.def_data, 'pins'):
             for rect, name in self.def_data.pins:
@@ -759,3 +1036,7 @@ class FastSiliconPeeker(QWidget):
         if self.first_load:
             self.core.fit_in_view()
             self.first_load = False
+
+        if hasattr(self, 'completer') and self.def_data and self.def_data.comps_map:
+            names = sorted(list(self.def_data.comps_map.keys()))
+            self.completer.setModel(QStringListModel(names))

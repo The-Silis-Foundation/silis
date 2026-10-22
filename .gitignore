@@ -1,22 +1,72 @@
+# ==============================================================================
+# Silis Foundation Git Ignore Rules
+# ==============================================================================
+
+# Local environments, tests & temporary projects
+.env/
+test/
+tests/
 testprojects/
 testing/
-PLANS.md  
-__pycache__/
-*.pyc
-*.pyo
-
-# C++ and Pybind11 build artifacts
+test_*.py
+projects/
+reports/
+results/
 build/
+dist/
+*.egg-info/
+
+# Development plans & scratch notes
+PLANS.md
+*.scratch.*
+scratch/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# C / C++ / Pybind11 / CMake build artifacts
 *.o
 *.a
+*.obj
+*.dylib
+*.dll
 CMakeCache.txt
 CMakeFiles/
 Makefile
 cmake_install.cmake
+*.cmake
+compile_commands.json
 
-# IDE and Project files
+# Simulation, Waveforms & EDA temp outputs
+*.vcd
+*.fst
+*.ghw
+*.out
+a.out
+*.log
+*.rpt
+*.v_converted.v
+run_floorplan.tcl
+temp.def
+temp.v
+
+# OS, Editors & IDE metadata
 .vscode/
 .idea/
 .DS_Store
+*.swp
+*.swo
+*~
 node_modules/
+
+# Local cache & credentials
+.silis_auth_cache.json
+.silis_pdk_cache.json
+.silis_recent.json
+.silis_ui_settings.json

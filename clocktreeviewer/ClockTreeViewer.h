@@ -13,12 +13,14 @@ class ClockTreeNode {
 public:
     std::string name;
     std::string type;
-    double arrival_time;
-    double skew;
+    double arrival_time = 0.0;
+    double skew = 0.0;
     
     // UI Layout properties
     double x = 0;
     double y = 0;
+    double width = 150;
+    double height = 46;
     int depth = 0;
     
     std::vector<ClockTreeNode*> children;
@@ -39,12 +41,16 @@ public:
     // Loads JSON data from OpenSTA and builds the visual tree
     void load_tree_data(const std::string& json_str);
     void clear();
+    void zoom_in();
+    void zoom_out();
+    void fit_view();
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     QGraphicsScene* scene_;

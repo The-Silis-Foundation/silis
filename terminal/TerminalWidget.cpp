@@ -12,7 +12,8 @@
 #include <pty.h>       // forkpty
 #include <unistd.h>    // write, close
 #include <sys/ioctl.h> // TIOCSWINSZ
-#include <signal.h>    // kill, SIGHUP
+#include <sys/wait.h>  // waitpid, WNOHANG
+#include <signal.h>    // kill, SIGHUP, SIGKILL
 #include <fcntl.h>
 
 #include "../schematicviewer/json.hpp"
@@ -65,7 +66,15 @@ TerminalWidget::TerminalWidget(QWidget* parent) : QWidget(parent) {
 }
 
 TerminalWidget::~TerminalWidget() {
-    if (child_pid_ > 0) { kill(child_pid_, SIGHUP); }
+    if (child_pid_ > 0) {
+        kill(child_pid_, SIGHUP);
+        int status;
+        if (waitpid(child_pid_, &status, WNOHANG) == 0) {
+            // Process hasn't exited yet, send SIGKILL and reap
+            kill(child_pid_, SIGKILL);
+            waitpid(child_pid_, &status, 0);
+        }
+    }
     if (pty_fd_ >= 0)   { ::close(pty_fd_); }
 }
 

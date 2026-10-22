@@ -24,6 +24,53 @@
         var SILIS_FONT_SIZE = window.__SILIS_FONT_SIZE__ || 13;
         var SILIS_LANG = window.__SILIS_LANG__ || 'plaintext';
 
+        var _docText = '';
+        var _editorReady = false;
+
+        // Immediately available fallbacks so getText/setText never throw or return blank prematurely
+        window.setText = function(b64) {
+            try {
+                _docText = decodeURIComponent(escape(atob(b64)));
+            } catch(e) {
+                try {
+                    _docText = atob(b64);
+                } catch(e2) {
+                    _docText = b64;
+                }
+            }
+            if (editor && _editorReady) {
+                editor.setValue(_docText);
+            }
+        };
+
+        window.getText = function() {
+            if (editor && _editorReady) {
+                return editor.getValue();
+            }
+            return _docText;
+        };
+
+        window.setLanguage = function(lang) {
+            SILIS_LANG = lang;
+            if (editor && monaco && _editorReady) {
+                monaco.editor.setModelLanguage(editor.getModel(), lang);
+            }
+        };
+
+        window.setTheme = function(theme) {
+            if (monaco && _editorReady) {
+                monaco.editor.setTheme(theme);
+            }
+        };
+
+        window.setFont = function(family, size) {
+            SILIS_FONT_FAMILY = family;
+            SILIS_FONT_SIZE = size;
+            if (editor && _editorReady) {
+                editor.updateOptions({ fontFamily: family, fontSize: size });
+            }
+        };
+
         function loadMonaco(vsPath) {
             var script = document.createElement('script');
             script.src = vsPath + '/loader.js';
@@ -94,7 +141,7 @@
                 }
 
                 editor = monaco.editor.create(document.getElementById('container'), {
-                    value: '',
+                    value: _docText || '',
                     language: SILIS_LANG,
                     theme: monacoThemeName,
                     automaticLayout: true,
@@ -109,21 +156,17 @@
                     cursorSmoothCaretAnimation: 'on',
                 });
 
-                window.setText = function(text) {
-                    editor.setValue(decodeURIComponent(escape(atob(text))));
-                };
-                window.getText = function() {
-                    return editor.getValue();
-                };
-                window.setLanguage = function(lang) {
-                    monaco.editor.setModelLanguage(editor.getModel(), lang);
-                };
-                window.setTheme = function(theme) {
-                    monaco.editor.setTheme(theme);
-                };
-                window.setFont = function(family, size) {
-                    editor.updateOptions({ fontFamily: family, fontSize: size });
-                };
+                _editorReady = true;
+
+                // Sync text if setText was called during initialization
+                if (_docText && editor.getValue() !== _docText) {
+                    editor.setValue(_docText);
+                }
+
+                // Continuously keep _docText in sync with user edits
+                editor.onDidChangeModelContent(function() {
+                    _docText = editor.getValue();
+                });
             });
         }
 

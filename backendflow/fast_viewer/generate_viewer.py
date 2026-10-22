@@ -145,5 +145,8 @@ private:
 };
 """
 
-with open("/home/jerome/silis/backendflow/fast_viewer/FastLayoutViewer.h", "w") as f:
+import os
+out_path = os.path.join(os.path.dirname(__file__), "FastLayoutViewer.h")
+with open(out_path, "w") as f:
     f.write(h_content)
+

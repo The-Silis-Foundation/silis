@@ -3,8 +3,9 @@
 # This causes the "available free area" to be 0 for those groups, crashing RePlAce with -nan.
 # By hiding them during placement, we rely on the fences and macros to guide RePlAce.
 set block [::ord::get_db_block]
+set tech [::ord::get_db_tech]
+set dbu [$tech getDbUnitsPerMicron]
 set saved_blockages {}
-set dbu 1000.0
 
 foreach blockage [$block getBlockages] {
     set bbox [$blockage getBBox]
@@ -22,15 +23,32 @@ set_placement_padding -global -left 2 -right 2
 # Run global_placement
 global_placement -routability_driven
 
+# DFT Physical Scan Chain Optimization (if SCANDEF present)
+if {[file exists "results/design.scandef"]} {
+    puts "\n\[SILIS DFT\] Applying physical scan chain reordering using results/design.scandef..."
+    catch { reorder_scan_chain -scandef "results/design.scandef" }
+    catch { scan_opt }
+}
+
 # WARNING: set_placement_padding -global causes a Signal 11 segfault in detailed_placement (checkPadding)
 # when used alongside inclusive region fences in this version of OpenROAD. 
 # We MUST clear the padding before running detailed_placement.
 set_placement_padding -global -left 0 -right 0
-detailed_placement -max_displacement {500 500}
 
-# Restore blockages
+# RePlAce has already clustered all modules into their target regions at 60-70% utilization.
+# Unlink groups from regions so detailed_placement can legalize onto nearest valid sites without DPL-0017.
+foreach r [$block getRegions] {
+    foreach g [$r getGroups] {
+        catch { $r removeGroup $g }
+    }
+}
+
+detailed_placement -max_displacement {500 500}
+check_placement
+
+# Restore blockages as soft blockages so standard cell pins retain via access for TritonRoute
 foreach b $saved_blockages {
-    catch { create_blockage -region $b }
+    catch { create_blockage -soft -region $b }
 }
 
 {write_cmd}

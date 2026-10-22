@@ -24,6 +24,8 @@ void FastLayoutViewer::clear() {
     region_names_.clear();
     blockages_.clear();
     core_rect_ = QRectF();
+    highlight_rect_ = QRectF();
+    highlight_name_.clear();
     update();
 }
 
@@ -141,10 +143,9 @@ void FastLayoutViewer::fit_in_view() {
 
 void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
-    // Use the color config from the simplified viewer
-    // Background #2D323A
-    painter.fillRect(rect(), QColor(45, 50, 58));
-    painter.setRenderHint(QPainter::Antialiasing, false); 
+    // Pure black EDA canvas background
+    painter.fillRect(rect(), QColor(0, 0, 0));
+    painter.setRenderHint(QPainter::Antialiasing, false);  
     
     painter.translate(rect().center());
     painter.scale(zoom_factor_, -zoom_factor_); // Y is flipped in CAD vs Screen
@@ -244,40 +245,61 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     painter.setBrush(QColor(76, 175, 80, 255));
     painter.drawRects(macros_.data(), macros_.size());
     
-    // Draw Pins #ff0000, outline black
-    QPen pin_pen(QColor(0, 0, 0, 255));
+    // Draw Pins with minimum visible screen threshold (at least 6px across)
+    QPen pin_pen(QColor(255, 255, 255, 220));
     pin_pen.setCosmetic(true);
     painter.setPen(pin_pen);
-    painter.setBrush(QColor(255, 0, 0, 255));
-    painter.drawRects(pins_.data(), pins_.size());
+    painter.setBrush(QColor(255, 50, 50, 255));
 
-    // We must draw text uninverted.
+    double min_screen_size = 6.0;
+    double min_world_size = min_screen_size / zoom_factor_;
+
+    std::vector<QRectF> visible_pins;
+    visible_pins.reserve(pins_.size());
+    for (const auto& pr : pins_) {
+        double pw = pr.width();
+        double ph = pr.height();
+        if (pw < min_world_size || ph < min_world_size) {
+            double dw = std::max(pw, min_world_size);
+            double dh = std::max(ph, min_world_size);
+            QPointF center = pr.center();
+            visible_pins.emplace_back(center.x() - dw/2.0, center.y() - dh/2.0, dw, dh);
+        } else {
+            visible_pins.push_back(pr);
+        }
+    }
+    painter.drawRects(visible_pins.data(), visible_pins.size());
+
+    // Draw Text with LOD checks (only show names when sufficiently zoomed in)
     painter.save();
-    // Un-invert the Y-axis for text rendering
     painter.scale(1.0 / zoom_factor_, -1.0 / zoom_factor_);
     painter.setPen(QPen(Qt::black));
     
+    // Macro names: only when macro height on screen is >= 24 pixels
     for (size_t i = 0; i < macros_.size(); i++) {
-        if (!macro_names_[i].empty()) {
+        if (!macro_names_[i].empty() && (macros_[i].height() * zoom_factor_ >= 24.0)) {
             QPointF p = macros_[i].center();
-            // Transform point to screen space
             double sx = p.x() * zoom_factor_;
             double sy = p.y() * -zoom_factor_;
             painter.drawText(sx - 20, sy, QString::fromStdString(macro_names_[i]));
         }
     }
     
-    for (size_t i = 0; i < pins_.size(); i++) {
-        if (!pin_names_[i].empty()) {
-            QPointF p = pins_[i].center();
-            double sx = p.x() * zoom_factor_;
-            double sy = p.y() * -zoom_factor_;
-            painter.drawText(sx - 10, sy, QString::fromStdString(pin_names_[i]));
+    // Pin names: only when deeply zoomed in (zoom_factor_ > 1.2)
+    if (zoom_factor_ > 1.2) {
+        for (size_t i = 0; i < pins_.size(); i++) {
+            if (!pin_names_[i].empty()) {
+                QPointF p = pins_[i].center();
+                double sx = p.x() * zoom_factor_;
+                double sy = p.y() * -zoom_factor_;
+                painter.drawText(sx - 10, sy, QString::fromStdString(pin_names_[i]));
+            }
         }
     }
 
+    // Region names: only when region height on screen is >= 24 pixels
     for (size_t i = 0; i < regions_.size(); i++) {
-        if (!region_names_[i].empty()) {
+        if (!region_names_[i].empty() && (regions_[i].height() * zoom_factor_ >= 24.0)) {
             QPointF p = regions_[i].center();
             double sx = p.x() * zoom_factor_;
             double sy = p.y() * -zoom_factor_;
@@ -286,6 +308,30 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         }
     }
     painter.restore();
+
+    // Draw Highlight Bounding Box (for search / focus)
+    if (!highlight_rect_.isNull() && highlight_rect_.width() > 0) {
+        QPen hl_pen(QColor(255, 215, 0, 240), 3.0f / zoom_factor_);
+        hl_pen.setCosmetic(true);
+        painter.setPen(hl_pen);
+        painter.setBrush(QColor(255, 235, 59, 90));
+        painter.drawRect(highlight_rect_);
+
+        if (!highlight_name_.empty()) {
+            painter.save();
+            painter.scale(1.0 / zoom_factor_, -1.0 / zoom_factor_);
+            QPointF p = highlight_rect_.center();
+            double sx = p.x() * zoom_factor_;
+            double sy = p.y() * -zoom_factor_;
+            painter.setPen(QPen(QColor(255, 235, 59)));
+            QFont f = painter.font();
+            f.setBold(true);
+            f.setPointSize(11);
+            painter.setFont(f);
+            painter.drawText(sx - 30, sy - 15, QString::fromStdString(highlight_name_));
+            painter.restore();
+        }
+    }
     
     // Draw Heatmap
     if (heatmap_mode_ > 0 && heatmap_data_.size() == 400) {
@@ -305,6 +351,26 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
     }
 }
 
+void FastLayoutViewer::pan_to(float x, float y, float target_zoom) {
+    if (target_zoom > 0.0f) {
+        zoom_factor_ = target_zoom;
+    }
+    pan_offset_ = core_rect_.center() - QPointF(x, y);
+    update();
+}
+
+void FastLayoutViewer::highlight_box(float x, float y, float w, float h, const std::string& name) {
+    highlight_rect_ = QRectF(x, y, w, h);
+    highlight_name_ = name;
+    update();
+}
+
+void FastLayoutViewer::clear_highlight() {
+    highlight_rect_ = QRectF();
+    highlight_name_.clear();
+    update();
+}
+
 void FastLayoutViewer::wheelEvent(QWheelEvent* event) {
     double angle = event->angleDelta().y();
     if (angle > 0) zoom_factor_ *= 1.2;
@@ -313,7 +379,7 @@ void FastLayoutViewer::wheelEvent(QWheelEvent* event) {
 }
 
 void FastLayoutViewer::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
         is_panning_ = true;
         last_mouse_pos_ = event->position();
         setCursor(Qt::ClosedHandCursor);
@@ -323,14 +389,15 @@ void FastLayoutViewer::mousePressEvent(QMouseEvent* event) {
 void FastLayoutViewer::mouseMoveEvent(QMouseEvent* event) {
     if (is_panning_) {
         QPointF delta = event->position() - last_mouse_pos_;
-        pan_offset_ += delta / zoom_factor_;
+        pan_offset_.rx() += delta.x() / zoom_factor_;
+        pan_offset_.ry() -= delta.y() / zoom_factor_;
         last_mouse_pos_ = event->position();
         update();
     }
 }
 
 void FastLayoutViewer::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton) {
         is_panning_ = false;
         setCursor(Qt::ArrowCursor);
     }

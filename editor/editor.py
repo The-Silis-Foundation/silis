@@ -1,18 +1,76 @@
 import os
 import sys
+
+try:
+    import qt_setup
+except ImportError:
+    pass
+
 # Ensure the editor directory is on sys.path so editor_engine.so is importable
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ed_dir = os.path.dirname(os.path.abspath(__file__))
+if _ed_dir not in sys.path:
+    sys.path.append(_ed_dir)
 
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 from PyQt6.QtCore import *
-from PyQt6.Qsci import QsciScintilla, QsciLexerVerilog, QsciLexerTCL
+try:
+    from PyQt6.Qsci import (
+        QsciScintilla, QsciLexerVerilog, QsciLexerTCL,
+        QsciLexerVHDL, QsciLexerPython, QsciLexerCPP
+    )
+    QSCI_AVAILABLE = True
+except ImportError:
+    QSCI_AVAILABLE = False
+    class QsciScintilla(QPlainTextEdit):
+        class EolMode:
+            EolUnix = 1
+        class MarginType:
+            NumberMargin = 0
+            SymbolMargin = 1
+        class FoldStyle:
+            PlainFoldStyle = 0
+        class AutoCompletionSource:
+            AcsAll = 0
+        def setUtf8(self, *a): pass
+        def setEolMode(self, *a): pass
+        def setPaper(self, *a): pass
+        def setColor(self, *a): pass
+        def setCaretForegroundColor(self, *a): pass
+        def setSelectionBackgroundColor(self, *a): pass
+        def setMarginsBackgroundColor(self, *a): pass
+        def setMarginsForegroundColor(self, *a): pass
+        def setMarginsFont(self, *a): pass
+        def setMarginWidth(self, *a): pass
+        def setMarginType(self, *a): pass
+        def setCaretWidth(self, *a): pass
+        def setCaretLineVisible(self, *a): pass
+        def setCaretLineBackgroundColor(self, *a): pass
+        def setFolding(self, *a): pass
+        def setFoldMarginColors(self, *a): pass
+        def setAutoCompletionSource(self, *a): pass
+        def setAutoCompletionThreshold(self, *a): pass
+        def setAutoIndent(self, *a): pass
+        def setIndentationsUseTabs(self, *a): pass
+        def setTabWidth(self, *a): pass
+        def zoomIn(self, *a): pass
+        def zoomOut(self, *a): pass
+        def setLexer(self, *a): pass
+        def setText(self, text): self.setPlainText(text)
+        def text(self): return self.toPlainText()
+    class QsciLexerVerilog: pass
+    class QsciLexerTCL: pass
+    class QsciLexerVHDL: pass
+    class QsciLexerPython: pass
+    class QsciLexerCPP: pass
+
 from config import THEMES, USER_SETTINGS
 
 
 class ScintillaEditor(QsciScintilla):
     def __init__(self, is_minimap=False, font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
         super().__init__()
+
         
         # Base setup
         self.setUtf8(True)
@@ -75,11 +133,19 @@ class ScintillaEditor(QsciScintilla):
             QShortcut(QKeySequence("Ctrl+-"), self).activated.connect(self.zoomOut)
 
     def set_lexer(self, ext):
+        if not QSCI_AVAILABLE:
+            return
         lexer = None
         if ext in ['.v', '.sv', '.vh']:
             lexer = QsciLexerVerilog(self)
         elif ext in ['.tcl', '.sdc']:
             lexer = QsciLexerTCL(self)
+        elif ext in ['.vhd', '.vhdl']:
+            lexer = QsciLexerVHDL(self)
+        elif ext in ['.py']:
+            lexer = QsciLexerPython(self)
+        elif ext in ['.c', '.cpp', '.cc', '.h', '.hpp']:
+            lexer = QsciLexerCPP(self)
             
         if lexer:
             font = QFont(self.font_family, self.font_size_pt)
@@ -124,33 +190,85 @@ class ScintillaEditor(QsciScintilla):
                 lexer.setColor(QColor(self.theme["num"]), QsciLexerTCL.Number)
                 lexer.setColor(QColor(self.theme["kw2"]), QsciLexerTCL.Modifier)
                 lexer.setColor(QColor(self.theme["ident"]), QsciLexerTCL.Identifier)
-                
+
+            # Customize VHDL colors manually
+            if isinstance(lexer, QsciLexerVHDL):
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerVHDL.Keyword)
+                lexer.setFont(font_bold, QsciLexerVHDL.Keyword)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerVHDL.StandardOperator)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerVHDL.String)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVHDL.Comment)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerVHDL.CommentLine)
+                lexer.setColor(QColor(self.theme["num"]), QsciLexerVHDL.Number)
+                lexer.setColor(QColor(self.theme["ident"]), QsciLexerVHDL.Identifier)
+
+            # Customize Python colors manually
+            if isinstance(lexer, QsciLexerPython):
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerPython.Keyword)
+                lexer.setFont(font_bold, QsciLexerPython.Keyword)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerPython.HighlightedIdentifier)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerPython.DoubleQuotedString)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerPython.SingleQuotedString)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerPython.Comment)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerPython.CommentBlock)
+                lexer.setColor(QColor(self.theme["num"]), QsciLexerPython.Number)
+                lexer.setColor(QColor(self.theme["ident"]), QsciLexerPython.Identifier)
+
+            # Customize C/C++ colors manually
+            if isinstance(lexer, QsciLexerCPP):
+                lexer.setColor(QColor(self.theme["kw"]), QsciLexerCPP.Keyword)
+                lexer.setFont(font_bold, QsciLexerCPP.Keyword)
+                lexer.setColor(QColor(self.theme["kw2"]), QsciLexerCPP.KeywordSet2)
+                lexer.setColor(QColor(self.theme["str"]), QsciLexerCPP.DoubleQuotedString)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerCPP.Comment)
+                lexer.setColor(QColor(self.theme["comment"]), QsciLexerCPP.CommentLine)
+                lexer.setColor(QColor(self.theme["num"]), QsciLexerCPP.Number)
+                lexer.setColor(QColor(self.theme["ident"]), QsciLexerCPP.Identifier)
+
             self.setLexer(lexer)
 
 
 def _find_monaco_vs_path():
-    """Detect the monaco-editor min/vs directory from system npm or common fallback paths."""
-    import subprocess
-    candidates = []
-    
-    # Try npm root -g
-    try:
-        npm_root = subprocess.check_output(['npm', 'root', '-g'], stderr=subprocess.DEVNULL).decode().strip()
-        candidates.append(os.path.join(npm_root, 'monaco-editor', 'min', 'vs'))
-    except Exception:
-        pass
-    
-    # Common fallback locations
-    candidates += [
-        '/usr/local/lib/node_modules/monaco-editor/min/vs',
-        '/usr/lib/node_modules/monaco-editor/min/vs',
-        os.path.expanduser('~/.npm/monaco-editor/*/package/min/vs'),
+    """Detect the monaco-editor min/vs directory."""
+    # 1. First priority: Bundled in editor/vs or third-party/monaco (AppImage ready & 100% offline)
+    editor_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(editor_dir, ".."))
+    fast_candidates = [
+        os.path.join(editor_dir, "vs"),
+        os.path.join(repo_root, "third-party", "monaco", "min", "vs"),
+        os.path.join(repo_root, "third-party", "monaco", "node_modules", "monaco-editor", "min", "vs"),
     ]
-    
-    for path in candidates:
+
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        fast_candidates.extend([
+            os.path.join(appdir, "editor", "vs"),
+            os.path.join(appdir, "third-party", "monaco", "min", "vs"),
+        ])
+
+    for path in fast_candidates:
         if os.path.isdir(path):
             return path
-    
+
+    # 2. Common fallback filesystem locations before spawning slow subprocesses
+    common_paths = [
+        '/usr/local/lib/node_modules/monaco-editor/min/vs',
+        '/usr/lib/node_modules/monaco-editor/min/vs',
+    ]
+    for path in common_paths:
+        if os.path.isdir(path):
+            return path
+
+    # 3. Last-resort fallback: query npm (only if not found locally)
+    try:
+        import subprocess
+        npm_root = subprocess.check_output(['npm', 'root', '-g'], stderr=subprocess.DEVNULL, timeout=0.5).decode().strip()
+        cand = os.path.join(npm_root, 'monaco-editor', 'min', 'vs')
+        if os.path.isdir(cand):
+            return cand
+    except Exception:
+        pass
+
     return None  # Will fall back to CDN
 
 
@@ -250,20 +368,25 @@ class MonacoEditorWrapper(QWidget):
             self.core.run_js(script)
 
 class VSCodeEditor(QWidget):
-    def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha"):
+    def __init__(self, parent=None, ext=".v", font_family="Consolas", font_size=11, theme_name="Catppuccin Mocha", editor_backend=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        try:
-            import editor_engine
-            self.editor = MonacoEditorWrapper(self, ext=ext, font_family=font_family, font_size=font_size, theme_name=theme_name)
-            self.editor.set_lexer(ext)
-        except Exception as e:
-            import traceback
-            print(f"Warning: Monaco editor failed ({e}). Falling back to ScintillaEditor.")
-            traceback.print_exc()
+        backend = (editor_backend or USER_SETTINGS.get("editor_backend", "qscintilla")).lower()
+        if backend == "monaco":
+            try:
+                import editor_engine
+                self.editor = MonacoEditorWrapper(self, ext=ext, font_family=font_family, font_size=font_size, theme_name=theme_name)
+                self.editor.set_lexer(ext)
+            except Exception as e:
+                import traceback
+                print(f"Warning: Monaco editor failed ({e}). Falling back to ScintillaEditor.")
+                traceback.print_exc()
+                self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
+                self.editor.set_lexer(ext)
+        else:
             self.editor = ScintillaEditor(is_minimap=False, font_family=font_family, font_size=font_size, theme_name=theme_name)
             self.editor.set_lexer(ext)
             
@@ -292,6 +415,7 @@ class VSCodeEditorTabs(QTabWidget):
         self.font_family = USER_SETTINGS.get("font_family", "Consolas")
         self.font_size = USER_SETTINGS.get("font_size", 11)
         self.theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
+        self.editor_backend = USER_SETTINGS.get("editor_backend", "qscintilla")
         self.setTabsClosable(True)
         self.setDocumentMode(True)
         self.update_stylesheet()
@@ -303,7 +427,10 @@ class VSCodeEditorTabs(QTabWidget):
             self.setCurrentWidget(self.files[path])
             return
         ext = os.path.splitext(path)[1]
-        editor = VSCodeEditor(ext=ext, font_family=self.font_family, font_size=self.font_size, theme_name=self.theme_name)
+        editor = VSCodeEditor(
+            ext=ext, font_family=self.font_family, font_size=self.font_size,
+            theme_name=self.theme_name, editor_backend=self.editor_backend
+        )
         with open(path, 'r') as f:
             editor.setPlainText(f.read())
         self.files[path] = editor
@@ -311,10 +438,14 @@ class VSCodeEditorTabs(QTabWidget):
         self.setTabToolTip(idx, path)
         self.setCurrentIndex(idx)
 
-    def update_appearance(self, font_family, font_size, theme_name):
+    def update_appearance(self, font_family, font_size, theme_name, editor_backend=None):
         self.font_family = font_family
         self.font_size = font_size
         self.theme_name = theme_name
+        if editor_backend:
+            self.editor_backend = editor_backend
+        else:
+            self.editor_backend = USER_SETTINGS.get("editor_backend", "qscintilla")
         self.update_stylesheet()
         open_paths = list(self.files.keys())
         current_idx = self.currentIndex()

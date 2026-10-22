@@ -55,14 +55,39 @@ class ReportEngine:
         if os.path.exists(area_rpt):
             with open(area_rpt, 'r') as f:
                 content = f.read()
-                m_area = re.search(r'"area":\s+([\d\.]+)', content)
-                if m_area: metrics["area"] = m_area.group(1)
-                m_cells = re.search(r'"num_cells":\s+(\d+)', content)
-                if m_cells: metrics["cells"] = m_cells.group(1)
-                m_wires = re.search(r'"num_wires":\s+(\d+)', content)
-                if m_wires: metrics["wires"] = m_wires.group(1)
-                m_bits = re.search(r'"num_pub_wire_bits":\s+(\d+)', content)
-                if m_bits: metrics["bits"] = m_bits.group(1)
+                try:
+                    import json
+                    data = json.loads(content)
+                    if "modules" in data:
+                        tot_cells = 0
+                        tot_area = 0.0
+                        tot_wires = 0
+                        tot_bits = 0
+                        for mod_name, mod_info in data["modules"].items():
+                            c_types = mod_info.get("num_cells_by_type", {})
+                            for ct, cnt in c_types.items():
+                                if not any(sub in ct for sub in ["neorv32_", "subsystem_", "u_"]):
+                                    tot_cells += cnt
+                            tot_area += float(mod_info.get("area", 0.0))
+                            tot_wires += int(mod_info.get("num_wires", 0))
+                            tot_bits += int(mod_info.get("num_pub_wire_bits", 0))
+                        if tot_cells > 0:
+                            metrics["cells"] = str(tot_cells)
+                        if tot_area > 0:
+                            metrics["area"] = f"{tot_area:.2f}"
+                        if tot_wires > 0:
+                            metrics["wires"] = str(tot_wires)
+                        if tot_bits > 0:
+                            metrics["bits"] = str(tot_bits)
+                except Exception:
+                    m_area = re.search(r'"area":\s+([\d\.]+)', content)
+                    if m_area: metrics["area"] = m_area.group(1)
+                    m_cells = re.search(r'"num_cells":\s+(\d+)', content)
+                    if m_cells: metrics["cells"] = m_cells.group(1)
+                    m_wires = re.search(r'"num_wires":\s+(\d+)', content)
+                    if m_wires: metrics["wires"] = m_wires.group(1)
+                    m_bits = re.search(r'"num_pub_wire_bits":\s+(\d+)', content)
+                    if m_bits: metrics["bits"] = m_bits.group(1)
 
         # 3. PARSE TIMING REPORT
         timing_rpt = os.path.join(report_dir, "timing.rpt")
@@ -217,8 +242,16 @@ class SynthesisTab(QWidget):
         cl = QHBoxLayout(ctrl); cl.setContentsMargins(5,5,5,5)
         self.lbl_pdk = QLabel("Active PDK: Sky130A"); self.lbl_pdk.setStyleSheet("font-weight:bold;")
 
-        btn_style = "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; }"
-        run_style = "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; font-weight: bold; }"
+        btn_style = (
+            "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
+        run_style = (
+            "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; font-weight: bold; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
 
         btn_sel = QPushButton("⚙ PDK"); btn_sel.setStyleSheet(btn_style)
         btn_sel.clicked.connect(self.ide.open_pdk_selector)
@@ -227,6 +260,29 @@ class SynthesisTab(QWidget):
 
         cl.addWidget(self.lbl_pdk); cl.addStretch(); cl.addWidget(btn_sel); cl.addWidget(self.btn_run)
         l_lay.addWidget(ctrl)
+
+        # --- DFT Configuration Panel ---
+        self.dft_panel = QFrame()
+        self.dft_panel.setStyleSheet("border-radius: 4px; padding: 3px 6px; border: 1px solid #444;")
+        dft_l = QHBoxLayout(self.dft_panel); dft_l.setContentsMargins(6, 3, 6, 3); dft_l.setSpacing(8)
+        
+        self.chk_dft = QCheckBox("Enable Scan Insertion (DFT)")
+        self.chk_dft.setStyleSheet("font-weight: bold; color: #2da44e;")
+        
+        self.in_scan_in = QLineEdit("scan_in"); self.in_scan_in.setPlaceholderText("Scan In"); self.in_scan_in.setFixedWidth(75)
+        self.in_scan_out = QLineEdit("scan_out"); self.in_scan_out.setPlaceholderText("Scan Out"); self.in_scan_out.setFixedWidth(75)
+        self.in_scan_en = QLineEdit("scan_en"); self.in_scan_en.setPlaceholderText("Scan En"); self.in_scan_en.setFixedWidth(75)
+        self.in_scan_clk = QLineEdit("clk"); self.in_scan_clk.setPlaceholderText("Scan Clk"); self.in_scan_clk.setFixedWidth(60)
+        self.chk_clamp = QCheckBox("Clamp Macros"); self.chk_clamp.setChecked(True)
+        
+        dft_l.addWidget(self.chk_dft)
+        dft_l.addWidget(QLabel("In:")); dft_l.addWidget(self.in_scan_in)
+        dft_l.addWidget(QLabel("Out:")); dft_l.addWidget(self.in_scan_out)
+        dft_l.addWidget(QLabel("En:")); dft_l.addWidget(self.in_scan_en)
+        dft_l.addWidget(QLabel("Clk:")); dft_l.addWidget(self.in_scan_clk)
+        dft_l.addWidget(self.chk_clamp)
+        dft_l.addStretch()
+        l_lay.addWidget(self.dft_panel)
 
         self.log_tabs = QTabWidget()
         self.log_tabs.setStyleSheet("")
@@ -260,14 +316,19 @@ class SynthesisTab(QWidget):
         grid.addWidget(QLabel("Gate Count:"), 2, 0); lbl3 = QLabel("--"); lbl3.setStyleSheet(v_style); self.val_gates = lbl3; grid.addWidget(lbl3, 2, 1)
         r_lay.addWidget(grid_w)
 
-        r_lay.addWidget(QLabel("<b style='color:#24292f'>Report Preview:</b>"))
+        r_lay.addWidget(QLabel("<b style='color:#58a6ff'>Report Preview:</b>"))
         self.preview = QTextEdit(); self.preview.setReadOnly(True)
         self.preview.setMaximumHeight(250)
         self.preview.setStyleSheet("font-family:Consolas; font-size:8pt; border:1px solid gray;")
         self.preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         r_lay.addWidget(self.preview)
 
-        btn_save = QPushButton("Save .rpt File"); btn_save.setStyleSheet("border:1px solid gray; padding:5px;")
+        btn_save = QPushButton("Save .rpt File")
+        btn_save.setStyleSheet(
+            "QPushButton { border:1px solid gray; padding:5px; border-radius: 3px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
         btn_save.clicked.connect(self.save_report)
         r_lay.addWidget(btn_save)
         r_lay.addStretch()
@@ -276,7 +337,13 @@ class SynthesisTab(QWidget):
 
     def update_dashboard(self):
         _, base = self.ide.get_context()
+        if not base and hasattr(self.ide, 'project_config') and self.ide.project_config:
+            base = self.ide.project_config.get("top_module")
         if not base: return
+
+        if not self.ide.active_pdk and hasattr(self.ide, 'resolve_and_set_pdk'):
+            self.ide.resolve_and_set_pdk()
+
         root = self.ide.get_proj_root(base)
         report_dir = os.path.join(root, "reports")
 
@@ -293,26 +360,18 @@ class SynthesisTab(QWidget):
         self.val_area.setText(f"{m['area']} um^2")
         self.val_gates.setText(m['cells'])
 
+        # Load existing synthesis.log if Build Output is empty
+        synth_log_file = os.path.join(report_dir, "synthesis.log")
+        if os.path.isfile(synth_log_file) and not self.log_main.toPlainText().strip():
+            try:
+                with open(synth_log_file, 'r') as f:
+                    self.log_main.setPlainText(f.read())
+            except Exception:
+                pass
+
         self.list_err.clear()
         for e in m['errors']: self.list_err.addItem(e)
         if m['errors']: self.log_tabs.setCurrentIndex(1)
-        
-        # --- LOAD REAL CLOCK TREE ---
-        import sys
-        sys.path.append("/home/jerome/silis/synthengine/build")
-        try:
-            import synth_engine
-            sta_anal = synth_engine.TimingAnalyzer()
-            lib_path = self.ide.active_pdk['lib']
-            v_net = os.path.join(root, "results", "temp.v")
-            if not os.path.exists(v_net):
-                # Fallback to the actual netlist directory used by the flow
-                v_net = os.path.join(root, "netlist", f"{base}_netlist.v")
-                
-            if sta_anal.init_and_analyze(lib_path, v_net, base):
-                pass
-        except Exception as e:
-            print(f"Failed to load real clock tree: {e}")
 
         rpt = ReportEngine.generate_report(m, base or "design")
         self.preview.setPlainText(rpt)

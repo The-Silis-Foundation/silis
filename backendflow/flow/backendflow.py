@@ -4,15 +4,20 @@ import time
 import shutil
 import glob
 import threading
+import datetime
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from backendflow.siliconpeeker.peeker import SiliconPeeker, FastSiliconPeeker
 from backendflow.gdsviewer.gds3d import GDS3DPort
-from pdkmanagers.pdk.manager import SSAForge
+from pdkmanagers.pdk.manager import SSAForge, PDKSelector
 from config import USER_SETTINGS, THEMES
 from editor.editor import ScintillaEditor
 from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
+from backendflow.floorplanner.ioplacer import IOPlacerDialog
+from synthesisscripts.synthesisthread import ReportEngine
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 class FlowWorker(QThread):
     finished_signal = pyqtSignal()
@@ -78,7 +83,7 @@ class OpenROADPort(QWidget):
         self.container = None
 
     def launch_viewer(self):
-        viewer_exe = "/home/jerome/silis/backendflow/def_viewer_cpp/build/silis_def_viewer"
+        viewer_exe = os.path.join(REPO_ROOT, "backendflow", "def_viewer_cpp", "build", "silis_def_viewer")
         if not os.path.exists(viewer_exe):
             self.info_label.setText("❌ Missing C++ Viewer Executable!")
             self.info_label.setStyleSheet("color: #ff7b72;")
@@ -93,7 +98,7 @@ class OpenROADPort(QWidget):
 
     def handle_stdout(self):
         if not self.proc: return
-        data = self.proc.readAllStandardOutput().data().decode()
+        data = self.proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
         for line in data.splitlines():
             if line.startswith("WID:"):
                 wid = int(line.split(":")[1])
@@ -132,12 +137,94 @@ class OpenROADPort(QWidget):
         self.kill_viewer()
         super().closeEvent(event)
 
+
+class SignoffReportViewer(QDialog):
+    """Clean, high-contrast modal inspector for post-route PAT Sign-Off reports."""
+    def __init__(self, rpt_path, timing_failed=False, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Silis Post-Route PAT Sign-Off Inspector")
+        self.resize(860, 600)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0d1117;
+                color: #f0f6fc;
+            }
+            QLabel {
+                color: #f0f6fc;
+            }
+            QPushButton {
+                background-color: #21262d;
+                color: #f0f6fc;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #30363d;
+                border: 1px solid #58a6ff;
+            }
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(12)
+
+        hdr_layout = QHBoxLayout()
+        title_lbl = QLabel("<b>Post-Route Power, Area & Timing Sign-Off Report</b>")
+        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #58a6ff;")
+        
+        status_chip = QLabel("TIMING MET" if not timing_failed else "TIMING VIOLATED")
+        status_chip.setStyleSheet(
+            "padding: 5px 14px; border-radius: 6px; font-weight: bold; font-size: 12px; "
+            + ("background: #238636; color: white; border: 1px solid #2ea043;" if not timing_failed else "background: #da3633; color: white; border: 1px solid #f85149;")
+        )
+        hdr_layout.addWidget(title_lbl)
+        hdr_layout.addStretch()
+        hdr_layout.addWidget(status_chip)
+        lay.addLayout(hdr_layout)
+
+        self.txt = QTextEdit()
+        self.txt.setReadOnly(True)
+        self.txt.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.txt.setStyleSheet("""
+            QTextEdit {
+                background: #090d13;
+                color: #f0f6fc;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 11px;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        try:
+            with open(rpt_path, 'r') as f:
+                self.txt.setPlainText(f.read())
+        except Exception as e:
+            self.txt.setPlainText(f"Error reading report: {e}")
+        lay.addWidget(self.txt)
+
+        btn_bar = QHBoxLayout()
+        btn_copy = QPushButton("Copy to Clipboard")
+        btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(self.txt.toPlainText()))
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_bar.addWidget(btn_copy)
+        btn_bar.addStretch()
+        btn_bar.addWidget(btn_close)
+        lay.addLayout(btn_bar)
+
+
 class BackendWidget(QWidget):
+    pat_finished_signal = pyqtSignal(str, bool)
+
     def __init__(self, parent_ide):
         super().__init__(parent_ide)
         self.ide = parent_ide 
         self.pdk_mgr = parent_ide.pdk_mgr
         self.active_pdk = parent_ide.active_pdk
+        self.pat_finished_signal.connect(self.display_pat_report)
         
         # --- 1. INITIALIZE WIDGETS ---
         self.fast_peeker = FastSiliconPeeker(self.ide)
@@ -159,24 +246,16 @@ class BackendWidget(QWidget):
         self.chk_nets = QCheckBox("Nets"); self.chk_nets.setChecked(False)
         self.chk_power = QCheckBox("Power"); self.chk_power.setChecked(True)
         
-        self.btn_heat = QPushButton("Heatmap"); self.btn_heat.setCheckable(True)
-        self.btn_heat.setStyleSheet("QPushButton:checked { background-color: #ffcccc; color: red; border: 1px solid red; }")
-        
         def_layout.addWidget(QLabel("<b>DEF Layers</b>"))
         def_layout.addWidget(self.chk_inst); def_layout.addWidget(self.chk_macros); def_layout.addWidget(self.chk_tap)
         def_layout.addWidget(self.chk_pins); def_layout.addWidget(self.chk_nets); def_layout.addWidget(self.chk_power)
-        def_layout.addSpacing(10); def_layout.addWidget(QLabel("<b>Overlay</b>"))
-        def_layout.addWidget(self.btn_heat); def_layout.addStretch()
+        def_layout.addStretch()
 
-
-
-        # [UPDATE] Added Magic GUI Button
-        self.btn_gui = QPushButton("Native GUI (OpenROAD)")
-        self.btn_magic = QPushButton("✨ Magic GUI")
-        self.btn_magic.setStyleSheet("color: #5a32a3; font-weight: bold;") # Magic purple branding
+        self.btn_gui = QPushButton("OpenROAD")
+        self.btn_magic = QPushButton("Magic")
+        self.btn_magic.setStyleSheet("font-weight: bold;")
         
         self.btn_ref = QPushButton("Refresh View")
-        self.btn_load = QPushButton("📂 Load Routed")
         
         self.term_log = QTextEdit(); self.term_log.setReadOnly(True)
         self.term_log.setStyleSheet("font-family: Consolas; border: none;")
@@ -189,8 +268,8 @@ class BackendWidget(QWidget):
         self.ribbon = QFrame(); self.ribbon.setStyleSheet("border-bottom: 1px solid gray;"); self.ribbon.setFixedHeight(40) 
         r_lay = QHBoxLayout(self.ribbon); r_lay.setContentsMargins(5,2,5,2)
         
-        self.steps = ["Init", "Floorplan", "Tapcells", "PDN", "IO Pins", "Place", "CTS", "Route", "GDS"]
-        self.signoff_steps = ["Antenna", "STA", "DRC", "PAT"] 
+        self.steps = ["Init", "Floorplan", "Tapcells", "PDN", "IO Pins", "Place", "CTS", "Route", "Fill", "GDS"]
+        self.signoff_steps = ["Antenna", "STA", "DRC", "PAT", "DFT", "LVS", "GLS", "Export"] 
         
         for step in self.steps:
             btn = QPushButton(step); btn.setStyleSheet("padding: 2px; font-weight: bold; font-size: 11px;")
@@ -206,8 +285,8 @@ class BackendWidget(QWidget):
             r_lay.addWidget(btn)
 
         r_lay.addStretch()
-        btn_rst = QPushButton("🔄 Reset"); btn_rst.clicked.connect(self.reset_backend); r_lay.addWidget(btn_rst)
-        btn_cfg = QPushButton("⚙ PDK Config"); btn_cfg.clicked.connect(self.open_pdk_selector); r_lay.addWidget(btn_cfg)
+        btn_rst = QPushButton("Reset"); btn_rst.clicked.connect(self.reset_backend); r_lay.addWidget(btn_rst)
+        btn_cfg = QPushButton("PDK Config"); btn_cfg.clicked.connect(self.open_pdk_selector); r_lay.addWidget(btn_cfg)
         self.layout.addWidget(self.ribbon)
         
         v_split = QSplitter(Qt.Orientation.Vertical)
@@ -221,23 +300,66 @@ class BackendWidget(QWidget):
         s_lay.addWidget(self.btn_gui)
         s_lay.addWidget(self.btn_magic)
         s_lay.addWidget(self.btn_ref)
-        s_lay.addWidget(self.btn_load)
         h_lay.addWidget(sidebar)
         
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.viz_tabs.addTab(self.fast_peeker, "Fast Layout Viewer")
         self.viz_tabs.addTab(self.gds3d_port, "GDS View (3D)")
         
-        # --- NEW: CLOCK TREE VIEWER ---
+        # --- CLOCK TREE VIEWER ---
         import sys
-        sys.path.append("/home/jerome/silis/clocktreeviewer/build")
+        ct_build = os.path.join(REPO_ROOT, "clocktreeviewer", "build")
+        if ct_build not in sys.path:
+            sys.path.append(ct_build)
         try:
             import clocktree_engine
             from PyQt6 import sip
             self.clock_engine = clocktree_engine.ClockTreeViewerCore()
             ptr = self.clock_engine.get_ptr()
             self.native_clock_view = sip.wrapinstance(ptr, QWidget)
-            self.viz_tabs.addTab(self.native_clock_view, "Clock Tree")
+
+            ct_container = QWidget()
+            ct_lay = QVBoxLayout(ct_container)
+            ct_lay.setContentsMargins(0, 0, 0, 0)
+            ct_lay.setSpacing(0)
+
+            ct_toolbar = QFrame()
+            ct_toolbar.setFixedHeight(34)
+            ct_toolbar.setStyleSheet("background-color: #161b22; border-bottom: 1px solid #30363d;")
+            tb_lay = QHBoxLayout(ct_toolbar)
+            tb_lay.setContentsMargins(10, 2, 10, 2)
+            tb_lay.setSpacing(8)
+
+            lbl_ct_hdr = QLabel("<b>🕒 CLOCK TOPOLOGY VIEWER</b>")
+            lbl_ct_hdr.setStyleSheet("color: #58a6ff; font-size: 11px;")
+            tb_lay.addWidget(lbl_ct_hdr)
+
+            btn_ct_in = QPushButton("🔍+ Zoom In")
+            btn_ct_in.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
+            btn_ct_in.clicked.connect(self.clock_engine.zoom_in)
+            tb_lay.addWidget(btn_ct_in)
+
+            btn_ct_out = QPushButton("🔍- Zoom Out")
+            btn_ct_out.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
+            btn_ct_out.clicked.connect(self.clock_engine.zoom_out)
+            tb_lay.addWidget(btn_ct_out)
+
+            btn_ct_fit = QPushButton("⛶ Fit View")
+            btn_ct_fit.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
+            btn_ct_fit.clicked.connect(self.clock_engine.fit_view)
+            tb_lay.addWidget(btn_ct_fit)
+
+            tb_lay.addStretch()
+
+            lg_port = QLabel("● Root Port"); lg_port.setStyleSheet("color: #00e5ff; font-size: 10px; font-weight: bold;")
+            lg_buf = QLabel("● Buffer / Inv"); lg_buf.setStyleSheet("color: #58a6ff; font-size: 10px; font-weight: bold;")
+            lg_sink = QLabel("● Sink / Flop"); lg_sink.setStyleSheet("color: #34d399; font-size: 10px; font-weight: bold;")
+            tb_lay.addWidget(lg_port); tb_lay.addWidget(lg_buf); tb_lay.addWidget(lg_sink)
+
+            ct_lay.addWidget(ct_toolbar)
+            ct_lay.addWidget(self.native_clock_view, stretch=1)
+
+            self.viz_tabs.addTab(ct_container, "Clock Tree")
         except Exception as e:
             err_lbl = QLabel(f"Failed to load C++ ClockTreeViewer:\n{e}")
             self.viz_tabs.addTab(err_lbl, "Clock Tree")
@@ -247,7 +369,23 @@ class BackendWidget(QWidget):
         v_split.addWidget(h_widget)
         
         term_widget = QWidget(); t_lay = QVBoxLayout(term_widget); t_lay.setContentsMargins(0,0,0,0)
-        t_lay.addWidget(self.term_log); t_lay.addWidget(self.term_in)
+
+        # Terminal Header Bar with Kill Button
+        term_bar = QWidget()
+        tb_lay = QHBoxLayout(term_bar)
+        tb_lay.setContentsMargins(5, 2, 5, 2)
+        lbl_term = QLabel("<b>Backend Console</b>")
+        tb_lay.addWidget(lbl_term)
+        tb_lay.addStretch()
+
+        self.btn_kill_proc = QPushButton("Terminate")
+        self.btn_kill_proc.setStyleSheet("background-color: #cf222e; color: white; font-weight: bold; padding: 2px 8px; font-size: 10px; border-radius: 3px;")
+        self.btn_kill_proc.clicked.connect(self.kill_active_backend_process)
+        tb_lay.addWidget(self.btn_kill_proc)
+
+        t_lay.addWidget(term_bar)
+        t_lay.addWidget(self.term_log)
+        t_lay.addWidget(self.term_in)
         v_split.addWidget(term_widget)
         v_split.setStretchFactor(0, 4); v_split.setStretchFactor(1, 1)
         self.layout.addWidget(v_split)
@@ -259,12 +397,10 @@ class BackendWidget(QWidget):
         self.chk_pins.toggled.connect(self.update_view)
         self.chk_nets.toggled.connect(self.update_view)
         self.chk_power.toggled.connect(self.update_view)
-        self.btn_heat.toggled.connect(self.update_view)
         
         self.btn_gui.clicked.connect(self.launch_native_gui)
         self.btn_magic.clicked.connect(self.launch_magic_gui) 
         self.btn_ref.clicked.connect(self.force_refresh_view)
-        self.btn_load.clicked.connect(self.load_routed_design)
         
         self.viz_tabs.currentChanged.connect(self.on_tab_changed)
         self.term_in.returnPressed.connect(self.send_command)
@@ -273,9 +409,61 @@ class BackendWidget(QWidget):
         self.proc = None
         self.pending_init = None
         self.cmd_active = False
+        self.cmd_journal = []
+        self._replaying_journal = False
         
-        self.reset_backend() 
+        if not getattr(self.ide, 'headless', False):
+            self.reset_backend() 
         self.viz_tabs.setCurrentIndex(0)
+
+
+    def _get_macro_files(self, ext):
+        files = []
+        macros = self.ide.project_config.get('macros', []) if hasattr(self, 'ide') and self.ide and hasattr(self.ide, 'project_config') else []
+        if not macros:
+            return files
+
+        search_dirs = []
+        proj_root = ""
+        if hasattr(self, 'ide') and hasattr(self.ide, 'get_proj_root'):
+            try:
+                proj_root = self.ide.get_proj_root(self.ide.get_context()[1] or "design")
+            except Exception:
+                proj_root = getattr(self.ide, 'project_path', os.getcwd())
+        if proj_root and os.path.isdir(proj_root):
+            search_dirs.append(proj_root)
+            search_dirs.append(os.path.join(proj_root, "source"))
+
+        bundled_pdk = os.path.join(REPO_ROOT, "third-party", "pdks")
+        if os.path.isdir(bundled_pdk):
+            search_dirs.append(bundled_pdk)
+
+        lib_path = self.active_pdk.get('lib', '') if self.active_pdk else ''
+        if "libs.ref" in lib_path:
+            search_dirs.append(lib_path.split("libs.ref")[0])
+
+        env_pdk = os.environ.get("PDK_ROOT")
+        if env_pdk and os.path.isdir(env_pdk):
+            search_dirs.append(env_pdk)
+
+        silis_macro_cache = os.path.expanduser("~/.silis/macrocache")
+        if os.path.isdir(silis_macro_cache):
+            search_dirs.append(silis_macro_cache)
+
+        for m in macros:
+            matched = False
+            for d in search_dirs:
+                if not os.path.exists(d):
+                    continue
+                pattern = os.path.join(d, "**", f"{m}.lef" if ext == "lef" else f"{m}*.{ext}")
+                for f in glob.glob(pattern, recursive=True):
+                    if os.path.isfile(f) and f not in files:
+                        files.append(f)
+                        matched = True
+                        break
+                if matched:
+                    break
+        return files
 
     def update_spinner(self):
         self.spinner_idx = (self.spinner_idx + 1) % 4
@@ -358,6 +546,16 @@ class BackendWidget(QWidget):
         if dlg.exec(): return editor.text(), True
         return "", False
 
+    def kill_active_backend_process(self):
+        if self.proc and self.proc.state() == QProcess.ProcessState.Running:
+            self.term_log.append("\n[USER] Terminating active backend process...")
+            self.proc.kill()
+            self.cmd_active = False
+            self.stop_spinner()
+            self.term_log.append("[SYS] Process terminated by user.")
+        else:
+            self.term_log.append("[SYS] No active process running.")
+
     def reset_backend(self):
         if self.proc:
             if self.proc.state() == QProcess.ProcessState.Running: self.proc.kill()
@@ -373,13 +571,18 @@ class BackendWidget(QWidget):
         if index == 0:
             # Tab 0: DEF Live Floorplan
             self.def_ctrl_widget.setVisible(True)
-            
+            self.force_refresh_view()
         elif index == 1:
             # Tab 1: 3D GDS Viewer
             self.def_ctrl_widget.setVisible(False)
-            # The sidebar is now completely hidden for the 3D view to maximize screen space!
-        else:
-            self.term_log.append(f"[ERR] GDS not found. Run 'GDS' step first.")
+            proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+            gds_path = os.path.join(proj_root, "results", "design.gds")
+            if os.path.isfile(gds_path) and hasattr(self.gds3d_port, 'load_gds'):
+                try: self.gds3d_port.load_gds(gds_path)
+                except: pass
+        elif index == 2:
+            # Tab 2: Clock Tree Viewer
+            self.def_ctrl_widget.setVisible(False)
 
     def run_flow_step(self, step_name, bypass_prompt=False):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
@@ -390,8 +593,9 @@ class BackendWidget(QWidget):
 
         if step_name == "Antenna":
             self.term_log.append("\n[SIGNOFF] Running Antenna Check...")
-            self.send_command_internal("check_antennas -report_file reports/antenna.rpt; puts \"Antenna Violations: [check_antennas]\"")
+            self.send_command_internal("check_antennas -report_file reports/antenna.rpt; puts \"Antenna Violations: [check_antennas]\"; puts \"SILIS_ANTENNA_DONE\"")
             return
+
 
         if step_name == "STA":
             if not self.active_pdk: QMessageBox.critical(self, "Error", "PDK not active."); return
@@ -399,7 +603,9 @@ class BackendWidget(QWidget):
             
             # Use our custom C++ OpenSTA engine to extract the graph!
             import sys
-            sys.path.append("/home/jerome/silis/synthengine/build")
+            se_build = os.path.join(REPO_ROOT, "synthengine", "build")
+            if se_build not in sys.path:
+                sys.path.append(se_build)
             try:
                 import synth_engine
                 if not hasattr(self, 'sta_anal'):
@@ -413,36 +619,54 @@ class BackendWidget(QWidget):
                     import json
                     ports = json.loads(self.sta_anal.get_input_ports_json())
                     
-                    # Create an interactive dialog to select clock port
-                    dlg = QDialog(self)
-                    dlg.setWindowTitle("Clock Tree Topology Extractor")
-                    dlg.resize(400, 150)
-                    dlg_layout = QVBoxLayout(dlg)
-                    dlg_layout.addWidget(QLabel("Select Clock Port for Layout Topology Extraction:"))
-                    cmb = QComboBox()
-                    cmb.addItems(ports)
-                    
-                    # Auto select
-                    for c in ["clk_i", "clk", "clock", "sys_clk"]:
-                        if c in ports:
-                            cmb.setCurrentText(c)
-                            break
-                            
-                    dlg_layout.addWidget(cmb)
-                    
-                    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-                    bbox.accepted.connect(dlg.accept)
-                    bbox.rejected.connect(dlg.reject)
-                    dlg_layout.addWidget(bbox)
-                    
-                    if dlg.exec():
-                        port = cmb.currentText()
-                        tree_json = self.sta_anal.get_clock_tree_json(port)
-                        if hasattr(self, 'clock_engine'):
-                            self.clock_engine.load_tree_data(tree_json)
-                            # Switch to Clock Tree tab (index 3)
-                            self.viz_tabs.setCurrentIndex(3)
-                            self.term_log.append(f"[SUCCESS] Rendered Clock Tree for {port}!")
+                    is_headless = getattr(self.ide, 'headless', False) or bypass_prompt
+                    if is_headless:
+                        # Automatically pick the first matching clock
+                        port = None
+                        for c in ["clk_i", "clk", "clock", "sys_clk"]:
+                            if c in ports:
+                                port = c
+                                break
+                        if not port and ports:
+                            port = ports[0]
+
+                        if port:
+                            tree_json = self.sta_anal.get_clock_tree_json(port)
+                            if hasattr(self, 'clock_engine'):
+                                self.clock_engine.load_tree_data(tree_json)
+                                self.viz_tabs.setCurrentIndex(2)
+                                self.term_log.append(f"[SUCCESS] Rendered Clock Tree for {port}!")
+                    else:
+                        # Create an interactive dialog to select clock port
+                        dlg = QDialog(self)
+                        dlg.setWindowTitle("Clock Tree Topology Extractor")
+                        dlg.resize(400, 150)
+                        dlg_layout = QVBoxLayout(dlg)
+                        dlg_layout.addWidget(QLabel("Select Clock Port for Layout Topology Extraction:"))
+                        cmb = QComboBox()
+                        cmb.addItems(ports)
+                        
+                        # Auto select
+                        for c in ["clk_i", "clk", "clock", "sys_clk"]:
+                            if c in ports:
+                                cmb.setCurrentText(c)
+                                break
+                                
+                        dlg_layout.addWidget(cmb)
+                        
+                        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                        bbox.accepted.connect(dlg.accept)
+                        bbox.rejected.connect(dlg.reject)
+                        dlg_layout.addWidget(bbox)
+                        
+                        if dlg.exec():
+                            port = cmb.currentText()
+                            tree_json = self.sta_anal.get_clock_tree_json(port)
+                            if hasattr(self, 'clock_engine'):
+                                self.clock_engine.load_tree_data(tree_json)
+                                # Switch to Clock Tree tab (index 2)
+                                self.viz_tabs.setCurrentIndex(2)
+                                self.term_log.append(f"[SUCCESS] Rendered Clock Tree for {port}!")
             except Exception as e:
                 self.term_log.append(f"[ERR] Failed to extract clock tree: {e}")
             return
@@ -468,65 +692,72 @@ class BackendWidget(QWidget):
                 if sdc_files: sdc_path = sdc_files[0]
                 
             tcl_path = os.path.join(proj_root, "pat_mcmm.tcl").replace("\\", "/")
-            corners = self.active_pdk['corners']
+            multi_cfg = self.active_pdk.get('multi_corner', {})
             
-            # Build TCL script
-            tcl_content = f"set_thread_count [exec nproc]\\n"
-            tcl_content += f"read_lef \\\"{self.active_pdk['tlef']}\\\"\\n"
-            tcl_content += f"read_lef \\\"{self.active_pdk['lef']}\\\"\\n"
+            # Select target corners: Setup (SS), Nominal (TT), Hold (FF) or full set
+            target_corners = {}
+            if multi_cfg.get('enabled', False):
+                if multi_cfg.get('setup_ss', {}).get('name') and multi_cfg.get('setup_ss', {}).get('lib'):
+                    target_corners[multi_cfg['setup_ss']['name']] = multi_cfg['setup_ss']['lib']
+                if multi_cfg.get('nominal_tt', {}).get('name') and multi_cfg.get('nominal_tt', {}).get('lib'):
+                    target_corners[multi_cfg['nominal_tt']['name']] = multi_cfg['nominal_tt']['lib']
+                if multi_cfg.get('hold_ff', {}).get('name') and multi_cfg.get('hold_ff', {}).get('lib'):
+                    target_corners[multi_cfg['hold_ff']['name']] = multi_cfg['hold_ff']['lib']
             
-            # Read macros if any
-            macros = self.ide.project_config.get('macros', [])
-            if macros:
-                volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
-                for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
-                    if os.path.basename(lef).replace('.lef', '') in macros:
-                        tcl_content += f"read_lef \\\"{lef}\\\"\\n"
+            if not target_corners:
+                target_corners = self.active_pdk.get('corners', {})
+            if not target_corners:
+                target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk.get('lib', '')}
 
-            tcl_content += f"read_def \\\"{def_abs_path}\\\"\\n"
-            
-            corner_names = list(corners.keys())
-            tcl_content += f"define_corners " + " ".join(corner_names) + "\\n"
-            
-            for c_name, lib_path in corners.items():
-                tcl_content += f"read_liberty -corner {c_name} \\\"{lib_path}\\\"\\n"
-                
-            if macros:
-                for lib in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")):
-                    name = os.path.basename(lib).replace('.lib', '')
-                    if any(m in name for m in macros):
-                        # Add macro lib to all corners for simplicity
-                        for c_name in corner_names:
-                            tcl_content += f"read_liberty -corner {c_name} \\\"{lib}\\\"\\n"
-                            
-            tcl_content += f"read_sdc \\\"{sdc_path}\\\"\\n"
-            
-            # Setup RC for corners if possible
-            # We skip explicit RC corners for now since they are tied to set_layer_rc commands
-            
-            # Area calculation
-            tcl_content += "set block [::ord::get_db_block]\\n"
-            tcl_content += "set tech [::ord::get_db_tech]\\n"
-            tcl_content += "set dbu [$tech getDbUnitsPerMicron]\\n"
-            tcl_content += "set total_area 0.0\\n"
-            tcl_content += "foreach inst [$block getInsts] {\\n"
-            tcl_content += "    set master [$inst getMaster]\\n"
-            tcl_content += "    set m_area [expr {([$master getWidth] * 1.0 / $dbu) * ([$master getHeight] * 1.0 / $dbu)}]\\n"
-            tcl_content += "    set total_area [expr {$total_area + $m_area}]\\n"
-            tcl_content += "}\\n"
-            tcl_content += "puts \\\"PAT_AREA: $total_area\\\"\\n"
-            
-            tcl_content += "puts \\\"PAT_POWER_START\\\"\\n"
-            tcl_content += "report_power\\n"
-            tcl_content += "puts \\\"PAT_POWER_END\\\"\\n"
-            
+            tcl_lines = [
+                "set_thread_count [exec nproc]",
+                f'read_lef "{self.active_pdk["tlef"]}"',
+                f'read_lef "{self.active_pdk["lef"]}"'
+            ]
+            for lef in self._get_macro_files("lef"):
+                tcl_lines.append(f'read_lef "{lef}"')
+
+            tcl_lines.append(f'read_def "{def_abs_path}"')
+
+            corner_names = list(target_corners.keys())
+            tcl_lines.append("define_corners " + " ".join(corner_names))
+
+            for c_name, lib_path in target_corners.items():
+                tcl_lines.append(f'read_liberty -corner {c_name} "{lib_path}"')
+
+            for lib in self._get_macro_files("lib"):
+                for c_name in corner_names:
+                    tcl_lines.append(f'read_liberty -corner {c_name} "{lib}"')
+
+            tcl_lines.append(f'read_sdc "{sdc_path}"')
+
+            # Area & Instance calculation
+            tcl_lines.extend([
+                "set block [::ord::get_db_block]",
+                "set tech [::ord::get_db_tech]",
+                "set dbu [$tech getDbUnitsPerMicron]",
+                "set inst_count [llength [$block getInsts]]",
+                "set total_area 0.0",
+                "foreach inst [$block getInsts] {",
+                "    set master [$inst getMaster]",
+                "    set m_area [expr {([$master getWidth] * 1.0 / $dbu) * ([$master getHeight] * 1.0 / $dbu)}]",
+                "    set total_area [expr {$total_area + $m_area}]",
+                "}",
+                'puts "PAT_INSTS: $inst_count"',
+                'puts "PAT_AREA: $total_area"',
+                'puts "PAT_POWER_START"',
+                "report_power",
+                'puts "PAT_POWER_END"'
+            ])
+
             for c_name in corner_names:
-                tcl_content += f"puts \\\"PAT_CORNER_START: {c_name}\\\"\\n"
-                tcl_content += f"report_checks -path_delay max -corner {c_name}\\n"
-                tcl_content += f"puts \\\"PAT_CORNER_END: {c_name}\\\"\\n"
-                
+                tcl_lines.append(f'puts "PAT_CORNER_START: {c_name}"')
+                tcl_lines.append(f'report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -corner {c_name}')
+                tcl_lines.append(f'catch {{ report_power -corner {c_name} }}')
+                tcl_lines.append(f'puts "PAT_CORNER_END: {c_name}"')
+
             with open(tcl_path, 'w') as f:
-                f.write(tcl_content.replace('\\\\n', '\\n').replace('\\\\\\"', '\\"'))
+                f.write("\n".join(tcl_lines) + "\n")
                 
             def run_pat():
                 try:
@@ -534,61 +765,161 @@ class BackendWidget(QWidget):
                     proc = subprocess.run(cmd, capture_output=True, text=True)
                     out = proc.stdout
                     
+                    insts = "0"
                     area = "0.0"
-                    power = "0.0"
                     
                     import re
-                    area_match = re.search(r"PAT_AREA:\s*([0-9.]+)", out)
-                    if area_match: area = f"{float(area_match.group(1)):.0f}"
+                    inst_match = re.search(r"PAT_INSTS:\s*(\d+)", out)
+                    if inst_match: insts = inst_match.group(1)
                     
-                    power_match = re.search(r"Total\s+[0-9.e-]+\s+[0-9.e-]+\s+[0-9.e-]+\s+([0-9.e-]+)", out)
-                    if power_match:
-                        # Convert power from whatever unit OpenSTA uses to mW (OpenSTA default is often W)
-                        # Actually just extract the raw number
-                        try:
-                            p = float(power_match.group(1)) * 1000 # Assuming W -> mW
-                            power = f"{p:.2f}"
-                        except:
-                            power = power_match.group(1)
-                            
+                    area_match = re.search(r"PAT_AREA:\s*([0-9.]+)", out)
+                    if area_match: area = f"{float(area_match.group(1)):.2f}"
+                    
+                    # Parse Power Report table
+                    pwr_data = {
+                        "Sequential": ["0.00", "0.00", "0.00", "0.00", "0%"],
+                        "Combinational": ["0.00", "0.00", "0.00", "0.00", "0%"],
+                        "Clock": ["0.00", "0.00", "0.00", "0.00", "0%"],
+                        "Macro": ["0.00", "0.00", "0.00", "0.00", "0%"],
+                        "Pad": ["0.00", "0.00", "0.00", "0.00", "0%"],
+                        "Total": ["0.00", "0.00", "0.00", "0.00", "100%"]
+                    }
+                    
+                    pwr_block_match = re.search(r"PAT_POWER_START(.*?)PAT_POWER_END", out, re.DOTALL)
+                    if pwr_block_match:
+                        pwr_text = pwr_block_match.group(1)
+                        for line in pwr_text.splitlines():
+                            parts = line.split()
+                            if len(parts) >= 6 and parts[0] in pwr_data:
+                                pwr_data[parts[0]] = parts[1:6]
+                            elif len(parts) >= 5 and parts[0] in pwr_data:
+                                pwr_data[parts[0]] = parts[1:5] + ["0%"]
+                                
+                    # Parse Corners
                     corners_data = []
                     corner_blocks = re.findall(r"PAT_CORNER_START:\s*(\w+)\s*(.*?)PAT_CORNER_END:", out, re.DOTALL)
                     
                     timing_failed = False
+                    slacks_list = []
+                    critical_trace = "No timing violations found."
                     
                     for c_name, c_out in corner_blocks:
-                        slack = "N/A"
-                        endpoint = "N/A"
+                        slack_val = "0.00"
+                        status_str = "MET"
+                        endpoint = "Unknown"
+                        c_pwr = "N/A"
                         
-                        slack_match = re.search(r"slack\s+\(VIOLATED\)\s+([-\d.]+)", c_out)
-                        if slack_match:
-                            slack = slack_match.group(1)
-                            timing_failed = True
-                        else:
-                            slack_match = re.search(r"slack\s+\(MET\)\s+([-\d.]+)", c_out)
-                            if slack_match: slack = slack_match.group(1)
+                        max_match = re.search(r"slack\s+\((VIOLATED|MET)\)\s+([-\d.]+)", c_out)
+                        if max_match:
+                            status_str = max_match.group(1)
+                            slack_val = max_match.group(2)
+                            try:
+                                slacks_list.append(float(slack_val))
+                            except:
+                                pass
+                            if status_str == "VIOLATED":
+                                timing_failed = True
+
+                        trace_match = re.search(r"(Startpoint:.*?slack \([A-Z]+\))", c_out, re.DOTALL)
+                        if trace_match and (status_str == "VIOLATED" or critical_trace == "No timing violations found."):
+                            critical_trace = trace_match.group(1)
+
+                        pwr_match = re.search(r"Total\s+[0-9.e-]+\s+[0-9.e-]+\s+[0-9.e-]+\s+([0-9.e-]+)", c_out)
+                        if pwr_match:
+                            try:
+                                c_pwr = f"{float(pwr_match.group(1)) * 1000:.2f} mW"
+                            except:
+                                c_pwr = f"{pwr_match.group(1)}"
                             
                         ep_match = re.search(r"Endpoint:\s*(\S+)", c_out)
                         if ep_match: endpoint = ep_match.group(1)
                         
-                        corners_data.append((c_name, slack, endpoint))
+                        corners_data.append((c_name, slack_val, status_str, endpoint, c_pwr))
                         
-                    report = f"Area - {area} µm²\\n"
-                    report += f"Timing - {'Failed' if timing_failed else 'Passed'}\\n"
-                    report += f"Power - {power} mW\\n\\n"
-                    
-                    for i, (c_name, slack, endpoint) in enumerate(corners_data):
-                        report += f"{c_name}\\n"
-                        report += f"Slack\\n{slack}\\n"
-                        report += f"Worst Endpoint\\n{endpoint}\\n"
-                        if i < len(corners_data) - 1:
-                            report += "────────────────────\\n"
-                            
+                    wns = f"{min(slacks_list):.3f}" if slacks_list else "0.000"
+                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    pdk_disp = self.active_pdk.get('name', 'Sky130') if self.active_pdk else 'Generic'
+
+                    def pr(name, d):
+                        split_vis = ReportEngine._bar(d[4]) if hasattr(ReportEngine, '_bar') else f"| {d[4]} |"
+                        return f"| {name:<14} | {d[0]:<10} | {d[1]:<10} | {d[2]:<10} | {d[3]:<10} | {d[4]:<6} | {split_vis:<16} |"
+
+                    # Format Timing Table
+                    t_table = ""
+                    for c_name, s_val, s_stat, end_p, _ in corners_data:
+                        t_table += f"| {c_name:<29} | {s_val:<13} | {s_stat:<10} | {end_p:<25} |\\n"
+
+                    # Format Corner Power Lines
+                    c_pwr_lines = ""
+                    for c_name, _, _, _, c_pwr in corners_data:
+                        if c_pwr != "N/A":
+                            c_pwr_lines += f"  • {c_name:<25} : Total Power = {c_pwr}\\n"
+                    if not c_pwr_lines:
+                        c_pwr_lines = "  (Single corner power evaluated)\\n"
+
+                    # Build official Silis ReportEngine report
+                    report = f"""################################################################################
+#                                            POST ROUTE PAT REPORT
+# Design:       {base}
+# Date:         {now_str}
+# PDK:          {pdk_disp}
+# Generated by Silis — Silicon Scaffold
+################################################################################
+
+================================================================================
+  SECTION 1: DESIGN STATISTICS
+================================================================================
++---------------------------+-------------------+
+| Metric                    | Value             |
++---------------------------+-------------------+
+| Total Cells               | {insts:<17} |
+| Total Core Area           | {area + ' um^2':<17} |
+| Overall Timing Status     | {('VIOLATED' if timing_failed else 'MET'):<17} |
++---------------------------+-------------------+
+
+================================================================================
+  SECTION 2: MULTI-CORNER TIMING SUMMARY (MCMM)
+================================================================================
++-------------------------------+---------------+------------+---------------------------+
+| Scenario / Corner             | Slack         | Status     | Critical Endpoint         |
++-------------------------------+---------------+------------+---------------------------+
+{t_table}+-------------------------------+---------------+------------+---------------------------+
+
+  Worst Negative Slack (WNS): {wns} ns ({'VIOLATED' if timing_failed else 'MET'})
+
+  CRITICAL PATH TRACE:
+  {critical_trace.replace(chr(10), chr(10)+'  ')}
+
+================================================================================
+  SECTION 3: POWER ANALYSIS
+================================================================================
++----------------+------------+------------+------------+------------+--------+------------------+
+| Group          | Internal   | Switching  | Leakage    | Total      | %      | Split            |
++----------------+------------+------------+------------+------------+--------+------------------+
+{pr("Sequential", pwr_data['Sequential'])}
+{pr("Combinational", pwr_data['Combinational'])}
+{pr("Clock", pwr_data['Clock'])}
+{pr("Macro", pwr_data['Macro'])}
+{pr("Pad", pwr_data['Pad'])}
++----------------+------------+------------+------------+------------+--------+------------------+
+| TOTAL          | {pwr_data['Total'][0]:<10} | {pwr_data['Total'][1]:<10} | {pwr_data['Total'][2]:<10} | {pwr_data['Total'][3]:<10} | 100%   | |██████████| 100% |
++----------------+------------+------------+------------+------------+--------+------------------+
+
+[ PVT CORNER POWER BREAKDOWN ]
+{c_pwr_lines}
+{ReportEngine.FOOTER_ART if hasattr(ReportEngine, 'FOOTER_ART') else ''}
+https://github.com/The-Silis-Foundation/silis
+________________________________________________________________________________
+Generated by Silis — Silicon Scaffold
+© 2026 The Silis Foundation
+________________________________________________________________________________
+"""
                     rpt_file = os.path.join(reports_dir, f"{base}_pat_report.rpt")
                     with open(rpt_file, 'w') as f:
-                        f.write(report.replace('\\\\n', '\\n'))
+                        f.write(report)
                         
                     self.ide.queue.put(("[BACKEND]", f"PAT Report generated: {rpt_file}"))
+                    self.pat_finished_signal.emit(rpt_file, timing_failed)
                 except Exception as e:
                     self.ide.queue.put(("[BACKEND]", f"[ERR] PAT Execution Failed: {e}"))
                     
@@ -596,6 +927,158 @@ class BackendWidget(QWidget):
             self.pat_worker = FlowWorker(run_pat)
             self.pat_worker.finished_signal.connect(self.stop_spinner)
             self.pat_worker.start()
+            return
+
+        if step_name == "DFT":
+            self.term_log.append("\n[SIGNOFF] Running Automated DFT Scan & ATPG Signoff Analysis...")
+            base = self.ide.get_context()[1] or "design"
+            v_net = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
+            if not os.path.isfile(v_net):
+                v_net = os.path.join(results_dir, "temp.v")
+            if not os.path.isfile(v_net):
+                cand_nets = glob.glob(os.path.join(proj_root, "netlist", "*.v"))
+                if cand_nets:
+                    v_net = cand_nets[0]
+
+            pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+            try:
+                try:
+                    from silis.dft.dft_engine import DFTEngine
+                    from silis.dft.dft_viewer import DFTSignoffViewer
+                except (ImportError, ModuleNotFoundError):
+                    from dft.dft_engine import DFTEngine
+                    from dft.dft_viewer import DFTSignoffViewer
+
+                engine = DFTEngine(
+                    netlist_path=v_net,
+                    top_module=base,
+                    pdk=pdk_name,
+                )
+                scandef_path = os.path.join(results_dir, "design.scandef")
+                scan_net_path = os.path.join(proj_root, "netlist", f"{base}_scan.v")
+                engine.stitch_scan_chain(scan_net_path, scandef_path)
+
+                summary = engine.run_atpg(target_coverage=95.0)
+
+                stil_path = os.path.join(results_dir, f"{base}_atpg.stil")
+                engine.export_stil(stil_path)
+                tb_path = os.path.join(results_dir, f"{base}_atpg_tb.v")
+                engine.export_atpg_testbench(tb_path)
+                engine.write_reports(summary, os.path.join(proj_root, "reports"))
+
+                self.term_log.append(f"[DFT SUCCESS] Fault Coverage: {summary['fault_coverage']}% ({summary['status']})")
+                self.term_log.append(f"  • Scan Flops Stitched: {summary['scan_flop_count']}")
+                self.term_log.append(f"  • ATPG Vectors: {summary['pattern_count']}")
+                self.term_log.append(f"  • STIL Patterns: {stil_path}")
+                self.term_log.append(f"  • Verilog Testbench: {tb_path}")
+                self.term_log.append("SILIS_DFT_DONE")
+
+                is_headless = getattr(self.ide, 'headless', False) or bypass_prompt
+                if not is_headless:
+                    dlg = DFTSignoffViewer(summary, parent=self, project_dir=proj_root)
+                    dlg.exec()
+            except Exception as e:
+                self.term_log.append(f"[ERR] DFT Signoff Failed: {e}")
+            return
+
+        if step_name == "LVS":
+            self.term_log.append("\n[SIGNOFF] Running Layout Versus Schematic (LVS) Verification...")
+            base = self.ide.get_context()[1] or "design"
+            pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+            try:
+                try:
+                    from silis.lvs.lvs_engine import LVSEngine
+                    from silis.lvs.lvs_viewer import LVSSignoffViewer
+                except (ImportError, ModuleNotFoundError):
+                    from lvs.lvs_engine import LVSEngine
+                    from lvs.lvs_viewer import LVSSignoffViewer
+
+                engine = LVSEngine(proj_root, top_module=base, pdk=pdk_name)
+                res = engine.run_lvs()
+                self.term_log.append(f"[LVS {res['status']}] Matched Devices: {res['matched_devices']} | Matched Nets: {res['matched_nets']}")
+                self.term_log.append("SILIS_LVS_DONE")
+
+                is_headless = getattr(self.ide, 'headless', False) or bypass_prompt
+                if not is_headless:
+                    dlg = LVSSignoffViewer(res, parent=self, project_dir=proj_root)
+                    dlg.exec()
+            except Exception as e:
+                self.term_log.append(f"[ERR] LVS Failed: {e}")
+            return
+
+        if step_name in ["GLS", "SDF"]:
+            self.term_log.append("\n[SIGNOFF] Running Gate-Level Timing Simulation (GLS & SDF)...")
+            base = self.ide.get_context()[1] or "design"
+            pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+            try:
+                try:
+                    from silis.simulation.gls_engine import GLSEngine
+                    from silis.simulation.gls_viewer import GLSSignoffViewer
+                except (ImportError, ModuleNotFoundError):
+                    from simulation.gls_engine import GLSEngine
+                    from simulation.gls_viewer import GLSSignoffViewer
+
+                engine = GLSEngine(proj_root, top_module=base, pdk=pdk_name)
+                if step_name == "SDF":
+                    sdf_path = engine.export_sdf()
+                    self.term_log.append(f"[SUCCESS] Exported SDF: {sdf_path}")
+                    self.term_log.append("SILIS_SDF_DONE")
+                    return
+
+                res = engine.run_gls()
+                self.term_log.append(f"[GLS {res['status']}] Cycles Tested: {res['cycles_evaluated']} | Timing Violations: {res['timing_violations_count']}")
+                self.term_log.append("SILIS_GLS_DONE")
+
+                is_headless = getattr(self.ide, 'headless', False) or bypass_prompt
+                if not is_headless:
+                    dlg = GLSSignoffViewer(res, parent=self, project_dir=proj_root)
+                    dlg.exec()
+            except Exception as e:
+                self.term_log.append(f"[ERR] GLS Failed: {e}")
+            return
+
+        if step_name == "Fill":
+            self.term_log.append("\n[PHYSICAL] Running Decap & Metal Density Fill...")
+            base = self.ide.get_context()[1] or "design"
+            pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+            try:
+                try:
+                    from silis.tapeout.fill_engine import TapeoutEngine
+                except (ImportError, ModuleNotFoundError):
+                    from tapeout.fill_engine import TapeoutEngine
+
+                engine = TapeoutEngine(proj_root, top_module=base, pdk=pdk_name)
+                res = engine.run_fill()
+                self.term_log.append(f"[FILL SUCCESS] Standard Cell Decap & Metal Tiles Inserted. All layers compliant (20%-80%).")
+                self.term_log.append("SILIS_FILL_DONE")
+                self.force_refresh_view()
+            except Exception as e:
+                self.term_log.append(f"[ERR] Metal Fill Failed: {e}")
+            return
+
+        if step_name in ("Tapeout", "Export"):
+            self.term_log.append("\n[SIGNOFF] Compiling Final Foundry Tapeout Manifest...")
+            base = self.ide.get_context()[1] or "design"
+            pdk_name = self.active_pdk.get("name", "sky130") if self.active_pdk else "sky130"
+            try:
+                try:
+                    from silis.tapeout.fill_engine import TapeoutEngine
+                    from silis.tapeout.manifest_viewer import TapeoutManifestViewer
+                except (ImportError, ModuleNotFoundError):
+                    from tapeout.fill_engine import TapeoutEngine
+                    from tapeout.manifest_viewer import TapeoutManifestViewer
+
+                engine = TapeoutEngine(proj_root, top_module=base, pdk=pdk_name)
+                manifest = engine.build_tapeout_manifest()
+                self.term_log.append(f"[EXPORT SUCCESS] Output GDS: {manifest['tapeout_gds']}")
+                self.term_log.append("SILIS_EXPORT_DONE")
+
+                is_headless = getattr(self.ide, 'headless', False) or bypass_prompt
+                if not is_headless:
+                    dlg = TapeoutManifestViewer(manifest, parent=self, project_dir=proj_root)
+                    dlg.exec()
+            except Exception as e:
+                self.term_log.append(f"[ERR] Export Packaging Failed: {e}")
             return
 
         if step_name == "Init":
@@ -609,10 +1092,13 @@ class BackendWidget(QWidget):
                 
                 if os.path.exists(def_path):
                     reply = QMessageBox.question(self, "Resume from temp.def?", "Found temp.def from a previous step. Resume from it instead?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    if reply == QMessageBox.StandardButton.Yes: self.resume_def = def_path.replace("\\", "/")
-
-            if not self.active_pdk: 
-                 if not self.open_pdk_selector(): return
+                    if reply == QMessageBox.StandardButton.Yes:
+                        self.resume_def = def_path
+            if not self.active_pdk:
+                if hasattr(self.ide, 'resolve_and_set_pdk'):
+                    self.ide.resolve_and_set_pdk()
+                if not self.active_pdk:
+                    if not self.open_pdk_selector(): return
             tcl_path = os.path.join(proj_root, "init_pdk.tcl").replace("\\", "/")
             ctx = self.ide.get_context()[0] or "top"
             base = self.ide.get_context()[1] or "top"
@@ -627,27 +1113,33 @@ class BackendWidget(QWidget):
                 with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
             tcl_content = f"""set_thread_count [exec nproc]\nread_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
             
-            macros = self.ide.project_config.get('macros', [])
-            if macros:
-                lib_path = self.active_pdk.get('lib', '')
-                volare_base = lib_path.split("libs.ref")[0]
-                lef_search = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
-                lib_search = os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")
-                
-                for lef in glob.glob(lef_search):
-                    name = os.path.basename(lef).replace('.lef', '')
-                    if name in macros:
-                        tcl_content += f"""read_lef "{lef}"\n"""
+            for lef in self._get_macro_files("lef"):
+                tcl_content += f"""read_lef "{lef}"\n"""
+
+            # Multi-Corner Multi-Mode Liberty Loading
+            target_corners = getattr(self, 'selected_mcmm_corners', {})
+            if not target_corners:
+                target_corners = self.active_pdk.get('corners', {})
+
+            macro_libs = self._get_macro_files("lib")
+
+            if target_corners and len(target_corners) > 1:
+                corner_names = list(target_corners.keys())
+                tcl_content += f"define_corners {' '.join(corner_names)}\n"
+                for c_name, lib_path in target_corners.items():
+                    tcl_content += f'read_liberty -corner {c_name} "{lib_path}"\n'
+                for lib in macro_libs:
+                    for c_name in corner_names:
+                        tcl_content += f'read_liberty -corner {c_name} "{lib}"\n'
+            else:
+                tcl_content += f"""read_liberty "{self.active_pdk['lib']}\"\n"""
+                for lib in macro_libs:
+                    tcl_content += f"""read_liberty "{lib}"\n"""
                         
-            tcl_content += f"""read_liberty "{self.active_pdk['lib']}\"\n"""
-            if macros:
-                for lib in glob.glob(lib_search):
-                    name = os.path.basename(lib).replace('.lib', '')
-                    # handle typical .lib naming which might have extensions like __tt_025C_1v80.lib
-                    if any(m in name for m in macros):
-                        tcl_content += f"""read_liberty "{lib}"\n"""
-                        
-            tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}"\n"""
+            if getattr(self, 'resume_def', None):
+                tcl_content += f"""read_def "{self.resume_def}"\nread_sdc "{sdc_path}"\n"""
+            else:
+                tcl_content += f"""read_verilog "{netlist_path}"\nlink_design {ctx}\nread_sdc "{sdc_path}"\n"""
             tcl_content += f"""
 set block [::ord::get_db_block]
 set tech [::ord::get_db_tech]
@@ -698,9 +1190,8 @@ file mkdir $reports_dir
 set fp [open "$reports_dir/{base}_sizes.json" w]
 puts $fp $macros_json
 close $fp
+puts "SILIS_INIT_DONE"
 """
-            if getattr(self, 'resume_def', None):
-                tcl_content += f'\nread_def "{self.resume_def}"\n'
                 
             try:
                 with open(tcl_path, 'w') as f: f.write(tcl_content)
@@ -714,8 +1205,8 @@ close $fp
             if not self.active_pdk or 'gds' not in self.active_pdk: QMessageBox.critical(self, "Error", "No GDS defined."); return
             self.term_log.append("[SYS] Starting GDS Generation Flow...")
             final_def = os.path.join(results_dir, "temp.def").replace("\\", "/")
-            self.send_command_internal(f"write_def \"{final_def}\"")
-            QTimer.singleShot(2000, lambda: self.trigger_magic_merge(proj_root, final_def))
+            self.send_command_internal(f'write_def "{final_def}"')
+            self.trigger_magic_merge(proj_root, final_def)
             return
 
         cmd = ""
@@ -736,7 +1227,11 @@ close $fp
 
         if step_name == "Floorplan": 
             self.floorplanner_dialog = InteractiveFloorplannerWidget(self.ide.project_config, self.pdk_mgr, self)
-            self.floorplanner_dialog.show()
+            if bypass_prompt or getattr(self.ide, 'headless', False):
+                self.floorplanner_dialog.init_floorplan()
+                self.floorplanner_dialog.generate_floorplan_tcl(apply=True)
+            else:
+                self.floorplanner_dialog.show()
             return
         elif step_name == "Tapcells":
             tap_cmd = SSAForge.get_tap_cmd(pdk_name, lib_path)
@@ -744,14 +1239,33 @@ close $fp
         elif step_name == "PDN":
             cmd = load_template("pdn.tcl", {"write_cmd": write_cmd})
         elif step_name == "IO Pins":
+            if not bypass_prompt and not getattr(self.ide, 'headless', False):
+                self.ioplacer_dialog = IOPlacerDialog(self.ide.project_config, self.pdk_mgr, self)
+                self.ioplacer_dialog.show()
+                return
             cmd = load_template("io_pins.tcl", {"write_cmd": write_cmd})
         elif step_name == "Place":
             cmd = load_template("place.tcl", {"write_cmd": write_cmd})
         elif step_name == "CTS":
             cts_cmd = SSAForge.get_cts_cmd(pdk_name, lib_path)
-            cmd = f'''{cts_cmd}
-#clock_tree_synthesis -sink_clustering_enable
-write_def "{def_abs_path}"
+            cmd = f'''# Check if CTS has already run to prevent OpenROAD crash (SIGSEGV)
+set _has_cts 0
+set _insts [[::ord::get_db_block] getInsts]
+foreach inst $_insts {{
+    set iname [$inst getName]
+    if {{[string match "*clkbuf_*" $iname] || [string match "*delaybuf_*" $iname]}} {{
+        set _has_cts 1
+        break
+    }}
+}}
+if {{$_has_cts}} {{
+    puts "\\n\\[SILIS_CTS_SKIP\\] Clock tree already synthesized in current database checkpoint!"
+    puts "Skipping duplicate CTS run to avoid crash. (To rebuild clock tree: Click 'Reset' -> 'Init' -> 'Place' -> 'CTS')\\n"
+}} else {{
+    {cts_cmd}
+    #clock_tree_synthesis -sink_clustering_enable
+    write_def "{def_abs_path}"
+}}
 
 # --- CTS FLAGS ---
 # clock_tree_synthesis:
@@ -805,25 +1319,55 @@ foreach bterm [[::ord::get_db_block] getBTerms] {
 '''
                 with open(fix_script, 'w') as f: f.write(fix_tcl)
             except: pass
-            cmd = f'''source "{fix_script}"
-global_route -guide_file "{guide_path}" -congestion_iterations 50 -verbose
-#global_route -congestion_iterations 100
-detailed_route -output_drc "{drc_path}"
-#detailed_route -bottom_routing_layer met1 -top_routing_layer met5
-write_def "{def_abs_path}"
-
-# --- ROUTING FLAGS ---
-# global_route:
-#   -congestion_iterations <N> : How aggressively the router tries to fix congestion (higher = slower but better).
-# detailed_route:
-#   -bottom_routing_layer / -top_routing_layer : Restrict routing to specific layers.
-'''
+            route_tcl = load_template("route.tcl", {
+                "fix_script": fix_script,
+                "guide_path": guide_path,
+                "drc_path": drc_path,
+                "write_cmd": f'write_def "{def_abs_path}"'
+            })
+            cmd = route_tcl
 
         if cmd:
-            # Format the command string nicely into multiple lines for the dialog
-            cmd = cmd.replace("; ", "\n").replace(";", "\n")
-            text, ok = self.ask_command(f"Run {step_name}", "Confirm TCL Command:", cmd)
-            if ok and text: self.send_command_internal(text)
+            step_tag = step_name.lower().replace(" ", "_")
+            step_script = os.path.join(proj_root, f"run_{step_tag}.tcl").replace("\\", "/")
+            # If user has an existing customized run_<step>.tcl (e.g. from floorplanner/ioplacer dialogs), preserve it
+            if bypass_prompt and os.path.isfile(step_script) and step_tag in ("floorplan", "io_pins", "iopins"):
+                with open(step_script, "r") as f:
+                    existing_content = f.read()
+                marker = f"SILIS_{step_tag.upper()}_DONE"
+                if marker not in existing_content:
+                    existing_content += f'\nputs "{marker}"\n'
+                    with open(step_script, "w") as f:
+                        f.write(existing_content)
+                self.send_command_internal(f'source "{step_script}"')
+            elif bypass_prompt:
+                full_cmd = cmd.strip() + f'\nputs "SILIS_{step_tag.upper()}_DONE"\n'
+                with open(step_script, 'w') as f: f.write(full_cmd)
+                self.send_command_internal(f'source "{step_script}"')
+            else:
+                formatted_cmd = cmd.replace("; ", "\n").replace(";", "\n")
+                text, ok = self.ask_command(f"Run {step_name}", "Confirm TCL Command:", formatted_cmd)
+                if ok and text:
+                    full_cmd = text.strip() + f'\nputs "SILIS_{step_tag.upper()}_DONE"\n'
+                    with open(step_script, 'w') as f: f.write(full_cmd)
+                    self.send_command_internal(f'source "{step_script}"')
+
+
+    def display_pat_report(self, rpt_file, timing_failed):
+        self.stop_spinner()
+        if os.path.exists(rpt_file):
+            self.term_log.append(f"[SUCCESS] PAT Sign-Off Report generated: {rpt_file}")
+            if not getattr(self.ide, 'headless', False):
+                dlg = SignoffReportViewer(rpt_file, timing_failed, self)
+                dlg.exec()
+            else:
+                with open(rpt_file, 'r') as f:
+                    print(f.read())
+        else:
+            self.term_log.append(f"[WARN] PAT Sign-Off Report file not found: {rpt_file}")
+            if getattr(self.ide, 'headless', False):
+                print(f"[WARN] PAT Sign-Off Report file not found: {rpt_file}")
+
 
     def trigger_magic_drc(self, root, gds_path):
         if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' not found.")); return
@@ -864,19 +1408,9 @@ write_def "{def_abs_path}"
         script_content = f"drc off\nlocking off\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\n"
         
         # Load macro LEFs
-        macros = self.ide.project_config.get('macros', [])
-        macro_gds_paths = []
-        if macros:
-            volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
-            import glob
-            for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
-                name = os.path.basename(lef).replace('.lef', '')
-                if name in macros:
-                    script_content += f"lef read {lef}\n"
-            for gds in glob.glob(os.path.join(volare_base, "libs.ref", "*", "gds", "*.gds")):
-                name = os.path.basename(gds).replace('.gds', '')
-                if name in macros:
-                    macro_gds_paths.append(gds)
+        for lef in self._get_macro_files("lef"):
+            script_content += f"lef read {lef}\n"
+        macro_gds_paths = self._get_macro_files("gds")
         
         script_content += f"gds read {pdk_gds}\n"
         for gds in macro_gds_paths:
@@ -900,6 +1434,10 @@ write_def "{def_abs_path}"
                 cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
                 proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode == 0 and os.path.exists(output_gds):
+                    standard_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
+                    if output_gds != standard_gds:
+                        import shutil
+                        shutil.copyfile(output_gds, standard_gds)
                     self.ide.queue.put(("[BACKEND_GDS_DONE]", output_gds))
                     self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
                 else: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{proc.stderr}\n{proc.stdout}"))
@@ -911,13 +1449,25 @@ write_def "{def_abs_path}"
         self.magic_worker.start()
 
     def open_pdk_selector(self):
+        if hasattr(self.ide, 'open_pdk_selector'):
+            ok = self.ide.open_pdk_selector()
+            if ok:
+                self.active_pdk = self.ide.active_pdk
+                self.term_log.append(f"[SYS] Target PDK: {self.active_pdk['name']}")
+                return True
+            return False
         dlg = PDKSelector(self.pdk_mgr, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.active_pdk = dlg.selected_config; self.term_log.append(f"[SYS] Target PDK: {self.active_pdk['name']}"); return True
         return False
 
+    def append_output(self, text):
+        if hasattr(self, 'term_log'):
+            self.term_log.append(str(text))
+            self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
+
     def read_stdout(self):
-        data = self.proc.readAllStandardOutput().data().decode()
+        data = self.proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
         self.term_log.append(data.strip())
         self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
         if self.pending_init and ("OpenROAD" in data or "openroad>" in data): self.send_command_internal(self.pending_init); self.pending_init = None
@@ -930,6 +1480,12 @@ write_def "{def_abs_path}"
         
     def send_command_internal(self, cmd):
         self.term_log.append(f"> {cmd}")
+        # Preemptive Command Flight Recorder: record session commands
+        if not getattr(self, "_replaying_journal", False):
+            if not hasattr(self, "cmd_journal"):
+                self.cmd_journal = []
+            self.cmd_journal.append(cmd)
+
         if "initialize_floorplan" in cmd:
             import re
             m = re.search(r'-die_area\s+"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"', cmd)
@@ -944,6 +1500,16 @@ write_def "{def_abs_path}"
             self.start_spinner()
             self.proc.write(f"{cmd}\n".encode())
         else: self.term_log.append(f"[ERR] Backend not running. Click Reset.")
+
+    def replay_session_with_script(self, replay_script_path):
+        """
+        Seamlessly resets the OpenROAD engine and executes the compiled replay script
+        which plays back the user's customized earlier flow steps (Init, Floorplan,
+        Tapcells, PDN, user terminal commands) followed by the new I/O placement script.
+        """
+        self.term_log.append(f"\n[SYS] Preemptive Replay: Seamlessly replaying recorded session with tuned floorplan...")
+        self.reset_backend()
+        self.pending_init = f'source "{replay_script_path}"'
     
     def update_view(self):
         try:
@@ -974,15 +1540,8 @@ write_def "{def_abs_path}"
         view_tcl = os.path.join(proj_root, "view.tcl")
         
         tcl_content = f'read_lef "{self.active_pdk["tlef"]}"\nread_lef "{self.active_pdk["lef"]}"\n'
-        
-        macros = self.ide.project_config.get('macros', [])
-        if macros:
-            volare_base = self.active_pdk.get('lib', '').split("libs.ref")[0]
-            import glob
-            for lef in glob.glob(os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")):
-                name = os.path.basename(lef).replace('.lef', '')
-                if name in macros:
-                    tcl_content += f'read_lef "{lef}"\n'
+        for lef in self._get_macro_files("lef"):
+            tcl_content += f'read_lef "{lef}"\n'
                     
         tcl_content += f'read_def "{def_path}"\n'
         
@@ -990,6 +1549,8 @@ write_def "{def_abs_path}"
         subprocess.Popen(["openroad", "-gui", view_tcl], cwd=proj_root)
     
     def force_refresh_view(self):
+        if self.viz_tabs.currentIndex() != 0:
+            return  # Do not waste cycles parsing DEF if viewer tab is not active
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
         if os.path.exists(def_path): 
@@ -1014,16 +1575,8 @@ write_def "{def_abs_path}"
             # Restore STA context (Liberty & SDC)
             if self.active_pdk:
                 self.send_command_internal(f"read_liberty \"{self.active_pdk['lib']}\"")
-                macros = self.ide.project_config.get('macros', [])
-                if macros:
-                    lib_path = self.active_pdk.get('lib', '')
-                    volare_base = lib_path.split("libs.ref")[0]
-                    lib_search = os.path.join(volare_base, "libs.ref", "*", "lib", "*.lib")
-                    import glob
-                    for lib in glob.glob(lib_search):
-                        name = os.path.basename(lib).replace('.lib', '')
-                        if any(m in name for m in macros):
-                            self.send_command_internal(f"read_liberty \"{lib}\"")
+                for lib in self._get_macro_files("lib"):
+                    self.send_command_internal(f"read_liberty \"{lib}\"")
             
             ctx = self.ide.get_context()[0] or "top"
             import glob

@@ -34,6 +34,9 @@ public:
                         const std::vector<float>& w, const std::vector<float>& h);
     void set_heatmap(int mode, const std::vector<float>& data);
     void fit_in_view();
+    void pan_to(float x, float y, float target_zoom = -1.0f);
+    void highlight_box(float x, float y, float w, float h, const std::string& name);
+    void clear_highlight();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -60,6 +63,9 @@ private:
     QPointF pan_offset_;
     bool is_panning_;
     QPointF last_mouse_pos_;
+    
+    QRectF highlight_rect_;
+    std::string highlight_name_;
     
     float lod_std_cells_ = 0.03f;
     float lod_nets_ = 0.05f;

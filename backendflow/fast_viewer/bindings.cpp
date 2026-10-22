@@ -20,6 +20,9 @@ PYBIND11_MODULE(fast_layout_viewer, m) {
         .def("load_blockages", &FastLayoutViewer::load_blockages)
         .def("set_heatmap", &FastLayoutViewer::set_heatmap)
         .def("fit_in_view", &FastLayoutViewer::fit_in_view)
+        .def("pan_to", &FastLayoutViewer::pan_to, py::arg("x"), py::arg("y"), py::arg("target_zoom") = -1.0f)
+        .def("highlight_box", &FastLayoutViewer::highlight_box, py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"), py::arg("name"))
+        .def("clear_highlight", &FastLayoutViewer::clear_highlight)
         .def("get_ptr", [](FastLayoutViewer& self) {
             return reinterpret_cast<uintptr_t>(&self);
         });

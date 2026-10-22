@@ -1,6 +1,10 @@
+import os
 import subprocess
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DEFAULT_PDK_ROOT = os.path.join(REPO_ROOT, "third-party", "pdks")
 
 class VolareWorker(QThread):
     finished = pyqtSignal(str, str) # cmd_type, output
@@ -9,15 +13,26 @@ class VolareWorker(QThread):
     def __init__(self, cmd_type, args=[]):
         super().__init__()
         self.cmd_type = cmd_type
-        self.args = args
+        self.args = list(args)
 
     def run(self):
-        cmd = ["volare"] + self.args
+        env = os.environ.copy()
+        pdk_root = env.get("PDK_ROOT", DEFAULT_PDK_ROOT)
+        os.makedirs(pdk_root, exist_ok=True)
+        env["PDK_ROOT"] = pdk_root
+
+        # Ensure --pdk-root is supplied if not already present
+        cmd_args = list(self.args)
+        if "--pdk-root" not in cmd_args and self.cmd_type not in ["--help", "-h"]:
+            cmd_args.extend(["--pdk-root", pdk_root])
+
+        cmd = ["volare"] + cmd_args
         try:
+            self.log.emit(f"[VOLARE] PDK Root: {pdk_root}")
             self.log.emit(f"[VOLARE] Running: {' '.join(cmd)}...")
             
             # Run Subprocess
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
             out, _ = proc.communicate()
             
             # === [FIX] Graceful Handling for "Not Found" ===
@@ -38,6 +53,7 @@ class VolareWorker(QThread):
             self.finished.emit("error", "Volare executable not found. Please install: pip install volare")
         except Exception as e:
             self.finished.emit("error", str(e))
+
 
 
 class VolareManagerWidget(QWidget):

@@ -9,7 +9,10 @@ from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from PyQt6 import sip
 
-sys.path.append("/home/jerome/silis/third-party/GDS3D/build")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+gds3d_build_dir = os.path.join(REPO_ROOT, "third-party", "GDS3D", "build")
+if gds3d_build_dir not in sys.path:
+    sys.path.append(gds3d_build_dir)
 try:
     import gds3d_engine
 except ImportError:
@@ -163,7 +166,32 @@ class GDS3DPort(QWidget):
         h_lay.addWidget(self.btn_load)
         h_lay.addWidget(self.btn_close)
         self.layout.addWidget(self.header)
-        
+
+        self.canvas = QWidget()
+        self.canvas.setStyleSheet("background: #2d2d2d;")
+        self.canvas_layout = QVBoxLayout(self.canvas)
+        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addWidget(self.canvas, stretch=1)
+
+        self.core = None
+        self.native_widget = None
+
+    def ensure_engine(self):
+        if self.core is not None:
+            return self.core
+        if gds3d_engine:
+            self.core = gds3d_engine.GDS3DViewerCore()
+            ptr = self.core.get_ptr()
+            self.native_widget = sip.wrapinstance(ptr, QWidget)
+            self.canvas_layout.addWidget(self.native_widget)
+        else:
+            self.canvas_layout.addWidget(QLabel("GDS3D Engine failed to load! Compile it first."))
+        return self.core
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.ensure_engine()
+
     def close_viewer(self):
         parent = self.parent()
         while parent:
@@ -172,23 +200,6 @@ class GDS3DPort(QWidget):
                 parent.setCurrentIndex(0)
                 break
             parent = parent.parent()
-        
-        self.canvas = QWidget()
-        self.canvas.setStyleSheet("background: #2d2d2d;")
-        self.canvas_layout = QVBoxLayout(self.canvas)
-        self.canvas_layout.setContentsMargins(0,0,0,0)
-        self.layout.addWidget(self.canvas, stretch=1)
-        
-        self.core = None
-        self.native_widget = None
-        
-        if gds3d_engine:
-            self.core = gds3d_engine.GDS3DViewerCore()
-            ptr = self.core.get_ptr()
-            self.native_widget = sip.wrapinstance(ptr, QWidget)
-            self.canvas_layout.addWidget(self.native_widget)
-        else:
-            self.canvas_layout.addWidget(QLabel("GDS3D Engine failed to load! Compile it first."))
 
     def prompt_load(self):
         try:
@@ -202,10 +213,30 @@ class GDS3DPort(QWidget):
         self.load_gds(gds_path)
 
     def load_gds(self, path):
-        if not os.path.exists(path) or not self.core: return
-        process_file = os.path.expanduser("~/silis/third-party/GDS3D/techfiles/sky130.txt")
-        if not os.path.exists(process_file):
-            print("Warning: Missing sky130.txt process file for GDS3D!")
+        self.ensure_engine()
+        if not os.path.exists(path) or not self.core:
             return
-        
+
+        tech_dir = os.path.join(REPO_ROOT, "third-party", "GDS3D", "techfiles")
+        pdk_name = "sky130"
+        if hasattr(self, 'ide') and self.ide and getattr(self.ide, 'active_pdk', None):
+            pdk_name = self.ide.active_pdk.get('name', 'sky130').lower()
+
+        if "gf180" in pdk_name:
+            candidates = ["gf180mcu.txt", "sg13g2.txt", "sky130.txt"]
+        else:
+            candidates = ["sky130.txt", "sky130_s10.txt", "gds3d_techfile.txt"]
+
+        process_file = ""
+        for c in candidates:
+            cand_path = os.path.join(tech_dir, c)
+            if os.path.exists(cand_path):
+                process_file = cand_path
+                break
+
+        if not process_file:
+            process_file = os.path.join(tech_dir, "sky130.txt")
+
+        print(f"[GDS3D] Loading {path} with process tech: {process_file}")
         self.core.load_gds(path, process_file, "")
+

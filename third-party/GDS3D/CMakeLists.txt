@@ -41,6 +41,10 @@ set(GDS3D_SOURCES
     bindings_gds3d.cpp
 )
 
+set(CMAKE_BUILD_RPATH "$ORIGIN;/home/eatheswar/.local/lib/python3.12/site-packages/PyQt6/Qt6/lib;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib")
+set(CMAKE_INSTALL_RPATH "$ORIGIN;/home/eatheswar/.local/lib/python3.12/site-packages/PyQt6/Qt6/lib;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
+
 pybind11_add_module(gds3d_engine ${GDS3D_SOURCES})
 
 target_link_libraries(gds3d_engine PRIVATE
@@ -49,3 +53,8 @@ target_link_libraries(gds3d_engine PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets
 )
+
+add_custom_command(TARGET gds3d_engine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gds3d_engine> ${CMAKE_CURRENT_SOURCE_DIR}/
+)
+

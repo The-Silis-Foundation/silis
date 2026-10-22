@@ -1,0 +1,39 @@
+#!/bin/bash
+# Silis AppRun for AppImage & portable execution
+set -e
+
+# Resolve base directories
+if [ -z "$APPDIR" ]; then
+    APPDIR="$(cd "$(dirname "$0")" && pwd)"
+fi
+
+export APPDIR
+export REPO_ROOT="$APPDIR"
+
+# 1. PDK Root default inside AppDir bundle (self-contained)
+export PDK_ROOT="${PDK_ROOT:-$APPDIR/third-party/pdks}"
+mkdir -p "$PDK_ROOT"
+
+# 2. Dynamic Library Paths
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib:$APPDIR/opt/python/lib:$APPDIR/terminal:$APPDIR/clocktreeviewer:$APPDIR/synthengine:$APPDIR/backendflow/fast_viewer:$APPDIR/editor:$APPDIR/schematicviewer:$APPDIR/third-party/GDS3D:$LD_LIBRARY_PATH"
+
+# 3. Python Environment
+export PYTHONPATH="$APPDIR:$APPDIR/third-party:$PYTHONPATH"
+
+# 4. Qt6 & QtWebEngine Discovery
+if [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
+    export QTWEBENGINEPROCESS_PATH="$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess"
+    export QTWEBENGINE_RESOURCES_PATH="$APPDIR/usr/share/qt6/resources"
+    export QTWEBENGINE_LOCALES_PATH="$APPDIR/usr/share/qt6/translations/qtwebengine_locales"
+fi
+
+# 5. Binaries in PATH (OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
+export PATH="$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
+
+# 6. Execute Python Application
+PYTHON_BIN="$(which python3 2>/dev/null || echo "python3")"
+if [ -f "$APPDIR/usr/bin/python3" ]; then
+    PYTHON_BIN="$APPDIR/usr/bin/python3"
+fi
+
+exec "$PYTHON_BIN" "$APPDIR/silis.py" "$@"

@@ -29,4 +29,4 @@ target_include_directories(synth_engine PRIVATE
 )
 
 # Link OpenSTA and its dependencies
-target_link_libraries(synth_engine PRIVATE OpenSTA sta_swig tcl cudd)
+target_link_libraries(synth_engine PRIVATE OpenSTA sta_swig tcl ${CUDD_LIBRARY})

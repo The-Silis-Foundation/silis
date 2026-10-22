@@ -42,14 +42,23 @@ class VSCodeTerminalWidget(QWidget):
 
         import sys
         terminal_dir = os.path.dirname(os.path.abspath(__file__))
-        if terminal_dir not in sys.path:
-            sys.path.insert(0, terminal_dir)
-        import terminal_engine
-        from PyQt6.sip import wrapinstance
+        build_dir = os.path.join(terminal_dir, "build")
+        for p in [terminal_dir, build_dir]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
         
-        self.core = terminal_engine.TerminalWidgetCore()
-        ptr = self.core.get_ptr()
-        self.term_widget = wrapinstance(ptr, QWidget)
+        try:
+            import PyQt6.QtDBus
+            import terminal_engine
+            from PyQt6.sip import wrapinstance
+            self.core = terminal_engine.TerminalWidgetCore()
+            ptr = self.core.get_ptr()
+            self.term_widget = wrapinstance(ptr, QWidget)
+        except Exception as e:
+            self.core = None
+            self.term_widget = QLabel(f"Terminal engine not compiled: {e}\nTerminal running in fallback mode.")
+            self.term_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.term_widget.setStyleSheet("color: #888888; font-size: 13px;")
         
         self.term_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.term_widget.setMinimumHeight(50)
@@ -59,8 +68,9 @@ class VSCodeTerminalWidget(QWidget):
         lay.addWidget(self.term_widget)
         
         # We start the shell and pass the current directory
-        cwd = getattr(self.ide, 'cwd', os.getcwd())
-        self.core.start_shell("", cwd)
+        if self.core:
+            cwd = getattr(self.ide, 'cwd', os.getcwd())
+            self.core.start_shell("", cwd)
 
         current_theme = USER_SETTINGS.get('theme_name', 'Catppuccin Mocha')
         self.update_appearance(USER_SETTINGS.get('font_family', 'Consolas'), USER_SETTINGS.get('font_size', 12), THEMES.get(current_theme, THEMES['Catppuccin Mocha']))
@@ -68,17 +78,20 @@ class VSCodeTerminalWidget(QWidget):
     def update_appearance(self, font_family, font_size, theme):
         import json
         self.setStyleSheet(f"background-color: {theme.get('bg', '#1e1e1e')}; color: {theme.get('fg', '#cccccc')};")
-        self.core.apply_theme(json.dumps(theme))
-        self.core.set_font(font_family, font_size)
+        if self.core:
+            self.core.apply_theme(json.dumps(theme))
+            self.core.set_font(font_family, font_size)
 
     def _strip_ansi(self, text):
         return self.ANSI_ESCAPE.sub('', text)
 
     def append_output(self, text, color="#cccccc"):
         """Forward output to the native terminal widget"""
-        self.core.send_text(str(text) + "\n")
+        if self.core:
+            self.core.send_text(str(text) + "\n")
         
     def clear_log(self):
-        self.core.send_text("\x1b[2J\x1b[H")
+        if self.core:
+            self.core.send_text("\x1b[2J\x1b[H")
 
 

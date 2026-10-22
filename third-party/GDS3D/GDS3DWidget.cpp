@@ -8,9 +8,13 @@ GDS3DWidget::GDS3DWidget(QWidget *parent) : QOpenGLWidget(parent) {
     
     render_timer = new QTimer(this);
     connect(render_timer, &QTimer::timeout, this, [this]() {
-        update();
+        if (isVisible() && wm && wm->getWorld()) {
+            update();
+        } else if (!isVisible() && render_timer->isActive()) {
+            render_timer->stop();
+        }
     });
-    render_timer->start(16); // Target ~60 FPS
+    // On-demand rendering: do not start continuous timer until shown
 }
 
 GDS3DWidget::~GDS3DWidget() {
@@ -48,27 +52,37 @@ void GDS3DWidget::resizeGL(int w, int h) {
 
 void GDS3DWidget::paintGL() {
     static_cast<Wm_Qt*>(wm.get())->texts.clear();
-    
-    // Safely draw 2D text overlay using QPainter directly onto the active FBO context!
-    // We MUST wrap raw OpenGL calls in beginNativePainting/endNativePainting to prevent flickering!
-    QPainter painter(this);
-    painter.beginNativePainting();
-    
+
     if (wm->getWorld()) {
-        // This will issue raw OpenGL commands and also populate the texts buffer
+        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+
         wm->draw();
+
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glPopAttrib();
     }
-    
-    painter.endNativePainting();
-    QFont font = painter.font();
-    font.setPixelSize(14);
-    painter.setFont(font);
-    
-    for (const auto& cmd : static_cast<Wm_Qt*>(wm.get())->texts) {
-        painter.setPen(QColor(cmd.color.GetX() * 255, cmd.color.GetY() * 255, cmd.color.GetZ() * 255, cmd.color.GetW() * 255));
-        painter.drawText(cmd.x, cmd.y + 12, QString::fromStdString(cmd.text));
+
+    // Safely draw 2D text overlay using QPainter after GL attributes have been cleanly restored
+    const auto& text_cmds = static_cast<Wm_Qt*>(wm.get())->texts;
+    if (!text_cmds.empty()) {
+        QPainter painter(this);
+        QFont font = painter.font();
+        font.setPixelSize(13);
+        painter.setFont(font);
+
+        for (const auto& cmd : text_cmds) {
+            painter.setPen(QColor(cmd.color.GetX() * 255, cmd.color.GetY() * 255, cmd.color.GetZ() * 255, cmd.color.GetW() * 255));
+            painter.drawText(cmd.x, cmd.y + 12, QString::fromStdString(cmd.text));
+        }
+        painter.end();
     }
-    painter.end();
 }
 
 int GDS3DWidget::translate_button(Qt::MouseButton button) {
@@ -161,6 +175,20 @@ void GDS3DWidget::keyPressEvent(QKeyEvent *event) {
               event->modifiers() & Qt::ControlModifier,
               event->modifiers() & Qt::AltModifier);
     update();
+}
+
+void GDS3DWidget::showEvent(QShowEvent *event) {
+    QOpenGLWidget::showEvent(event);
+    if (render_timer && !render_timer->isActive()) {
+        render_timer->start(16); // ~60 FPS only while visible
+    }
+}
+
+void GDS3DWidget::hideEvent(QHideEvent *event) {
+    QOpenGLWidget::hideEvent(event);
+    if (render_timer && render_timer->isActive()) {
+        render_timer->stop();
+    }
 }
 
 void GDS3DWidget::keyReleaseEvent(QKeyEvent *event) {

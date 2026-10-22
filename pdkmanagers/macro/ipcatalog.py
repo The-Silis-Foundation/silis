@@ -67,17 +67,31 @@ class MacroPickerWidget(QDialog):
         splitter.setSizes([300, 700])
 
     def scan_macros(self):
-        if not self.pdk_cfg: return
-        lib_path = self.pdk_cfg.get('lib', '')
-        if "libs.ref" not in lib_path: return
+        # 1. Scan PDK libs.ref
+        if self.pdk_cfg:
+            lib_path = self.pdk_cfg.get('lib', '')
+            if "libs.ref" in lib_path:
+                try:
+                    volare_base = lib_path.split("libs.ref")[0]
+                    stdcell_name = lib_path.split("libs.ref/")[1].split("/")[0]
+                    search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
+                    for lef in glob.glob(search_path):
+                        if stdcell_name not in lef:
+                            name = os.path.basename(lef).replace('.lef', '')
+                            self.macros[name] = lef
+                except Exception:
+                    pass
+
+        # 2. Scan Central Silis Macro Cache (~/.silis/macrocache/<pdk>/)
         try:
-            volare_base = lib_path.split("libs.ref")[0]
-            stdcell_name = lib_path.split("libs.ref/")[1].split("/")[0]
-            search_path = os.path.join(volare_base, "libs.ref", "*", "lef", "*.lef")
-            for lef in glob.glob(search_path):
-                if stdcell_name not in lef:
-                    name = os.path.basename(lef).replace('.lef', '')
-                    self.macros[name] = lef
+            silis_cache = os.path.expanduser("~/.silis/macrocache")
+            if os.path.isdir(silis_cache):
+                for m_dir in glob.glob(os.path.join(silis_cache, "*", "*")):
+                    if os.path.isdir(m_dir):
+                        m_name = os.path.basename(m_dir)
+                        cand_lef = os.path.join(m_dir, f"{m_name}.lef")
+                        if os.path.isfile(cand_lef):
+                            self.macros[m_name] = cand_lef
         except Exception:
             pass
 
@@ -122,7 +136,7 @@ class MacroPickerWidget(QDialog):
 
     def draw_symbol(self, name):
         self.scene.clear()
-        self.view.setBackgroundBrush(QBrush(QColor("#1E1E1E")))
+        self.view.setBackgroundBrush(QBrush(QColor("#000000")))
         
         in_pins = self.pins_data['input']
         out_pins = self.pins_data['output'] + self.pins_data['inout']
@@ -135,7 +149,7 @@ class MacroPickerWidget(QDialog):
         h = max_edge * spacing + 40
         w = max(150, len(pwr_pins) * 30 + 40)
         
-        box = self.scene.addRect(0, 0, w, h, QPen(QColor("#4A5568"), 2), QBrush(QColor("#2D323A")))
+        box = self.scene.addRect(0, 0, w, h, QPen(QColor("#4A5568"), 2), QBrush(QColor("#181825")))
         box.setZValue(-1)
         
         t = self.scene.addText(name)
@@ -143,13 +157,13 @@ class MacroPickerWidget(QDialog):
         f.setPointSize(12)
         f.setBold(True)
         t.setFont(f)
-        t.setDefaultTextColor(QColor("#E2E8F0"))
+        t.setDefaultTextColor(QColor("#ffffff"))
         t.setPos(w/2 - t.boundingRect().width()/2, h/2 - t.boundingRect().height()/2)
         
         y = 20
         for p in in_pins:
             self.scene.addLine(-15, y, 0, y, QPen(QColor("#A0AEC0")))
-            pt = HoverTextItem(p, "#E2E8F0")
+            pt = HoverTextItem(p, "#ffffff")
             font = pt.font(); font.setPointSize(font_sz); pt.setFont(font)
             self.scene.addItem(pt)
             pt.setPos(-pt.boundingRect().width() - 15, y - pt.boundingRect().height()/2)
@@ -158,7 +172,7 @@ class MacroPickerWidget(QDialog):
         y = 20
         for p in out_pins:
             self.scene.addLine(w, y, w+15, y, QPen(QColor("#A0AEC0")))
-            pt = HoverTextItem(p, "#E2E8F0")
+            pt = HoverTextItem(p, "#ffffff")
             font = pt.font(); font.setPointSize(font_sz); pt.setFont(font)
             self.scene.addItem(pt)
             pt.setPos(w + 15, y - pt.boundingRect().height()/2)
@@ -167,7 +181,7 @@ class MacroPickerWidget(QDialog):
         x = 20
         for p in pwr_pins:
             self.scene.addLine(x, -15, x, 0, QPen(QColor("#A0AEC0")))
-            pt = HoverTextItem(p, "#E2E8F0")
+            pt = HoverTextItem(p, "#ffffff")
             font = pt.font(); font.setPointSize(font_sz); pt.setFont(font)
             self.scene.addItem(pt)
             pt.setPos(x - pt.boundingRect().width()/2, -15 - pt.boundingRect().height())

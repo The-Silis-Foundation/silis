@@ -29,9 +29,13 @@ class YosysStructuralWorker(QThread):
             vhdl_files = sorted(vhdl_files, key=lambda x: 0 if any(k in os.path.basename(x).lower() for k in ['pack', 'pkg', 'type', 'const']) else 1)
             
             if vhdl_files:
-                f.write("plugin -i ghdl;\n")
+                plugin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "third-party", "plugins", "ghdl.so"))
+                if os.path.exists(plugin_path):
+                    f.write(f"plugin -i {plugin_path};\n")
+                else:
+                    f.write("plugin -i ghdl;\n")
                 work_lib = os.path.basename(self.root)
-                if "neorv32" in self.root.lower() or "neorv32" in work_lib.lower():
+                if any("neorv32" in str(x).lower() for x in [self.root, self.module_name, work_lib] + vhdl_files):
                     work_lib = "neorv32"
                 f.write(f"ghdl --work={work_lib} {' '.join(vhdl_files)} -e {self.module_name};\n")
                 
