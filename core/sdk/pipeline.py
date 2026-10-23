@@ -107,6 +107,10 @@ class Pipeline:
         from .sdc import SDCBuilder
         self.sdc = SDCBuilder(design_name=self.project.top_module)
 
+        # OpenROAD OpenDB Query & Inspection Engine
+        from .opendb_bridge import OpenDBBridge
+        self.db = OpenDBBridge(self)
+
     def process_events(self, iterations: int = 10, delay_ms: int = 5) -> None:
         """Pumps Qt event loop so QProcess, QThread, and timer events are processed."""
         if not self.app:
@@ -119,11 +123,21 @@ class Pipeline:
     # --------------------------------------------------------------------------
     # Flow Step Methods
     # --------------------------------------------------------------------------
-    def synthesis(self, tcl: Optional[str] = None, dft: bool = False) -> bool:
+    def synthesis(
+        self,
+        tcl: Optional[str] = None,
+        corner: Optional[str] = "tt",
+        mcmm: Optional[Dict[str, str]] = None,
+        dft: bool = False,
+        flatten: bool = False,
+    ) -> SynthesisReport:
         """Runs frontend RTL synthesis, scan insertion (if dft=True), and technology mapping."""
-        res = self.runner.run_synthesis(tcl_arg=tcl, dft=dft)
+        self.runner.run_synthesis(tcl_arg=tcl, dft=dft, flatten=flatten, corner=corner, mcmm=mcmm)
         self.process_events()
-        return bool(res)
+        return self.project.get_synthesis_report()
+
+    # Alias
+    synth = synthesis
 
     def init(self, tcl: Optional[str] = None) -> bool:
         """Initializes OpenROAD, links PDK LEF/LIBs, and reads the synthesized netlist."""
@@ -421,6 +435,58 @@ class Pipeline:
             w_r2io=w_r2io,
             allow_non_rectangular=allow_non_rectangular,
         )
+
+    def auto_shape_regions(
+        self,
+        module_names: Optional[List[str]] = None,
+        target_density: float = 0.70,
+        min_cutoff_pct: float = 3.0,
+        core_margin: Union[float, Tuple[float, float, float, float]] = 15.0,
+        as_fence: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Convenience method to auto-shape and auto-place inclusive floorplanning regions.
+        If module_names is provided, explicitly shapes those modules at target_density.
+        Applies a default contribution cutoff of 3% for automatic subtree qualifying.
+        """
+        regions = []
+        if module_names:
+            for m in module_names:
+                regions.append({"module": m, "density": target_density, "is_fence": as_fence})
+
+        # Query current die area if already initialized
+        die = self.db.die_area
+        if die == (0.0, 0.0, 0.0, 0.0):
+            die = (0.0, 0.0, 2000.0, 2000.0)
+
+        res = self.auto_place_regions(
+            die_area=die,
+            core_margin=core_margin,
+            regions=regions,
+            target_density=target_density,
+            min_cutoff_pct=min_cutoff_pct,
+            force_place_all=True,
+            force_auto_shape=True,
+            as_fence=as_fence,
+        )
+
+        # Apply placed regions to OpenROAD floorplan
+        placed_list = res.get("regions", [])
+        if placed_list:
+            tcl_lines = []
+            for r in placed_list:
+                m_name = r.get("module")
+                box = r.get("box", [0, 0, 0, 0])
+                if m_name and box:
+                    tcl_lines.append(f'catch {{ create_region -name "reg_{m_name}" -region {{{box[0]} {box[1]} {box[2]} {box[3]}}} }}')
+                    tcl_lines.append(f'catch {{ assign_region -name "reg_{m_name}" [get_cells "{m_name}"] }}')
+            if tcl_lines:
+                def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
+                tcl_lines.append(f'write_def "{def_path}"')
+                self.runner.execute_tcl("\n".join(tcl_lines) + "\n", "auto_shape_regions")
+                self.process_events()
+
+        return res
 
     def add_blockage(
         self,

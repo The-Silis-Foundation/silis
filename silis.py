@@ -48,8 +48,9 @@ try:
         Pipeline,
         SignoffReport,
         SynthesisReport,
-
         DRCReport,
+        create_project,
+        load_project,
         view_layout,
         view_gds3d,
         view_waveforms,
@@ -58,6 +59,9 @@ try:
     )
 except Exception:
     pass
+
+# Direct alias for clean SDK usage: silis.load()
+load = load_project
 
 class SilisExplorer(QTreeView):
     fileOpened = pyqtSignal(str)
@@ -944,14 +948,14 @@ class SilisIDE(QMainWindow):
 
         # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
         # Note the 'tee -o reports/area.rpt' to save area stats to a file
+        flatten_cmd = "flatten\n        " if getattr(self, "synth_flatten", False) else "#flatten\n        "
         ys = f"""
         read_liberty -lib {self.pdk_path}
         {macro_lib_cmds_yosys}{read_cmd}
         synth -top {base}
         dfflibmap -liberty {self.pdk_path}
         abc -liberty {self.pdk_path}
-        #flatten
-        tee -o {os.path.join(root, 'reports', 'area.rpt')} stat -liberty {self.pdk_path} -json
+        {flatten_cmd}tee -o {os.path.join(root, 'reports', 'area.rpt')} stat -liberty {self.pdk_path} -json
         write_verilog -noattr {v_net}
         """
         

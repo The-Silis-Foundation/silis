@@ -309,12 +309,21 @@ if {[info commands gds] eq ""} {
     # --------------------------------------------------------------------------
     # Flow Steps
     # --------------------------------------------------------------------------
-    def run_synthesis(self, tcl_arg=None, dft=False):
+    def run_synthesis(self, tcl_arg=None, dft=False, flatten=False, corner=None, mcmm=None):
         print("\n" + "=" * 65)
-        print(f" [ASIC FRONTEND] RTL Synthesis: {self.config['top_module']}{' [DFT SCAN]' if dft else ''}")
+        print(f" [ASIC FRONTEND] RTL Synthesis: {self.config['top_module']}{' [DFT SCAN]' if dft else ''}{' [FLATTEN]' if flatten else ''}")
         print("=" * 65)
 
         self.ide.enable_dft = dft
+        self.ide.synth_flatten = flatten
+        if corner and hasattr(self.ide, 'active_pdk') and self.ide.active_pdk:
+            # If a specific corner or lib requested
+            corners = self.ide.active_pdk.get('corners', {})
+            if corner in corners:
+                self.ide.active_pdk['lib'] = corners[corner]
+                self.ide.pdk_path = corners[corner]
+        if mcmm:
+            self.ide.selected_mcmm_corners = mcmm
         if hasattr(self.ide, 'tab_synth') and hasattr(self.ide.tab_synth, 'chk_dft'):
             self.ide.tab_synth.chk_dft.setChecked(dft)
 

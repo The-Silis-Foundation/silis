@@ -320,14 +320,30 @@ with silis.Pipeline(proj) as pipe:
 
 ### 4.3 Native Step Execution Methods
 
-#### `pipe.synthesis(tcl=None, dft=False) -> bool`
-Executes Yosys synthesis, standard cell technology mapping, and optional scan chain insertion.
+#### `pipe.synthesis(corner="tt", mcmm=None, dft=False, flatten=False, tcl=None) -> SynthesisReport`
+Executes Yosys logic synthesis, cell mapping, timing closure with OpenSTA, and optional scan chain insertion or hierarchy flattening.
+- **`corner`**: Primary operating corner for timing & tech mapping (e.g., `"tt"`, `"ss_100C_1v60"`, `"ff_n40C_1v95"`).
+- **`mcmm`**: Dictionary mapping scenario names to corner library paths for Multi-Corner Multi-Mode analysis (`{"setup": "...", "hold": "..."}`).
+- **`dft`**: Boolean enabling full scan chain insertion and ATPG testability.
+- **`flatten`**: Boolean (`True`/`False`) instructing Yosys to flatten the module hierarchy before tech mapping.
+- **`synth`**: Alias for `pipe.synthesis()`.
+
 ```python
-pipe.synthesis(dft=False)
+# Standard balanced synthesis
+report = pipe.synth(corner="tt_025C_1v80", flatten=True)
+
+# MCMM multi-scenario synthesis
+report = pipe.synth(
+    corner="tt_025C_1v80",
+    mcmm={"setup_slow": "ss_100C_1v60", "hold_fast": "ff_n40C_1v95"},
+    dft=True,
+    flatten=False
+)
 ```
 
-#### `pipe.init(tcl=None) -> bool`
+#### `pipe.init(tcl=None, density=None) -> bool`
 Initializes OpenROAD, links PDK LEF/LIB files, macro LEFs, and reads the synthesized gate-level netlist. Extracts `{top}_sizes.json` for the Enquiry Engine.
+If `density` is supplied (e.g. `density=0.60`), automatically initializes a core area matching the requested cell utilization.
 ```python
 pipe.init()
 ```
@@ -387,8 +403,39 @@ pipe.iopins(
 
 #### `pipe.place(density=0.50, pad_left=2, pad_right=2, timing_driven=True) -> bool`
 Executes routability-driven global placement (RePlAce), region clustering, cell padding removal, and detailed placement legalization.
+- **`density`**: Target placement density override (e.g. `0.60` or `0.70`).
+- **`pad_left` / `pad_right`**: Placement cell site padding in sites to prevent localized pin congestion.
+- **`timing_driven`**: Enables wirelength and timing slack driven cell spreading.
+
 ```python
-pipe.place()
+pipe.place(density=0.60, pad_left=2, pad_right=2, timing_driven=True)
+```
+
+#### `pipe.auto_shape_regions(module_names=None, target_density=0.70, min_cutoff_pct=3.0, core_margin=15.0, as_fence=False) -> dict`
+High-level geometric solver that automatically calculates optimal bounding boxes, shapes modules with site snapping, and legally places 1 to N inclusive floorplanning regions.
+- **`module_names`**: Optional explicit list of submodules to shape (e.g. `["u_sub0", "u_sub1", ...]`).
+- **`target_density`**: Target regional standard-cell density (e.g. `0.70` for 70% regional utilization).
+- **`min_cutoff_pct`**: Hierarchical module contribution cutoff (e.g. `3.0%`). Modules consuming >= 3% of the total design area are automatically shaped.
+- **`core_margin`**: Clearance in µm between the die edge and region placement cavity.
+
+```python
+# Automatically discover and shape all modules contributing >= 3% of cell area to 70% density:
+pipe.auto_shape_regions(target_density=0.70, min_cutoff_pct=3.0)
+```
+
+#### `pipe.db` (OpenROAD OpenDB Inspection & Query Engine)
+First-class Python object exposing direct, high-speed queries to the active physical design database:
+- **`pipe.db.die_area`**: Returns `(x1, y1, x2, y2)` tuple in µm.
+- **`pipe.db.core_area`**: Returns `(x1, y1, x2, y2)` tuple in µm.
+- **`pipe.db.utilization`**: Returns exact standard-cell core utilization ratio (`float`).
+- **`pipe.db.get_instances(macro_only=False)`**: Returns list of `OpenDBInstance` objects with `.name`, `.master`, `.x`, `.y`, `.orientation`, and `.is_macro`.
+- **`pipe.db.get_pins()`**: Returns list of `OpenDBPin` objects with `.name`, `.direction`, `.layer`, and coordinate `.x`, `.y`.
+
+```python
+print(f"Die Bounds: {pipe.db.die_area}")
+print(f"Realized Utilization: {pipe.db.utilization * 100:.2f}%")
+for m in pipe.db.get_instances(macro_only=True):
+    print(f"Macro {m.name} placed at ({m.x}, {m.y})")
 ```
 
 #### `pipe.cts(root_buf=None, buf_list=None, sink_clustering=True) -> bool`

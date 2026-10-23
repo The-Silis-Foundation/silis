@@ -26,6 +26,8 @@ from sdk import (
     SignoffReport,
     SynthesisReport,
     DRCReport,
+    create_project,
+    load_project,
     view_layout,
     view_gds3d,
     view_waveforms,
@@ -36,6 +38,8 @@ from sdk import (
     from_sc,
     to_sc,
 )
+
+load = load_project
 
 # Re-export SilisIDE class from silis.py module
 def _get_silis_ide():
