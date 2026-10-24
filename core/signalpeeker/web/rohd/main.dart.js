@@ -102166,16 +102166,7 @@ akG(){if(!this.a.e)return
 var s=this.d
 s===$&&A.a()
 s.dR()},
-G(a){var s,r,q,p,o,n=this,m=null,l=n.a
-if(!l.e)return A.em(A.c([l.c,A.fc(l.d,1)],t.p),B.M,B.E,B.a7)
-l=l.c
-s=A.bD(a,m,t.w).w
-r=n.a
-q=A.pF(0,r.d)
-p=A.fO(m,A.d0(B.hf,B.ag,m,m,new A.aw2(n),m,m,!1),12,m,0,0,0,m)
-o=n.e
-o===$&&A.a()
-return A.fj(B.aM,A.c([q,p,A.fO(m,A.nS(A.d0(A.TR(r.c,0.92),B.ag,m,m,new A.aw3(n),new A.aw4(n),m,!0),o,m,!0),l.fy.b+s.r.b,m,0,0,0,m)],t.p),B.t,B.BY,m)}}
+G(a){return this.a.d}                                                                                                                                                                                                                                                                                                                                                                   
 A.aw2.prototype={
 $1(a){var s=this.a.d
 s===$&&A.a()
@@ -104761,14 +104752,14 @@ j=A.kY(A.eE(m,m,A.aPR(s,B.Ou,l),16,m,new A.aKa(n),B.ah,m,m),m,j,m,m)
 l=n.fx
 l===$&&A.a()
 s=t.p
-l=A.c([A.Br(B.Nn,"\ud83c\udf0a",m,l,24),B.Yk,B.a0i],s)
+l=A.c([A.B"",m,l,0),B.Yk,new A.e3("",null,null,null,null,null,null,null,null,null)],s)
 r=n.at
 if(r!=null)B.b.M(l,A.c([B.jv,A.bM("- "+r,m,m,m,m,B.CN,m,m)],s))
 l=A.dT(l,B.M,B.E,B.a7)
 s=A.c([],s)
 r=n.cy
 r===$&&A.a()
-if(!r)s.push(A.eE(m,m,B.a26,m,m,n.CW?m:n.galF(),m,m,"Load waveform file"))
+if(!1)s.push(A.eE(m,m,B.a26,m,m,n.CW?m:n.galF(),m,m,"Load waveform file"))
 q=n.db
 q===$&&A.a()
 p=!q
@@ -115817,7 +115808,7 @@ B.qR=s([],t.ee)
 B.a4h=s([],t.Iw)
 B.QB=s([],t._m)
 B.qT=s([],A.au("w<+expectedName,fieldLabel,startBit,subLogicType,width(l,l,n,aA<l,G?>?,n)>"))
-B.QD=s([0.2,0.15,0.65],t.n)
+B.QD=s([0.22,0.18,0.6],t.n)
 B.dO=new A.h(0,2)
 B.Hn=new A.bC(0.75,B.V,B.oW,B.dO,1.5)
 B.QJ=s([B.Hn],t.F)
@@ -115832,7 +115823,7 @@ B.a28=new A.jO(2,"fallingEdge")
 B.a05=new A.e3("Falling edge",null,null,null,null,null,null,null,null,null)
 B.Lp=new A.lw(B.a28,B.a05,B.c5,null,t.Si)
 B.QS=s([B.Lq,B.Lr,B.Lp],A.au("w<lw<jO>>"))
-B.QU=s([0.2,0.18,0.62],t.n)
+B.QU=s([0.22,0.18,0.6],t.n)
 B.Po=s([0.001200833568784504,0.002389694492170889,0.0002795742885861124],t.n)
 B.Qm=s([0.0005891086651375999,0.0029785502573438758,0.0003270666104008398],t.n)
 B.PD=s([0.00010146692491640572,0.0005364214359186694,0.0032979401770712076],t.n)

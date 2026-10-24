@@ -184,25 +184,81 @@ class CompileTab(QWidget):
         
         self.split.addWidget(self.explorer_panel)
 
-        # Right: Code + Terminal
+        # Right: Top Area (Monaco Code + sv-pathfinder Schematic) & Bottom Area (Terminal + Waveform)
         self.right_split = QSplitter(Qt.Orientation.Vertical)
         self.split.addWidget(self.right_split)
         
-        # Code
+        # Top Container: Splitter between Monaco Editor and Schematic Canvas
+        self.top_work_split = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Code Container
         self.code_container = QWidget()
         c_lay = QVBoxLayout(self.code_container); c_lay.setContentsMargins(0,0,0,0)
         self.editor = VSCodeEditorTabs()
         c_lay.addWidget(self.editor)
-        self.right_split.addWidget(self.code_container)
+        self.top_work_split.addWidget(self.code_container)
+
+        # Schematic Container (Initially hidden until compile/schematic requested)
+        from schematicviewer.graphiccanvas import SchematicTab
+        self.schem_container = QWidget()
+        s_lay = QVBoxLayout(self.schem_container); s_lay.setContentsMargins(0,0,0,0)
+        self.schem_view = SchematicTab(self.ide)
+        s_lay.addWidget(self.schem_view)
+        self.top_work_split.addWidget(self.schem_container)
+        self.schem_container.hide() # Hidden initially
         
-        # ── VS Code-style terminal ──────────────────────────────────────────
+        self.top_work_split.setStretchFactor(0, 1)
+        self.top_work_split.setStretchFactor(1, 1)
+        self.right_split.addWidget(self.top_work_split)
+        
+        # Bottom Container: Tabbed Terminal & Waveform Viewer
+        self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setDocumentMode(True)
+        
+        # Tab 1: VS Code-style Terminal
         self.terminal = VSCodeTerminalWidget(self.ide)
-        self.right_split.addWidget(self.terminal)
+        self.bottom_tabs.addTab(self.terminal, "Terminal")
+        
+        # Tab 2: ROHD Waveform Viewer
+        from signalpeeker.code import SignalPeeker
+        self.wave_view = SignalPeeker(self.ide)
+        self.bottom_tabs.addTab(self.wave_view, "Waveform")
+        
+        # Custom Bottom Tab Corner Widget: Fullscreen / Popup Button (⛶)
+        self.btn_fullscreen_wave = QPushButton("⛶")
+        self.btn_fullscreen_wave.setFixedSize(26, 22)
+        self.btn_fullscreen_wave.setToolTip("Open in Fullscreen Standalone Window")
+        self.btn_fullscreen_wave.clicked.connect(self._open_standalone_waveform_popup)
+        self.bottom_tabs.setCornerWidget(self.btn_fullscreen_wave, Qt.Corner.TopRightCorner)
+        
+        self.right_split.addWidget(self.bottom_tabs)
         
         self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 4)
-        self.split.setSizes([1000, 9000])  # Make explorer pane take less space
-        self.right_split.setStretchFactor(0, 8); self.right_split.setStretchFactor(1, 1)
-        self.right_split.setSizes([8000, 2000])
+        self.split.setSizes([1200, 8800])
+        self.right_split.setStretchFactor(0, 6); self.right_split.setStretchFactor(1, 4)
+        self.right_split.setSizes([6000, 4000])
+
+    def show_schematic(self, show=True):
+        if show:
+            self.schem_container.show()
+            self.top_work_split.setSizes([5000, 5000])
+        else:
+            self.schem_container.hide()
+
+    def _open_standalone_waveform_popup(self):
+        curr_idx = self.bottom_tabs.currentIndex()
+        if curr_idx == 1:
+            # Pop out Waveform
+            vcd = self.wave_view.current_vcd_path
+            if vcd and os.path.isfile(vcd):
+                from sdk.viewers import view_signal
+                view_signal(vcd, parent=None, show=True, detach=True)
+            else:
+                self.ide.log_system("No active waveform VCD loaded yet.", "WARN")
+        else:
+            # If on terminal tab, toggle maximize
+            self.ide.log_system("Switched to Waveform view.")
+            self.bottom_tabs.setCurrentIndex(1)
 
 class SettingsDialog(QDialog):
     def _pick_color(self, line_edit, lbl):
@@ -504,17 +560,15 @@ class SilisIDE(QMainWindow):
         # === UI LAYOUT ===
         self.stack = QStackedWidget(); self.setCentralWidget(self.stack)
         
-        # World 1: Frontend Tabs
+        # World 1: Frontend Tabs (Unified IDE + Synthesis Dashboard)
         self.frontend_tabs = QTabWidget(); self.frontend_tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tab_compile = CompileTab(self)
-        self.tab_waves = SignalPeeker(self)
-        self.tab_schem = SchematicTab(self)
-        self.tab_synth = SynthesisTab(self) # NEW UNIFIED DASHBOARD
+        self.tab_waves = self.tab_compile.wave_view
+        self.tab_schem = self.tab_compile.schem_view
+        self.tab_synth = SynthesisTab(self) # UNIFIED ASIC DASHBOARD
         
-        self.frontend_tabs.addTab(self.tab_compile, "1. COMPILE")
-        self.frontend_tabs.addTab(self.tab_waves, "2. WAVEFORM")
-        self.frontend_tabs.addTab(self.tab_schem, "3. SCHEMATIC")
-        self.frontend_tabs.addTab(self.tab_synth, "4. SYNTHESIS")
+        self.frontend_tabs.addTab(self.tab_compile, "1. IDE (Code, Wave & Schematic)")
+        self.frontend_tabs.addTab(self.tab_synth, "2. SYNTHESIS")
         self.frontend_tabs.currentChanged.connect(self._on_frontend_tab_changed)
         self.stack.addWidget(self.frontend_tabs)
         
@@ -866,7 +920,18 @@ class SilisIDE(QMainWindow):
         if self.schem_running:
             self.log_system("Schematic generation in progress...", "WARN")
             return
-        self.tab_schem.go_home()
+        # Open schematic container in CompileTab
+        if hasattr(self, 'tab_compile'):
+            self.tab_compile.show_schematic(True)
+            if hasattr(self.tab_compile.schem_view, 'ensure_engine'):
+                self.tab_compile.schem_view.ensure_engine()
+            base = None
+            if hasattr(self, 'project_config') and self.project_config:
+                base = self.project_config.get("top_module")
+            if not base:
+                _, base = self.get_context()
+            if base:
+                self.show_module_schematic(base)
 
     def run_synthesis_flow(self, bypass_prompt=False):
         base = None
@@ -1161,6 +1226,9 @@ class SilisIDE(QMainWindow):
             self.log_system("[ERR] Cannot determine top module for simulation.")
             return
 
+        # 1. Automatically generate and display schematic on top-right
+        self.generate_schematic()
+
         root = self.prep_workspace(base)
         src_v = glob.glob(os.path.join(root, "source", "*.v")) + \
                 glob.glob(os.path.join(root, "source", "*.sv"))
@@ -1168,8 +1236,24 @@ class SilisIDE(QMainWindow):
             self.log_system("No source files found in source/!", "ERR")
             return
 
+        # Sort sources so packages, headers, and dependencies come before modules and testbenches
+        def _sort_key(p):
+            b = os.path.basename(p).lower()
+            if "pkg" in b or "package" in b:
+                return (0, b)
+            if "if" in b or "interface" in b:
+                return (1, b)
+            if "tb" in b or "test" in b:
+                return (3, b)
+            return (2, b)
+        src_v = sorted(src_v, key=_sort_key)
+
+        # Switch bottom drawer to Terminal initially so compilation progress is visible
+        if hasattr(self.tab_compile, 'bottom_tabs'):
+            self.tab_compile.bottom_tabs.setCurrentIndex(0)
+
         out_bin = os.path.join(root, f"{base}.out")
-        cmd = ["iverilog", "-g2012", "-o", out_bin] + src_v
+        cmd = ["iverilog", "-g2012", "-I.", "-Isource", "-o", out_bin] + src_v
 
         def task():
             try:
@@ -1203,6 +1287,13 @@ class SilisIDE(QMainWindow):
     def setup_toolbar(self):
         tb = QToolBar(); self.addToolBar(tb); tb.setMovable(False)
         act_new = QAction("New", self); act_new.setShortcut("Ctrl+N"); act_new.triggered.connect(self.new_file); tb.addAction(act_new)
+        # Top Toolbar Run / Compile Button
+        tb.addSeparator()
+        act_run = QAction("▶ Compile & Sim", self)
+        act_run.setShortcut("F1")
+        act_run.setToolTip("Compile RTL, generate schematic, simulate testbench, and open waveforms")
+        act_run.triggered.connect(self.run_simulation)
+        tb.addAction(act_run)
         act_save = QAction("Save", self); act_save.setShortcut("Ctrl+S"); act_save.triggered.connect(self.save_file); tb.addAction(act_save)
         
         act_new_proj = QAction("New Project...", self)
@@ -1412,17 +1503,24 @@ class SilisIDE(QMainWindow):
             self.tab_compile.explorer_panel.open_find_instance_dialog()
 
     def show_module_schematic(self, module_name):
-        if hasattr(self, 'tab_schematic'):
-            self.switch_frontend_tab(1)
-            self.tab_schematic.on_module_clicked(module_name)
+        if hasattr(self, 'tab_compile'):
+            self.tab_compile.show_schematic(True)
+            if hasattr(self.tab_compile.schem_view, 'load_from_path'):
+                # SchematicTab: trigger structural Yosys engine to synthesize and display
+                self.tab_compile.schem_view.invoke_engine(module_name, "block")
+            elif hasattr(self.tab_compile.schem_view, 'load_json'):
+                self.tab_compile.schem_view.ensure_engine()
+                self.tab_compile.schem_view.load_json("", module_name, "block")
 
     def add_waveform_signal(self, signal_name):
-        if hasattr(self, 'tab_sim') and hasattr(self.tab_sim, 'wave_view'):
-            self.switch_frontend_tab(2)
+        if hasattr(self, 'tab_compile') and hasattr(self.tab_compile, 'wave_view'):
+            self.tab_compile.bottom_tabs.setCurrentIndex(1)
             # Try to reveal or add signal if wave server supports it
             js = f"window.postMessage({{ type: 'addSignal', name: '{signal_name}' }}, '*');"
-            if hasattr(self.tab_sim.wave_view, 'page'):
-                self.tab_sim.wave_view.page().runJavaScript(js)
+            from gui_shared_webengine import SharedWebEngineManager
+            view = SharedWebEngineManager.get_instance().get_view()
+            if view:
+                view.page().runJavaScript(js)
 
     def open_gds3d(self, path):
         if os.path.exists(path):
@@ -1505,7 +1603,10 @@ class SilisIDE(QMainWindow):
             self.log_system(f"Saved {os.path.basename(self.current_file)}")
             self.lbl_proj.setText(os.path.basename(self.current_file))
             if self.current_file.endswith(('.v', '.sv')):
-                self.tab_schem.invalidate_cache()
+                if hasattr(self.tab_schem, 'invalidate_cache'):
+                    self.tab_schem.invalidate_cache()
+                elif hasattr(self.tab_compile, 'schem_view') and hasattr(self.tab_compile.schem_view, 'fast_view') and self.tab_compile.schem_view.fast_view:
+                    self.tab_compile.schem_view.fast_view.clear()
 
     def get_context(self):
         if hasattr(self, 'project_config') and self.project_config and self.project_config.get("top_module"):
@@ -1601,7 +1702,8 @@ class SilisIDE(QMainWindow):
             # Existing Routing...
             elif tag == "LOAD_WAVES":
                 self.tab_waves.load_file(content)
-                self.frontend_tabs.setCurrentIndex(1)
+                if hasattr(self.tab_compile, 'bottom_tabs'):
+                    self.tab_compile.bottom_tabs.setCurrentIndex(1) # Switch bottom tab to Waveform
 
             elif tag == "UPDATE_DASHBOARD":
                 self.tab_synth.update_dashboard()

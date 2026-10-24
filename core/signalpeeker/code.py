@@ -9,6 +9,7 @@ import json
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QFileDialog,
     QMessageBox
 )
@@ -22,20 +23,85 @@ class SignalPeeker(QWidget):
     Full-featured waveform viewer providing 100% of the Intel ROHD Wave Viewer UI
     (hierarchy browser, signal grouping, time ruler, bus inspection, transition jumps,
     and save/load signal list) within Silis through a single shared hardware-accelerated QWebEngineView.
+    Includes a vertical side-strip on the far right holding essential waveform controls.
     """
     def __init__(self, ide):
         super().__init__()
         self.ide = ide
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(0)
+        self.main_layout = QHBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
-        # ROHD Wave Viewer Web Container (fills 100% viewport)
+        # ROHD Wave Viewer Web Container (fills viewport)
         self.web_container = QWidget(self)
         web_container_layout = QVBoxLayout(self.web_container)
         web_container_layout.setContentsMargins(0, 0, 0, 0)
         web_container_layout.setSpacing(0)
-        self.layout.addWidget(self.web_container)
+        self.main_layout.addWidget(self.web_container, stretch=1)
+
+        # Vertical Action Strip on the rightmost edge
+        from PyQt6.QtWidgets import QToolBar, QPushButton, QMenu
+        from PyQt6.QtGui import QAction
+
+        self.strip = QWidget(self)
+        self.strip.setFixedWidth(30)
+        self.strip.setStyleSheet("background: #181825; border-left: 1px solid #313244;")
+        strip_lay = QVBoxLayout(self.strip)
+        strip_lay.setContentsMargins(2, 4, 2, 4)
+        strip_lay.setSpacing(4)
+
+        btn_style = """
+            QPushButton {
+                background: transparent;
+                color: #cdd6f4;
+                border: none;
+                border-radius: 3px;
+                font-size: 13px;
+                height: 24px;
+            }
+            QPushButton:hover {
+                background: #313244;
+                color: #89b4fa;
+            }
+        """
+
+        # 1. Reload waveform
+        self.btn_reload = QPushButton("↻", self.strip)
+        self.btn_reload.setToolTip("Reload waveform from disk")
+        self.btn_reload.setStyleSheet(btn_style)
+        self.btn_reload.clicked.connect(self.auto_load)
+        strip_lay.addWidget(self.btn_reload)
+
+        # 2. Zoom to Fit
+        self.btn_fit = QPushButton("↔", self.strip)
+        self.btn_fit.setToolTip("Zoom to fit all transitions")
+        self.btn_fit.setStyleSheet(btn_style)
+        self.btn_fit.clicked.connect(self._trigger_zoom_fit)
+        strip_lay.addWidget(self.btn_fit)
+
+        # 3. Save Signal List
+        self.btn_save_signals = QPushButton("💾", self.strip)
+        self.btn_save_signals.setToolTip("Save Signal List (.json)")
+        self.btn_save_signals.setStyleSheet(btn_style)
+        self.btn_save_signals.clicked.connect(self._trigger_save_signals)
+        strip_lay.addWidget(self.btn_save_signals)
+
+        # 4. Load Signal List
+        self.btn_load_signals = QPushButton("📂", self.strip)
+        self.btn_load_signals.setToolTip("Load Signal List (.json)")
+        self.btn_load_signals.setStyleSheet(btn_style)
+        self.btn_load_signals.clicked.connect(self._trigger_load_signals)
+        strip_lay.addWidget(self.btn_load_signals)
+
+        # 5. Export PNG Snapshot
+        self.btn_export_png = QPushButton("📷", self.strip)
+        self.btn_export_png.setToolTip("Export Waveform Snapshot (PNG)")
+        self.btn_export_png.setStyleSheet(btn_style)
+        self.btn_export_png.clicked.connect(self._trigger_export_png)
+        strip_lay.addWidget(self.btn_export_png)
+
+        strip_lay.addStretch()
+        self.main_layout.addWidget(self.strip)
 
         self.current_vcd_path = None
         self._server = LocalWaveServer.get_instance()
@@ -44,6 +110,31 @@ class SignalPeeker(QWidget):
         # Register bridge handler for saveSignalList, loadSignalList, savePng, etc.
         web_mgr = SharedWebEngineManager.get_instance()
         web_mgr.add_console_handler(self._on_bridge_message)
+
+    def _trigger_zoom_fit(self):
+        web_mgr = SharedWebEngineManager.get_instance()
+        view = web_mgr.get_view()
+        if view:
+            # ROHD keyboard shortcut for fit is 'f'
+            view.page().runJavaScript("window.dispatchEvent(new KeyboardEvent('keydown', {'key': 'f'}));")
+
+    def _trigger_save_signals(self):
+        web_mgr = SharedWebEngineManager.get_instance()
+        view = web_mgr.get_view()
+        if view:
+            self._on_bridge_message("SILIS_ROHD_MSG:{\"type\":\"saveSignalList\",\"content\":\"[]\"}")
+
+    def _trigger_load_signals(self):
+        web_mgr = SharedWebEngineManager.get_instance()
+        view = web_mgr.get_view()
+        if view:
+            self._on_bridge_message("SILIS_ROHD_MSG:{\"type\":\"loadSignalList\"}")
+
+    def _trigger_export_png(self):
+        web_mgr = SharedWebEngineManager.get_instance()
+        view = web_mgr.get_view()
+        if view:
+            view.page().runJavaScript("if (window.rohdEmbed) { window.rohdEmbed.postMessage({ type: 'savePng' }); }")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -224,7 +315,13 @@ class SignalPeeker(QWidget):
 
                 escaped_content = json.dumps(content)
                 escaped_name = json.dumps(base_name)
-                js_code = f"window.loadVcdContent({escaped_content}, {escaped_name});"
+                js_code = f"""
+                if (typeof window.loadVcdContent === 'function') {{
+                    window.loadVcdContent({escaped_content}, {escaped_name});
+                }} else {{
+                    window.__pendingVcd = {{ text: {escaped_content}, fileName: {escaped_name} }};
+                }}
+                """
                 view.page().runJavaScript(js_code)
             except Exception as e:
                 print(f"[SILIS] Failed to load VCD into ROHD: {e}")

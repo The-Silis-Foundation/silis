@@ -29,6 +29,10 @@
       };
       window.deliverRohdResponse(msg);
     };
+    if (window.__pendingVcd) {
+      window.loadVcdContent(window.__pendingVcd.text, window.__pendingVcd.fileName);
+      delete window.__pendingVcd;
+    }
     window.addEventListener('message', function(e) {
       if (e.data && typeof window.__rohdMessageCallback === 'function') {
         window.__rohdMessageCallback(e.data);

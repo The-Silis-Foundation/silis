@@ -70,3 +70,6 @@ node_modules/
 .silis_pdk_cache.json
 .silis_recent.json
 .silis_ui_settings.json
+
+# Third-party precompiled binaries
+third-party/bin/
