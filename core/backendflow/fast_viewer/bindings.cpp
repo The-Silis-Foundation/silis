@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 #include "FastLayoutViewer.h"
 
 namespace py = pybind11;
@@ -11,6 +12,18 @@ PYBIND11_MODULE(fast_layout_viewer, m) {
         .def("set_lod", &FastLayoutViewer::set_lod)
         .def("set_core", &FastLayoutViewer::set_core)
         .def("load_std_cells", &FastLayoutViewer::load_std_cells)
+        .def("load_cells_flat", [](FastLayoutViewer& self, py::buffer b) {
+            py::buffer_info info = b.request();
+            if (info.format != py::format_descriptor<float>::format()) {
+                throw std::runtime_error("load_cells_flat requires a float32 1D buffer");
+            }
+            if (info.ndim != 1 || (info.size % 4) != 0) {
+                throw std::runtime_error("load_cells_flat requires a 1D float buffer whose length is a multiple of 4 (x,y,w,h)");
+            }
+            size_t cell_count = info.size / 4;
+            const float* ptr = static_cast<const float*>(info.ptr);
+            self.load_cells_flat(ptr, cell_count);
+        })
         .def("load_tap_cells", &FastLayoutViewer::load_tap_cells)
         .def("load_macros", &FastLayoutViewer::load_macros)
         .def("load_pins", &FastLayoutViewer::load_pins)

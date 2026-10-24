@@ -15,6 +15,7 @@ public:
     void set_core(float x, float y, float w, float h);
     void load_std_cells(const std::vector<float>& x, const std::vector<float>& y, 
                         const std::vector<float>& w, const std::vector<float>& h);
+    void load_cells_flat(const float* data, size_t count);
     void load_tap_cells(const std::vector<float>& x, const std::vector<float>& y, 
                         const std::vector<float>& w, const std::vector<float>& h);
     void load_macros(const std::vector<float>& x, const std::vector<float>& y, 

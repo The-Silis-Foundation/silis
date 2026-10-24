@@ -166,16 +166,15 @@ def view_layout(
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
 
-    # Try FastSiliconPeeker first, fallback to SiliconPeeker
-    from backendflow.siliconpeeker.peeker import FastSiliconPeeker, SiliconPeeker
+    # Use high-performance FastSiliconPeeker (C++ native FastLayoutViewer)
+    from backendflow.siliconpeeker.peeker import FastSiliconPeeker
 
-    peeker = None
-    try:
-        peeker = FastSiliconPeeker(parent=central)
-        if not getattr(peeker, "core", None):
-            peeker = SiliconPeeker(parent=central)
-    except Exception:
-        peeker = SiliconPeeker(parent=central)
+    peeker = FastSiliconPeeker(parent=central)
+    if not getattr(peeker, "core", None):
+        raise RuntimeError(
+            "FastSiliconPeeker native C++ engine ('fast_layout_viewer') is not built or failed to load. "
+            "Please compile the native C++ modules in core/backendflow/fast_viewer/."
+        )
 
     # Top Toolbar for Zoom / Search Controls
     tb = QToolBar("Layout Controls", win)

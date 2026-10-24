@@ -63,6 +63,20 @@
             }
         };
 
+        var _pendingReveal = null;
+        window.revealLine = function(line, col) {
+            var l = parseInt(line, 10) || 1;
+            var c = parseInt(col, 10) || 1;
+            if (editor && _editorReady) {
+                editor.revealLineInCenter(l);
+                editor.setPosition({ lineNumber: l, column: c });
+                editor.focus();
+                _pendingReveal = null;
+            } else {
+                _pendingReveal = { line: l, col: c };
+            }
+        };
+
         window.setFont = function(family, size) {
             SILIS_FONT_FAMILY = family;
             SILIS_FONT_SIZE = size;
@@ -157,6 +171,14 @@
                 });
 
                 _editorReady = true;
+
+                // Execute any pending line reveal
+                if (_pendingReveal) {
+                    editor.revealLineInCenter(_pendingReveal.line);
+                    editor.setPosition({ lineNumber: _pendingReveal.line, column: _pendingReveal.col });
+                    editor.focus();
+                    _pendingReveal = null;
+                }
 
                 // Sync text if setText was called during initialization
                 if (_docText && editor.getValue() !== _docText) {

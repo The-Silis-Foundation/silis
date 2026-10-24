@@ -310,6 +310,10 @@ class SchematicTab(QWidget):
         self.update_ui_state()
         self.load_from_path(out_path, module, mode)
 
+        # Notify DesignExplorerPanel to build real-time hierarchy
+        if hasattr(self.ide, 'tab_compile') and hasattr(self.ide.tab_compile, 'explorer_panel'):
+            self.ide.tab_compile.explorer_panel.load_design_json(out_path, top_module=module)
+
     def invalidate_cache(self):
         self.history_stack.clear()
         self.current_idx = -1

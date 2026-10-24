@@ -337,7 +337,8 @@ class MonacoEditorWrapper(QWidget):
         return self.core.get_text()
 
     def set_lexer(self, ext):
-        lang = {'.v': 'verilog', '.sv': 'verilog', '.vh': 'verilog',
+        lang = {'.v': 'systemverilog', '.sv': 'systemverilog', '.vh': 'systemverilog', '.svh': 'systemverilog',
+                '.vhd': 'pascal', '.vhdl': 'pascal',
                 '.tcl': 'tcl', '.sdc': 'tcl',
                 '.py': 'python',
                 '.cpp': 'cpp', '.h': 'cpp', '.c': 'cpp'}.get(ext, 'plaintext')
@@ -374,7 +375,7 @@ class VSCodeEditor(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
         
-        backend = (editor_backend or USER_SETTINGS.get("editor_backend", "qscintilla")).lower()
+        backend = (editor_backend or USER_SETTINGS.get("editor_backend", "monaco")).lower()
         if backend == "monaco":
             try:
                 import editor_engine
@@ -415,16 +416,18 @@ class VSCodeEditorTabs(QTabWidget):
         self.font_family = USER_SETTINGS.get("font_family", "Consolas")
         self.font_size = USER_SETTINGS.get("font_size", 11)
         self.theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
-        self.editor_backend = USER_SETTINGS.get("editor_backend", "qscintilla")
+        self.editor_backend = USER_SETTINGS.get("editor_backend", "monaco")
         self.setTabsClosable(True)
         self.setDocumentMode(True)
         self.update_stylesheet()
         self.tabCloseRequested.connect(self.close_tab)
         self.files = {}  # path -> VSCodeEditor
 
-    def open_file(self, path):
+    def open_file(self, path, line=None, col=None):
         if path in self.files:
             self.setCurrentWidget(self.files[path])
+            if line is not None:
+                self.goto_line(path, line, col)
             return
         ext = os.path.splitext(path)[1]
         editor = VSCodeEditor(
@@ -437,6 +440,22 @@ class VSCodeEditorTabs(QTabWidget):
         idx = self.addTab(editor, os.path.basename(path))
         self.setTabToolTip(idx, path)
         self.setCurrentIndex(idx)
+        if line is not None:
+            self.goto_line(path, line, col)
+
+    def goto_line(self, path, line, col=None):
+        if path not in self.files:
+            return
+        ed_widget = self.files[path]
+        col_val = col if col is not None else 1
+        # Try Monaco revealLine
+        js = f"if(window.revealLine) {{ window.revealLine({line}, {col_val}); }}"
+        if hasattr(ed_widget, 'run_js'):
+            ed_widget.run_js(js)
+        # Try Scintilla setCursorPosition
+        elif hasattr(ed_widget.editor, 'setCursorPosition'):
+            ed_widget.editor.setCursorPosition(max(0, line - 1), max(0, col_val - 1))
+            ed_widget.editor.ensureLineVisible(max(0, line - 1))
 
     def update_appearance(self, font_family, font_size, theme_name, editor_backend=None):
         self.font_family = font_family
@@ -445,7 +464,7 @@ class VSCodeEditorTabs(QTabWidget):
         if editor_backend:
             self.editor_backend = editor_backend
         else:
-            self.editor_backend = USER_SETTINGS.get("editor_backend", "qscintilla")
+            self.editor_backend = USER_SETTINGS.get("editor_backend", "monaco")
         self.update_stylesheet()
         open_paths = list(self.files.keys())
         current_idx = self.currentIndex()

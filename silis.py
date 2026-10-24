@@ -34,7 +34,7 @@ from editor.editor import CommandPalette, FileSearchPalette, VSCodeEditorTabs, S
 from terminal.terminal import VSCodeTerminalWidget
 from pdkmanagers.pdk.manager import SSAForge, PDKManager, PDKSelector
 from pdkmanagers.volare import VolareManagerWidget
-from backendflow.siliconpeeker.peeker import DEFParser, SiliconPeeker
+from backendflow.siliconpeeker.peeker import DEFParser, FastSiliconPeeker
 from signalpeeker.code import SignalPeeker
 from schematicviewer.graphiccanvas import SchematicTab
 from synthesisscripts.synthesisthread import SynthesisTab
@@ -170,15 +170,19 @@ class CompileTab(QWidget):
         self.split = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(self.split)
 
-        # Explorer
-        self.explorer_container = QWidget()
-        l_lay = QVBoxLayout(self.explorer_container); l_lay.setContentsMargins(0,0,0,0)
+        # Explorer (Files | Hierarchy | Modules)
+        from design_explorer import DesignExplorerPanel
         self.explorer = SilisExplorer(self.ide)
+        self.explorer_panel = DesignExplorerPanel(self.ide, file_explorer=self.explorer)
         self.explorer.dirChanged.connect(self.ide.change_directory)
         self.explorer.fileOpened.connect(self.ide.open_file_in_editor)
         self.explorer.gds3dOpened.connect(self.ide.open_gds3d)
-        l_lay.addWidget(QLabel("PROJECT EXPLORER")); l_lay.addWidget(self.explorer)
-        self.split.addWidget(self.explorer_container)
+        
+        self.explorer_panel.goToSource.connect(self.ide.open_file_in_editor)
+        self.explorer_panel.openSchematic.connect(self.ide.show_module_schematic)
+        self.explorer_panel.showInWaveform.connect(self.ide.add_waveform_signal)
+        
+        self.split.addWidget(self.explorer_panel)
 
         # Right: Code + Terminal
         self.right_split = QSplitter(Qt.Orientation.Vertical)
@@ -283,8 +287,8 @@ class SettingsDialog(QDialog):
         self.cb_editor_backend = QComboBox()
         self.cb_editor_backend.addItem("QScintilla (Fast, Native)", "qscintilla")
         self.cb_editor_backend.addItem("Monaco (WebEngine, VS Code)", "monaco")
-        curr_backend = USER_SETTINGS.get("editor_backend", "qscintilla").lower()
-        idx_backend = 1 if curr_backend == "monaco" else 0
+        curr_backend = USER_SETTINGS.get("editor_backend", "monaco").lower()
+        idx_backend = 0 if curr_backend == "qscintilla" else 1
         self.cb_editor_backend.setCurrentIndex(idx_backend)
         form_app.addRow("Editor Engine:", self.cb_editor_backend)
         
@@ -511,6 +515,7 @@ class SilisIDE(QMainWindow):
         self.frontend_tabs.addTab(self.tab_waves, "2. WAVEFORM")
         self.frontend_tabs.addTab(self.tab_schem, "3. SCHEMATIC")
         self.frontend_tabs.addTab(self.tab_synth, "4. SYNTHESIS")
+        self.frontend_tabs.currentChanged.connect(self._on_frontend_tab_changed)
         self.stack.addWidget(self.frontend_tabs)
         
         # World 2: Backend Layout
@@ -520,6 +525,10 @@ class SilisIDE(QMainWindow):
         
         # Global Input Filter
         QApplication.instance().installEventFilter(self)
+        
+        # Shortcut: Ctrl+I to Find Instance
+        shortcut_find_inst = QShortcut(QKeySequence("Ctrl+I"), self)
+        shortcut_find_inst.activated.connect(self._trigger_find_instance)
         
         # Background Timer
         self.queue_timer = QTimer(); self.queue_timer.timeout.connect(self.process_queue); self.queue_timer.start(50)
@@ -575,9 +584,30 @@ class SilisIDE(QMainWindow):
                 if target_file and os.path.isfile(target_file):
                     self.open_file_in_editor(target_file)
 
+            if hasattr(self.tab_compile, 'explorer_panel'):
+                self.tab_compile.explorer_panel.scan_workspace()
+
         # Auto-coordinate with CLI deliverables on disk (GUI mode only)
         if not self.headless:
             QTimer.singleShot(200, self._coordinate_cli_state)
+
+    def _on_frontend_tab_changed(self, index):
+        """
+        Coordinates the shared WebEngineView when switching between frontend tabs.
+        Compile tab uses Monaco (if backend=monaco), Schematic tab uses DigitalJS,
+        and Waveform tab can use Intel ROHD.
+        """
+        try:
+            # If leaving Waveform tab and ROHD was open, keep state clean
+            # If entering Schematic tab, ensure DigitalJS is initialized
+            if index == 1: # WAVEFORM
+                if hasattr(self, 'tab_waves') and hasattr(self.tab_waves, 'ensure_viewer'):
+                    self.tab_waves.ensure_viewer()
+            elif index == 2: # SCHEMATIC
+                if hasattr(self, 'tab_schem') and hasattr(self.tab_schem, 'ensure_engine'):
+                    self.tab_schem.ensure_engine()
+        except Exception as e:
+            print(f"[SILIS] Tab switch warning: {e}")
 
     def _coordinate_cli_state(self):
         if self.headless:
@@ -1308,6 +1338,8 @@ class SilisIDE(QMainWindow):
                         self.open_file_in_editor(v_files[0])
 
             self.log_system(f"Loaded Project: {proj_name} at {self.cwd}")
+            if hasattr(self.tab_compile, 'explorer_panel'):
+                self.tab_compile.explorer_panel.scan_workspace()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project:\n{e}")
 
@@ -1370,10 +1402,27 @@ class SilisIDE(QMainWindow):
             os.chdir(path); self.cwd = os.getcwd(); self.tab_compile.explorer.set_cwd(self.cwd)
             self.log_system(f"CD -> {self.cwd}", "SYS")
 
-    def open_file_in_editor(self, path):
+    def open_file_in_editor(self, path, line=None, col=None):
         if os.path.exists(path):
-            self.tab_compile.editor.open_file(path)
+            self.tab_compile.editor.open_file(path, line, col)
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
+
+    def _trigger_find_instance(self):
+        if hasattr(self, 'tab_compile') and hasattr(self.tab_compile, 'explorer_panel'):
+            self.tab_compile.explorer_panel.open_find_instance_dialog()
+
+    def show_module_schematic(self, module_name):
+        if hasattr(self, 'tab_schematic'):
+            self.switch_frontend_tab(1)
+            self.tab_schematic.on_module_clicked(module_name)
+
+    def add_waveform_signal(self, signal_name):
+        if hasattr(self, 'tab_sim') and hasattr(self.tab_sim, 'wave_view'):
+            self.switch_frontend_tab(2)
+            # Try to reveal or add signal if wave server supports it
+            js = f"window.postMessage({{ type: 'addSignal', name: '{signal_name}' }}, '*');"
+            if hasattr(self.tab_sim.wave_view, 'page'):
+                self.tab_sim.wave_view.page().runJavaScript(js)
 
     def open_gds3d(self, path):
         if os.path.exists(path):

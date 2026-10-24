@@ -68,7 +68,7 @@ def load_user_settings():
         "font_size": 11,
         "theme_name": "Catppuccin Mocha",
         "custom_theme": {},
-        "editor_backend": "qscintilla"
+        "editor_backend": "monaco"
     }
 
 def save_user_settings(settings):

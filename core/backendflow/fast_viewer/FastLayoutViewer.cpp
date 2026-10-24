@@ -47,6 +47,15 @@ void FastLayoutViewer::load_std_cells(const std::vector<float>& x, const std::ve
     update();
 }
 
+void FastLayoutViewer::load_cells_flat(const float* data, size_t count) {
+    std_cells_.reserve(std_cells_.size() + count);
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * 4;
+        std_cells_.emplace_back(data[base], data[base + 1], data[base + 2], data[base + 3]);
+    }
+    update();
+}
+
 void FastLayoutViewer::load_tap_cells(const std::vector<float>& x, const std::vector<float>& y, 
                                       const std::vector<float>& w, const std::vector<float>& h) {
     tap_cells_.reserve(tap_cells_.size() + x.size());

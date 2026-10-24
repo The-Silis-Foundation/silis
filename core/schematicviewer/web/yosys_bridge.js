@@ -1,20 +1,7 @@
-/*
- * Copyright (c) 2026 Tsung-Tso Hsieh
- * Adapted from sv-pathfinder
- * 
- * Changes made:
- * - Integrated into Silis EDA tool suite
- * - Adapted for PyQt6 QWebEngineView bridge
- */
-
 (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;
   var __commonJS = (cb, mod) => function __require() {
-    try {
-      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-    } catch (e) {
-      throw mod = 0, e;
-    }
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   };
 
   // node_modules/hashmap/hashmap.js
@@ -208,7 +195,7 @@
   // node_modules/big-integer/BigInteger.js
   var require_BigInteger = __commonJS({
     "node_modules/big-integer/BigInteger.js"(exports, module) {
-      var bigInt = (function(undefined2) {
+      var bigInt = function(undefined2) {
         "use strict";
         var BASE = 1e7, LOG_BASE = 7, MAX_INT = 9007199254740992, MAX_INT_ARR = smallToArray(MAX_INT), DEFAULT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
         var supportsNativeBigInt = typeof BigInt === "function";
@@ -1449,7 +1436,7 @@
           return parseBaseFromArray(digits.map(parseValue), parseValue(base || 10), isNegative);
         };
         return Integer;
-      })();
+      }();
       if (typeof module !== "undefined" && module.hasOwnProperty("exports")) {
         module.exports = bigInt;
       }
@@ -2794,13 +2781,13 @@
   // node_modules/topsort/lib/topsort.js
   var require_topsort = __commonJS({
     "node_modules/topsort/lib/topsort.js"(exports, module) {
-      var EdgeNode = /* @__PURE__ */ (function() {
+      var EdgeNode = /* @__PURE__ */ function() {
         function EdgeNode2(id) {
           this.id = id;
           this.afters = [];
         }
         return EdgeNode2;
-      })();
+      }();
       function sortDesc(a, b) {
         if (a < b)
           return 1;
@@ -2874,7 +2861,7 @@
           return true;
         }
         var obj = {};
-        var sym = /* @__PURE__ */ Symbol("test");
+        var sym = Symbol("test");
         var symObj = Object(sym);
         if (typeof sym === "string") {
           return false;
@@ -3120,7 +3107,7 @@
         if (typeof origSymbol("foo") !== "symbol") {
           return false;
         }
-        if (typeof /* @__PURE__ */ Symbol("bar") !== "symbol") {
+        if (typeof Symbol("bar") !== "symbol") {
           return false;
         }
         return hasSymbolSham();
@@ -3377,7 +3364,7 @@
       var throwTypeError = function() {
         throw new $TypeError();
       };
-      var ThrowTypeError = $gOPD ? (function() {
+      var ThrowTypeError = $gOPD ? function() {
         try {
           arguments.callee;
           return throwTypeError;
@@ -3388,7 +3375,7 @@
             return throwTypeError;
           }
         }
-      })() : throwTypeError;
+      }() : throwTypeError;
       var hasSymbols = require_has_symbols()();
       var getProto = require_get_proto();
       var $ObjectGPO = require_Object_getPrototypeOf();
@@ -3652,7 +3639,7 @@
               if (!allowMissing) {
                 throw new $TypeError("base intrinsic for " + name + " exists, but the property is not available.");
               }
-              return void undefined2;
+              return void 0;
             }
             if ($gOPD && i + 1 >= parts.length) {
               var desc = $gOPD(value, part);
@@ -3718,9 +3705,9 @@
         }
         return value !== null && typeof value === "object" && "length" in value && typeof value.length === "number" && value.length >= 0 && $toString(value) !== "[object Array]" && "callee" in value && $toString(value.callee) === "[object Function]";
       };
-      var supportsStandardArguments = (function() {
+      var supportsStandardArguments = function() {
         return isStandardArguments(arguments);
-      })();
+      }();
       isStandardArguments.isLegacyArguments = isLegacyArguments;
       module.exports = supportsStandardArguments ? isStandardArguments : isLegacyArguments;
     }
@@ -3814,19 +3801,6 @@
     }
   });
 
-  // node_modules/generator-function/index.js
-  var require_generator_function = __commonJS({
-    "node_modules/generator-function/index.js"(exports, module) {
-      "use strict";
-      var cached = (
-        /** @type {GeneratorFunctionConstructor} */
-        function* () {
-        }.constructor
-      );
-      module.exports = () => cached;
-    }
-  });
-
   // node_modules/is-generator-function/index.js
   var require_is_generator_function = __commonJS({
     "node_modules/is-generator-function/index.js"(exports, module) {
@@ -3838,7 +3812,16 @@
       var getProto = require_get_proto();
       var toStr = callBound("Object.prototype.toString");
       var fnToStr = callBound("Function.prototype.toString");
-      var getGeneratorFunction = require_generator_function();
+      var getGeneratorFunc = function() {
+        if (!hasToStringTag) {
+          return false;
+        }
+        try {
+          return Function("return function*() {}")();
+        } catch (e) {
+        }
+      };
+      var GeneratorFunction;
       module.exports = function isGeneratorFunction(fn) {
         if (typeof fn !== "function") {
           return false;
@@ -3853,8 +3836,14 @@
         if (!getProto) {
           return false;
         }
-        var GeneratorFunction = getGeneratorFunction();
-        return GeneratorFunction && getProto(fn) === GeneratorFunction.prototype;
+        if (typeof GeneratorFunction === "undefined") {
+          var generatorFunc = getGeneratorFunc();
+          GeneratorFunction = generatorFunc ? (
+            /** @type {GeneratorFunctionConstructor} */
+            getProto(generatorFunc)
+          ) : false;
+        }
+        return getProto(fn) === GeneratorFunction;
       };
     }
   });
@@ -4222,10 +4211,10 @@
       var applyBind = require_applyBind();
       module.exports = function callBind(originalFunction) {
         var func = callBindBasic(arguments);
-        var adjustedLength = 1 + originalFunction.length - (arguments.length - 1);
+        var adjustedLength = originalFunction.length - (arguments.length - 1);
         return setFunctionLength(
           func,
-          adjustedLength > 0 ? adjustedLength : 0,
+          1 + (adjustedLength > 0 ? adjustedLength : 0),
           true
         );
       };
@@ -4271,13 +4260,7 @@
               var superProto = getProto(proto);
               descriptor = gOPD(superProto, Symbol.toStringTag);
             }
-            if (descriptor && descriptor.get) {
-              var bound = callBind(descriptor.get);
-              cache[
-                /** @type {`$${TypedArrayName}`} */
-                "$" + typedArray
-              ] = bound;
-            }
+            cache["$" + typedArray] = callBind(descriptor.get);
           }
         });
       } else {
@@ -4285,29 +4268,26 @@
           var arr = new g[typedArray]();
           var fn = arr.slice || arr.set;
           if (fn) {
-            var bound = (
-              /** @type {BoundSlice | BoundSet} */
-              // @ts-expect-error TODO FIXME
-              callBind(fn)
-            );
             cache[
-              /** @type {`$${TypedArrayName}`} */
+              /** @type {`$${import('.').TypedArrayName}`} */
               "$" + typedArray
-            ] = bound;
+            ] = /** @type {import('./types').BoundSlice | import('./types').BoundSet} */
+            // @ts-expect-error TODO FIXME
+            callBind(fn);
           }
         });
       }
-      function tryTypedArrays(value) {
+      var tryTypedArrays = function tryAllTypedArrays(value) {
         var found = false;
         forEach(
-          /** @type {Record<`$${TypedArrayName}`, Getter>} */
+          /** @type {Record<`\$${import('.').TypedArrayName}`, Getter>} */
           cache,
-          /** @param {Getter} getter @param {`$${TypedArrayName}`} typedArray */
+          /** @type {(getter: Getter, name: `\$${import('.').TypedArrayName}`) => void} */
           function(getter, typedArray) {
             if (!found) {
               try {
                 if ("$" + getter(value) === typedArray) {
-                  found = /** @type {TypedArrayName} */
+                  found = /** @type {import('.').TypedArrayName} */
                   $slice(typedArray, 1);
                 }
               } catch (e) {
@@ -4316,18 +4296,18 @@
           }
         );
         return found;
-      }
-      function trySlices(value) {
+      };
+      var trySlices = function tryAllSlices(value) {
         var found = false;
         forEach(
-          /** @type {Record<`$${TypedArrayName}`, Getter>} */
+          /** @type {Record<`\$${import('.').TypedArrayName}`, Getter>} */
           cache,
-          /** @param {Getter} getter @param {`$${TypedArrayName}`} name */
+          /** @type {(getter: Getter, name: `\$${import('.').TypedArrayName}`) => void} */
           function(getter, name) {
             if (!found) {
               try {
                 getter(value);
-                found = /** @type {TypedArrayName} */
+                found = /** @type {import('.').TypedArrayName} */
                 $slice(name, 1);
               } catch (e) {
               }
@@ -4335,17 +4315,14 @@
           }
         );
         return found;
-      }
-      function isTATag(tag) {
-        return $indexOf(typedArrays, tag) > -1;
-      }
+      };
       module.exports = function whichTypedArray(value) {
         if (!value || typeof value !== "object") {
           return false;
         }
         if (!hasToStringTag) {
           var tag = $slice($toString(value), 8, -1);
-          if (isTATag(tag)) {
+          if ($indexOf(typedArrays, tag) > -1) {
             return tag;
           }
           if (tag !== "Object") {
@@ -5103,7 +5080,7 @@
       function hasOwnProperty(obj, prop) {
         return Object.prototype.hasOwnProperty.call(obj, prop);
       }
-      var kCustomPromisifiedSymbol = typeof Symbol !== "undefined" ? /* @__PURE__ */ Symbol("util.promisify.custom") : void 0;
+      var kCustomPromisifiedSymbol = typeof Symbol !== "undefined" ? Symbol("util.promisify.custom") : void 0;
       exports.promisify = function promisify(original) {
         if (typeof original !== "function")
           throw new TypeError('The "original" argument must be of type Function');
@@ -5322,7 +5299,7 @@
             return message(arg1, arg2, arg3);
           }
         }
-        var NodeError = /* @__PURE__ */ (function(_Base) {
+        var NodeError = /* @__PURE__ */ function(_Base) {
           _inherits(NodeError2, _Base);
           var _super = _createSuper(NodeError2);
           function NodeError2(arg1, arg2, arg3) {
@@ -5333,7 +5310,7 @@
             return _this;
           }
           return _createClass(NodeError2);
-        })(Base);
+        }(Base);
         codes[code] = NodeError;
       }
       function oneOf(expected, thing) {
@@ -5825,7 +5802,7 @@
         }
         return "".concat(msg).concat(skipped ? skippedMsg : "", "\n").concat(res).concat(other).concat(end).concat(indicator);
       }
-      var AssertionError = /* @__PURE__ */ (function(_Error, _inspect$custom) {
+      var AssertionError = /* @__PURE__ */ function(_Error, _inspect$custom) {
         _inherits(AssertionError2, _Error);
         var _super = _createSuper(AssertionError2);
         function AssertionError2(options) {
@@ -5937,7 +5914,7 @@
           }
         }]);
         return AssertionError2;
-      })(/* @__PURE__ */ _wrapNativeSuper(Error), inspect.custom);
+      }(/* @__PURE__ */ _wrapNativeSuper(Error), inspect.custom);
       module.exports = AssertionError;
     }
   });
@@ -6009,7 +5986,7 @@
           $webkitStorageInfo: true,
           $window: true
         };
-        hasAutomationEqualityBug = (function() {
+        hasAutomationEqualityBug = function() {
           if (typeof window === "undefined") {
             return false;
           }
@@ -6027,7 +6004,7 @@
             }
           }
           return false;
-        })();
+        }();
         equalsConstructorPrototypeIfNotBuggy = function(o) {
           if (typeof window === "undefined" || !hasAutomationEqualityBug) {
             return equalsConstructorPrototype(o);
@@ -6103,10 +6080,10 @@
       var originalKeys = Object.keys;
       keysShim.shim = function shimObjectKeys() {
         if (Object.keys) {
-          var keysWorksWithArguments = (function() {
+          var keysWorksWithArguments = function() {
             var args = Object.keys(arguments);
             return args && args.length === arguments.length;
-          })(1, 2);
+          }(1, 2);
           if (!keysWorksWithArguments) {
             Object.keys = function keys(object) {
               if (isArgs(object)) {
@@ -6273,7 +6250,7 @@
     "node_modules/define-properties/index.js"(exports, module) {
       "use strict";
       var keys = require_object_keys();
-      var hasSymbols = typeof Symbol === "function" && typeof /* @__PURE__ */ Symbol("foo") === "symbol";
+      var hasSymbols = typeof Symbol === "function" && typeof Symbol("foo") === "symbol";
       var toStr = Object.prototype.toString;
       var concat = Array.prototype.concat;
       var defineDataProperty = require_define_data_property();
@@ -7850,14 +7827,10 @@
           }
         }
         function connect_device(dname, cell, portmap) {
-          const dirs = cell.port_directions || {};
-          const pnames = Object.keys(cell.connections || {});
-          for (const pname of pnames) {
-            const pdir = dirs[pname] || "input";
+          for (const [pname, pdir] of Object.entries(cell.port_directions)) {
             const pconn = cell.connections[pname];
             switch (pdir) {
               case "input":
-              case "inout":
                 add_net_target(pconn, dname, portmap[pname]);
                 break;
               case "output":
@@ -7925,9 +7898,7 @@
           }
         }
         for (const [pname, port] of Object.entries(mod.ports)) {
-          if (!port || !port.bits) continue;
           const dir = port.direction == "input" ? "Input" : port.direction == "output" ? "Output" : void 0;
-          if (!dir) continue;
           const dname = add_device({
             type: dir,
             net: pname,
@@ -8508,17 +8479,8 @@
             connect_mem(dname, cell, dev);
           else if (cell.type == "$lut")
             connect_mem(dname, cell, dev);
-          else {
-            const dynamic_portmap = {};
-            const dirs = cell.port_directions || {};
-            for (const pname of Object.keys(cell.connections || {})) {
-              const pdir = dirs[pname] || "input";
-              dynamic_portmap[pname] = pdir == "input" || pdir == "inout" || pdir == "in" ? { in: pname } : { out: pname };
-            }
-            dev.type = "Subcircuit";
-            dev.celltype = cell.type;
-            connect_device(dname, cell, dynamic_portmap);
-          }
+          else
+            throw Error("Invalid cell type: " + cell.type);
         }
         for (const [nbits, net] of nets.entries()) {
           if (net.source !== void 0)
@@ -8697,14 +8659,10 @@
     }
   });
 
-  // bridge.js
-  var require_bridge = __commonJS({
-    "bridge.js"() {
-      var y2d = require_core();
-      window.processYosys = y2d.yosys2digitaljs;
-    }
-  });
-  require_bridge();
+  // <stdin>
+  var core = require_core();
+  window.processYosys = core.yosys2digitaljs;
+  window.yosys2digitaljs = core;
 })();
 /*! Bundled license information:
 

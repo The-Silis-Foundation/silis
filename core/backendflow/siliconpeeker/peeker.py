@@ -34,6 +34,9 @@ class DEFParser:
         self.regions = []
         self.blockages = []
         self.dbu = 1000.0    
+        self.std_coords_flat = [] # [x, y, w, h, ...] for zero-overhead C++ ingest
+        self.tap_coords = []
+        self.macro_items = [] # (x, y, w, h, name)
         self.component_count = 0
         if os.path.exists(def_path):
             self.parse()
@@ -214,9 +217,16 @@ class DEFParser:
                             
                             if (current_comp_model in self.comp_sizes) or is_macro_by_size:
                                 self.comp_types[current_comp_name] = "MACRO"
-                            elif is_tap: self.comp_types[current_comp_name] = "TAP"
-                            elif is_clock: self.comp_types[current_comp_name] = "CLOCK"
-                            else: self.comp_types[current_comp_name] = "STD"
+                                self.macro_items.append((bb_x, bb_y, bb_w, bb_h, current_comp_name))
+                            elif is_tap:
+                                self.comp_types[current_comp_name] = "TAP"
+                                self.tap_coords.extend([bb_x, bb_y, bb_w, bb_h])
+                            elif is_clock:
+                                self.comp_types[current_comp_name] = "CLOCK"
+                                self.std_coords_flat.extend([bb_x, bb_y, bb_w, bb_h])
+                            else:
+                                self.comp_types[current_comp_name] = "STD"
+                                self.std_coords_flat.extend([bb_x, bb_y, bb_w, bb_h])
                             
                             self.comp_masters[current_comp_name] = current_comp_model
                             self.comp_orients[current_comp_name] = orient
@@ -344,11 +354,14 @@ class DEFParser:
 
 
 class SiliconPeeker(QGraphicsView):
+    """
+    [DEPRECATED] Legacy software-rendered CPU SiliconPeeker.
+    Use FastSiliconPeeker which utilizes hardware-accelerated FastLayoutViewer C++.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
-        # [FIX] REMOVED OpenGL to stop MESA/libEGL errors and Black Screen
-        # self.setViewport(QOpenGLWidget()) 
-        
+        import warnings
+        warnings.warn("SiliconPeeker is deprecated and sluggish. Use FastSiliconPeeker instead.", DeprecationWarning, stacklevel=2)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         
@@ -967,29 +980,54 @@ class FastSiliconPeeker(QWidget):
         d = self.def_data.die_rect
         self.core.set_core(d.x(), d.y(), d.width(), d.height())
         
-        std_x, std_y, std_w, std_h = [], [], [], []
         mac_x, mac_y, mac_w, mac_h, mac_names = [], [], [], [], []
         pin_x, pin_y, pin_w, pin_h, pin_names = [], [], [], [], []
         pwr_x, pwr_y, pwr_w, pwr_h = [], [], [], []
         reg_x, reg_y, reg_w, reg_h, reg_names = [], [], [], [], []
         blk_x, blk_y, blk_w, blk_h = [], [], [], []
         tap_x, tap_y, tap_w, tap_h = [], [], [], []
-        
-        for name, rect in self.def_data.comps_map.items():
-            ctype = self.def_data.comp_types.get(name, "STD")
-            is_macro = (ctype == "MACRO") or (rect.width() / self.def_data.dbu > 20) or (rect.height() / self.def_data.dbu > 20)
-            is_tap = (ctype == "TAP")
+        std_x, std_y, std_w, std_h = [], [], [], []
+
+        # Fast path: use pre-accumulated flat coordinates when available
+        has_fast_flat = hasattr(self.def_data, "std_coords_flat") and hasattr(self.core, "load_cells_flat")
+        if has_fast_flat:
+            if self.show_insts and self.def_data.std_coords_flat:
+                import numpy as np
+                flat_arr = np.array(self.def_data.std_coords_flat, dtype=np.float32)
+                self.core.load_cells_flat(flat_arr)
             
-            if is_macro:
-                if self.show_macros:
-                    mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
-                    mac_names.append(name)
-            elif is_tap:
-                if self.show_tapcells:
-                    tap_x.append(rect.x()); tap_y.append(rect.y()); tap_w.append(rect.width()); tap_h.append(rect.height())
-            else:
-                if self.show_insts:
-                    std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
+            if self.show_tapcells and self.def_data.tap_coords and hasattr(self.core, "load_cells_flat"):
+                import numpy as np
+                flat_tap = np.array(self.def_data.tap_coords, dtype=np.float32)
+                # Tap cells can be ingested via flat buffer or tap loader
+                tap_x = self.def_data.tap_coords[0::4]
+                tap_y = self.def_data.tap_coords[1::4]
+                tap_w = self.def_data.tap_coords[2::4]
+                tap_h = self.def_data.tap_coords[3::4]
+                if hasattr(self.core, 'load_tap_cells'):
+                    self.core.load_tap_cells(tap_x, tap_y, tap_w, tap_h)
+
+            if self.show_macros and hasattr(self.def_data, "macro_items"):
+                for mx, my, mw, mh, mn in self.def_data.macro_items:
+                    mac_x.append(mx); mac_y.append(my); mac_w.append(mw); mac_h.append(mh); mac_names.append(mn)
+        else:
+            std_x, std_y, std_w, std_h = [], [], [], []
+            for name, rect in self.def_data.comps_map.items():
+                ctype = self.def_data.comp_types.get(name, "STD")
+                is_macro = (ctype == "MACRO") or (rect.width() / self.def_data.dbu > 20) or (rect.height() / self.def_data.dbu > 20)
+                is_tap = (ctype == "TAP")
+                
+                if is_macro:
+                    if self.show_macros:
+                        mac_x.append(rect.x()); mac_y.append(rect.y()); mac_w.append(rect.width()); mac_h.append(rect.height())
+                        mac_names.append(name)
+                elif is_tap:
+                    if self.show_tapcells:
+                        tap_x.append(rect.x()); tap_y.append(rect.y()); tap_w.append(rect.width()); tap_h.append(rect.height())
+                else:
+                    if self.show_insts:
+                        std_x.append(rect.x()); std_y.append(rect.y()); std_w.append(rect.width()); std_h.append(rect.height())
+            if std_x: self.core.load_std_cells(std_x, std_y, std_w, std_h)
                 
         if self.show_pins and hasattr(self.def_data, 'pins'):
             for rect, name in self.def_data.pins:

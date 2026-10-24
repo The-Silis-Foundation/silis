@@ -8,7 +8,7 @@ import datetime
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
-from backendflow.siliconpeeker.peeker import SiliconPeeker, FastSiliconPeeker
+from backendflow.siliconpeeker.peeker import FastSiliconPeeker
 from backendflow.gdsviewer.gds3d import GDS3DPort
 from pdkmanagers.pdk.manager import SSAForge, PDKSelector
 from config import USER_SETTINGS, THEMES

@@ -44,7 +44,13 @@
         // Mock VSCode API for standalone WebEngine
         function acquireVsCodeApi() {
             return {
-                postMessage: function(msg) { console.log("VSCode message:", msg); },
+                postMessage: function(msg) {
+                    if (msg && (msg.type === 'contextAction' || msg.type === 'goToSource' || msg.type === 'expandRequest')) {
+                        console.log("SILIS_SCHEM_MSG:" + JSON.stringify(msg));
+                    } else {
+                        console.log("VSCode message:", msg);
+                    }
+                },
                 getState: function() { return {}; },
                 setState: function(state) {}
             };

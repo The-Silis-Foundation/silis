@@ -8,8 +8,8 @@ set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(pybind11 REQUIRED)
 
-set(CMAKE_BUILD_RPATH "$ORIGIN;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib")
-set(CMAKE_INSTALL_RPATH "$ORIGIN;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib")
+set(CMAKE_BUILD_RPATH "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;$ORIGIN")
+set(CMAKE_INSTALL_RPATH "/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib;/home/eatheswar/.local/usr/lib/x86_64-linux-gnu;$ORIGIN")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
 
 pybind11_add_module(fast_layout_viewer bindings.cpp FastLayoutViewer.cpp)

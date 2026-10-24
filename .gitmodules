@@ -7,3 +7,9 @@
 [submodule "third-party/siliconcompiler"]
 	path = third-party/siliconcompiler
 	url = https://github.com/siliconcompiler/siliconcompiler.git
+[submodule "third-party/rohd-wave-viewer"]
+	path = third-party/rohd-wave-viewer
+	url = https://github.com/intel/rohd-wave-viewer.git
+[submodule "third-party/sv-pathfinder"]
+	path = third-party/sv-pathfinder
+	url = https://github.com/heyfey/sv-pathfinder.git
