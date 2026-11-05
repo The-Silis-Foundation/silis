@@ -5,6 +5,14 @@ Combines the C++ SilisNativeLayerViewer canvas with the native Qt6 DesignPropert
 and OpenDB high-fidelity data extraction.
 """
 
+# ==============================================================================
+# Silis Layer Viewer Panel
+#
+# Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+# Project community and contributors (The OpenROAD Authors / Precision Innovations).
+# Based on OpenROAD's LayoutViewer and DisplayControls paradigm.
+# ==============================================================================
+
 import os
 import glob
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QLabel
@@ -81,6 +89,14 @@ class LayerViewerPanel(QWidget):
 
         # Dispatch OpenDB script to gather complete geometry + connectivity
         py_script = f"""
+# ==============================================================================
+# Silis Layer Viewer Panel
+#
+# Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+# Project community and contributors (The OpenROAD Authors / Precision Innovations).
+# Based on OpenROAD's LayoutViewer and DisplayControls paradigm.
+# ==============================================================================
+
 import os, sys, json, glob
 import openroad as ord
 import odb

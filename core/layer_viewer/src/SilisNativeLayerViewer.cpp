@@ -1,3 +1,12 @@
+// ==============================================================================
+// Silis Native Layer Viewer Canvas
+//
+// Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+// Project community and contributors (The OpenROAD Authors / Precision Innovations).
+// Based on and inspired by the battle-tested architecture and visual precision
+// of OpenROAD's LayoutViewer (layoutViewer.cpp / displayControls.cpp).
+// ==============================================================================
+
 #include "SilisNativeLayerViewer.h"
 #include <QPainter>
 #include <QPaintEvent>
@@ -303,6 +312,55 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
 
         p.setPen(QColor(255, 255, 255));
         p.drawText(text_rect, Qt::AlignCenter, ruler_str);
+    }
+
+    // 8. EXACT OPENROAD SCALE BAR HUD (Bottom-Left distance bracket |_| in screen coordinates)
+    {
+        // Compute nice metric target length in world units (e.g., 10, 20, 50, 100, 200, 500, 1000 µm)
+        double target_screen_px = 120.0;
+        double world_units_for_target = (target_screen_px / zoom_factor_) / dbu_; // in µm
+        
+        // Find closest 1, 2, 5 * 10^k
+        double power = std::pow(10.0, std::floor(std::log10(world_units_for_target)));
+        double mantissa = world_units_for_target / power;
+        double nice_units = 1.0;
+        if (mantissa >= 5.0) nice_units = 5.0;
+        else if (mantissa >= 2.0) nice_units = 2.0;
+        else nice_units = 1.0;
+        double bar_microns = nice_units * power;
+        double bar_px = bar_microns * dbu_ * zoom_factor_;
+
+        if (bar_px > 10.0 && bar_px < width()) {
+            double x_start = 20.0;
+            double y_base = height() - 25.0;
+            double tick_h = 7.0;
+
+            // Draw OpenROAD |_| scale bracket
+            p.setPen(QPen(Qt::white, 2.0));
+            // Left tick
+            p.drawLine(QPointF(x_start, y_base - tick_h), QPointF(x_start, y_base));
+            // Horizontal bar
+            p.drawLine(QPointF(x_start, y_base), QPointF(x_start + bar_px, y_base));
+            // Right tick
+            p.drawLine(QPointF(x_start + bar_px, y_base - tick_h), QPointF(x_start + bar_px, y_base));
+
+            // Dimension text label
+            QString scale_str;
+            if (bar_microns >= 1000.0) {
+                scale_str = QString("%1 mm").arg(bar_microns / 1000.0, 0, 'g', 3);
+            } else if (bar_microns >= 1.0) {
+                scale_str = QString("%1 µm").arg(bar_microns, 0, 'f', (bar_microns == std::floor(bar_microns)) ? 0 : 1);
+            } else {
+                scale_str = QString("%1 nm").arg(bar_microns * 1000.0, 0, 'f', 0);
+            }
+
+            QFont scale_font = QFontDatabase::systemFont(QFontDatabase::SystemFont::FixedFont);
+            scale_font.setPointSize(8);
+            scale_font.setBold(true);
+            p.setFont(scale_font);
+            p.setPen(Qt::white);
+            p.drawText(QRectF(x_start, y_base - tick_h - 14.0, bar_px, 14.0), Qt::AlignCenter, scale_str);
+        }
     }
 }
 

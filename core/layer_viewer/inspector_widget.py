@@ -6,6 +6,14 @@ with direct navigation and flightline triggering.
 """
 
 import os
+# ==============================================================================
+# Silis Design Property Inspector
+#
+# Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+# Project community and contributors (The OpenROAD Authors / Precision Innovations).
+# Based on OpenROAD's Inspector panel paradigm.
+# ==============================================================================
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem,
     QLineEdit, QPushButton, QHeaderView, QSplitter, QFrame

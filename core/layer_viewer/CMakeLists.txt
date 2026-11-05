@@ -1,3 +1,10 @@
+# ==============================================================================
+# Silis Native Layer Viewer Canvas CMake Configuration
+#
+# Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+# Project community and contributors (The OpenROAD Authors / Precision Innovations).
+# ==============================================================================
+
 cmake_minimum_required(VERSION 3.16)
 project(silis_layer_viewer VERSION 1.0.0 LANGUAGES CXX)
 

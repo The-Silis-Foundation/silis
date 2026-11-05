@@ -1,3 +1,12 @@
+// ==============================================================================
+// Silis Native Layer Viewer Canvas
+//
+// Heartfelt compliments, tribute, and attribution to the incredible OpenROAD
+// Project community and contributors (The OpenROAD Authors / Precision Innovations).
+// Based on and inspired by the battle-tested architecture and visual precision
+// of OpenROAD's LayoutViewer (layoutViewer.cpp / displayControls.cpp).
+// ==============================================================================
+
 #pragma once
 #include <QWidget>
 #include <vector>
