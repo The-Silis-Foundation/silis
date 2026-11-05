@@ -18,7 +18,10 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     import silis_layer_viewer
 
-from silis.core.layer_viewer.inspector_widget import DesignPropertyInspector
+try:
+    from layer_viewer.inspector_widget import DesignPropertyInspector
+except ImportError:
+    from silis.core.layer_viewer.inspector_widget import DesignPropertyInspector
 
 
 class LayerViewerPanel(QWidget):
