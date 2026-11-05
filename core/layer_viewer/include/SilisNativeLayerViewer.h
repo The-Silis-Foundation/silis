@@ -6,6 +6,8 @@
 #include <QRectF>
 #include <QPointF>
 #include <QColor>
+#include <QRect>
+#include <QPoint>
 
 struct LayerShape {
     float x;
@@ -37,7 +39,7 @@ public:
     void set_layer_visible(const std::string& layer_name, bool visible);
     void set_all_layers_visible(bool visible);
 
-    // Instances (for hit testing and overlay)
+    // Instances
     void load_instances(const std::vector<float>& x, const std::vector<float>& y,
                        const std::vector<float>& w, const std::vector<float>& h,
                        const std::vector<std::string>& names,
@@ -56,6 +58,7 @@ public:
     // Navigation & Viewport
     void fit_in_view();
     void pan_to(float x, float y, float target_zoom = -1.0f);
+    void zoom_to_box(const QRectF& dbu_box);
 
     // Ruler
     void set_ruler_active(bool active);
@@ -67,6 +70,7 @@ public:
 
 signals:
     void instance_clicked(const QString& name, const QString& master, float x, float y, float w, float h);
+    void area_selected(float x1, float y1, float x2, float y2);
     void canvas_clicked(float x, float y);
 
 protected:
@@ -83,6 +87,11 @@ private:
     QPointF pan_offset_;
     bool is_panning_ = false;
     QPointF last_mouse_pos_;
+
+    // Exact OpenROAD Marquee Rubberband Selection
+    QRect rubber_band_;
+    bool rubber_band_showing_ = false;
+    QPoint mouse_press_pos_;
 
     // Layer shapes: "li1", "met1", "met2", "met3", "met4", "met5", "vias"
     std::map<std::string, std::vector<LayerShape>> layers_;
