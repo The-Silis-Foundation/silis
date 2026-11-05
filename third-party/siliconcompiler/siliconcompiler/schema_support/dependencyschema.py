@@ -1,0 +1,408 @@
+import os.path
+import pathlib
+
+from typing import Dict, Union, Tuple, List, Optional, Set, TextIO
+
+from siliconcompiler.schema.baseschema import BaseSchema, LazyLoad
+from siliconcompiler.schema.editableschema import EditableSchema
+from siliconcompiler.schema.parameter import Parameter, Scope
+from siliconcompiler.schema.namedschema import NamedSchema
+
+from siliconcompiler.schema_support.pathschema import PathSchemaBase
+
+
+class DependencySchema(BaseSchema):
+    '''
+    Schema extension to add :meth:`.add_dep` capability to a schema section.
+    '''
+
+    def __init__(self):
+        '''Initializes the DependencySchema.'''
+        super().__init__()
+
+        self._reset_deps()
+
+        schema = EditableSchema(self)
+        schema.insert(
+            "deps",
+            Parameter(
+                '[str]',
+                scope=Scope.GLOBAL,
+                lock=True,
+                shorthelp="List of object dependencies",
+                help="List of named object dependencies included via add_dep()."))
+
+    def _from_dict(self, manifest: Dict,
+                   keypath: Union[List[str], Tuple[str, ...]],
+                   version: Optional[Tuple[int, ...]] = None,
+                   lazyload: LazyLoad = LazyLoad.ON) \
+            -> Tuple[Set[Tuple[str, ...]], Set[Tuple[str, ...]]]:
+        '''
+        Internal helper to load schema from a dictionary manifest.
+
+        This method temporarily unlocks the 'deps' parameter to allow it to be
+        populated from the manifest data.
+
+        Args:
+            manifest (dict): The dictionary to load data from.
+            keypath (list): The list of keys representing the path to the data.
+            version (str, optional): The schema version. Defaults to None.
+
+        Returns:
+            The result of the parent class's _from_dict method.
+        '''
+        depsdict = None
+        if "__meta__" in manifest and "__deps__" in manifest["__meta__"]:
+            depsdict = manifest["__meta__"]["__deps__"]
+
+        # Defer dependency loading while lazy loading is enforced: the parent
+        # loader stashes the manifest (including the embedded __deps__) and
+        # re-invokes this method with a non-enforced mode on elaboration.
+        process_deps = depsdict is not None and not lazyload.is_enforced
+
+        deps = {}
+        if process_deps:
+            depversion = ".".join(map(str, version)) if version else None
+            for name, depcfg in depsdict.items():
+                if depversion:
+                    # Build a fresh parameter per dependency: Parameter.from_dict
+                    # consumes the dict, so a shared instance would be exhausted
+                    # after the first dependency.
+                    depcfg[BaseSchema._version_key] = \
+                        Parameter("str", defvalue=depversion).getdict()
+                # from_manifest expects a bool; dependencies are materialized
+                # eagerly so the full graph is available once elaborated.
+                deps[name] = NamedSchema.from_manifest(cfg=depcfg, lazyload=False)
+            del manifest["__meta__"]["__deps__"]
+
+        self.set("deps", False, field="lock")
+        ret = super()._from_dict(manifest, keypath, version=version, lazyload=lazyload)
+        self.set("deps", True, field="lock")
+        if process_deps:
+            # Reset even for an explicitly empty dependency set so stale
+            # dependencies do not survive a reload.
+            self._reset_deps()
+            if deps:
+                self._populate_deps(deps)
+        return ret
+
+    def _getdict_meta(self):
+        from siliconcompiler import Project
+        meta = super()._getdict_meta()
+        if isinstance(self._parent(root=True), Project):
+            return meta
+
+        # Root is not a project, so emit a flat, de-duplicated map of the full
+        # transitive dependency set. get_dep(hierarchy=True) already collapses
+        # diamonds and tolerates cycles, so the map is finite. Each entry is
+        # serialized without its own nested __deps__ (its "deps" name list is
+        # preserved), and the graph is re-linked from this flat map on load.
+        all_deps = self.get_dep(hierarchy=True)
+        if all_deps:
+            meta['__deps__'] = {}
+            for dep in all_deps:
+                # Copy so the original is untouched, then clear the copy's
+                # dependency objects so it serializes as a flat leaf entry.
+                flat = EditableSchema(dep).copy()
+                if isinstance(flat, DependencySchema):
+                    flat._reset_deps()
+                meta['__deps__'][dep.name] = flat.getdict()
+
+        return meta
+
+    def write_manifest(self, filename: Union[str, bytes, pathlib.Path, TextIO]) -> None:
+        # Detach a copy from any parent project so the dependency graph is
+        # embedded (as a flat map, see _getdict_meta) rather than deferred to
+        # the project. The original object is left untouched.
+        depschema = EditableSchema(self).copy()
+        BaseSchema.write_manifest(depschema, filename)
+
+    def add_dep(self, obj: NamedSchema, clobber: bool = True) -> bool:
+        """
+        Adds a module to this object.
+
+        Args:
+            obj (:class:`NamedSchema`): Module to add.
+            clobber (bool): If true will insert the object and overwrite any
+                existing with the same name.
+
+        Returns:
+            True if object was imported, otherwise false.
+        """
+
+        if not isinstance(obj, NamedSchema):
+            raise TypeError(f"Cannot add an object of type: {type(obj)}")
+
+        if not clobber and obj.name in self.__deps:
+            return False
+
+        if obj.name is None:
+            raise ValueError("Cannot add an unnamed dependency")
+
+        if not self.has_dep(obj):
+            self.set("deps", False, field="lock")
+            self.add("deps", obj.name)
+            self.set("deps", True, field="lock")
+
+        self.__deps[obj.name] = obj
+
+        return True
+
+    @staticmethod
+    def _write_depgraph(filename: str,
+                        root: str,
+                        graph: Dict[str, Set[str]],
+                        node_styles: Optional[Dict[str, Dict[str, str]]] = None,
+                        fontcolor: str = '#000000',
+                        background: str = 'transparent',
+                        fontsize: str = '14',
+                        border: bool = True, landscape: bool = False) -> None:
+        r'''
+        Renders and saves a dependency graph to a file.
+
+        Args:
+            filename (filepath): Output filepath.
+            root (str): Name of the root node.
+            graph (dict): Dictionary mapping node names to sets of connected node names.
+            node_styles (dict): Optional dictionary mapping node names to style overrides.
+                Each entry may contain 'shape', 'color', and/or 'text' keys.
+            fontcolor (str): Node font RGB color hex value.
+            background (str): Background color.
+            fontsize (str): Node text font size.
+            border (bool): Enables node border if True.
+            landscape (bool): Renders graph in landscape layout if True.
+
+        Examples:
+            >>> DependencySchema._write_depgraph('mydump.png', 'root',
+            ...     {'root': {'child'}, 'child': set()})
+            Renders the dependency graph and writes the result to a png file.
+        '''
+        import graphviz
+
+        filepath = os.path.abspath(filename)
+        fileroot, ext = os.path.splitext(filepath)
+        fileformat = ext[1:]
+
+        penwidth = '1' if border else '0'
+        rankdir = 'LR' if landscape else 'TB'
+
+        dot = graphviz.Digraph(format=fileformat)
+        dot.graph_attr['rankdir'] = rankdir
+        dot.attr(bgcolor=background)
+
+        if node_styles is None:
+            node_styles = {}
+
+        all_nodes = set(graph.keys())
+        for _, edges in graph.items():
+            all_nodes.update(edges)
+
+        for node in sorted(all_nodes):
+            edges = graph.get(node, set())
+            styles = node_styles.get(node, {})
+            text = styles.get('text', node)
+            shape = styles.get('shape', 'box' if node == root else 'oval')
+            color = styles.get('color', background)
+
+            dot.node(node, label=text, bordercolor=fontcolor, style='filled',
+                     fontcolor=fontcolor, fontsize=fontsize, ordering="in",
+                     penwidth=penwidth, fillcolor=color, shape=shape)
+
+            for conn in sorted(edges):
+                dot.edge(node, conn, dir='back')
+
+        try:
+            dot.render(filename=fileroot, cleanup=True)
+        except graphviz.ExecutableNotFound as e:
+            raise RuntimeError(f'Unable to save flowgraph: {e}')
+
+    def write_depgraph(self, filename: str,
+                       fontcolor: str = '#000000',
+                       background: str = 'transparent',
+                       fontsize: str = '14',
+                       border: bool = True, landscape: bool = False) -> None:
+        r'''
+        Renders and saves the dependency graph to a file.
+
+        Args:
+            filename (filepath): Output filepath.
+            fontcolor (str): Node font RGB color hex value.
+            background (str): Background color.
+            fontsize (str): Node text font size.
+            border (bool): Enables node border if True.
+            landscape (bool): Renders graph in landscape layout if True.
+
+        Examples:
+            >>> schema.write_depgraph('mydump.png')
+            Renders the object dependency graph and writes the result to a png file.
+        '''
+        def make_label(dep):
+            return f"lib-{dep.name}"
+
+        graph = {
+            self.name: set(make_label(dep) for dep in self.__deps.values())
+        }
+        node_styles = {
+            self.name: {'shape': 'box', 'text': self.name}
+        }
+
+        for dep in self.get_dep():
+            label = make_label(dep)
+            if isinstance(dep, DependencySchema):
+                connects_to = set(make_label(subdep) for subdep in dep.__deps.values())
+            else:
+                connects_to = set()
+            graph[label] = connects_to
+            node_styles[label] = {'shape': 'oval', 'text': dep.name}
+
+        self._write_depgraph(filename, self.name, graph, node_styles=node_styles,
+                             fontcolor=fontcolor, background=background,
+                             fontsize=fontsize, border=border, landscape=landscape)
+
+    def __get_all_deps(self, seen: Set[str]) -> List[NamedSchema]:
+        '''
+        Recursively traverses the dependency tree to generate a flat list.
+
+        This method avoids cycles and duplicate entries by keeping track of
+        visited nodes in the 'seen' set.
+
+        Args:
+            seen (set): A set of dependency names that have already been visited.
+
+        Returns:
+            list: A flat list of all dependency objects.
+        '''
+        deps = []
+
+        for obj in self.__deps.values():
+            if obj.name in seen:
+                continue
+
+            deps.append(obj)
+            seen.add(obj.name)
+
+            if not isinstance(obj, DependencySchema):
+                # nothing to iterate over
+                continue
+
+            for obj_dep in obj.__get_all_deps(seen):
+                deps.append(obj_dep)
+                seen.add(obj_dep.name)
+
+        return deps
+
+    def get_dep(self, name: Optional[str] = None, hierarchy: bool = True) -> List[NamedSchema]:
+        '''
+        Returns all dependencies associated with this object or a specific one if requested.
+
+        Raises:
+            KeyError: if the specific module is requested but not found.
+
+        Args:
+            name (str): Name of the module.
+            hierarchy (bool): If True, will return all modules including children,
+                otherwise only this object's modules are returned.
+
+        Returns:
+            list: A list of dependency objects.
+        '''
+
+        # Ensure a deferred (lazily-loaded) manifest is elaborated so the
+        # internal dependency map is populated before it is read.
+        self.get("deps")
+
+        if name:
+            if not self.has_dep(name):
+                raise KeyError(f"{name} is not an imported module")
+
+            return self.__deps[name]
+
+        if hierarchy:
+            return self.__get_all_deps(set())
+        return list(self.__deps.values())
+
+    def has_dep(self, name: Union[NamedSchema, str]) -> bool:
+        '''
+        Checks if a specific dependency is present.
+
+        Args:
+            name (str): Name of the module.
+
+        Returns:
+            True if the module was found, False otherwise.
+        '''
+
+        if isinstance(name, NamedSchema):
+            name = name.name
+
+        return name in self.__deps
+
+    def remove_dep(self, name: Union[str, NamedSchema]) -> bool:
+        '''
+        Removes a previously registered module.
+
+        Args:
+            name (str): Name of the module.
+
+        Returns:
+            True if the module was removed, False if it was not found.
+        '''
+        if not self.has_dep(name):
+            return False
+
+        if isinstance(name, NamedSchema):
+            name = name.name
+
+        del self.__deps[name]
+
+        # Remove from dependency list
+        dependencies = self.get("deps")
+        dependencies.remove(name)
+
+        self.set("deps", False, field="lock")
+        self.set("deps", dependencies)
+        self.set("deps", True, field="lock")
+
+        return True
+
+    def _populate_deps(self, module_map: Dict[str, NamedSchema]) -> None:
+        '''
+        Internal method to populate the internal dependency dictionary.
+
+        This is used to reconstruct object references from a serialized format
+        by looking up dependency names in the provided map.
+
+        Args:
+            module_map (dict): A dictionary mapping module names to module objects.
+        '''
+        if self.__deps:
+            return
+
+        for module in self.get("deps"):
+            if module not in module_map:
+                raise ValueError(f"{module} not available in map")
+            self.__deps[module] = module_map[module]
+
+            if isinstance(self.__deps[module], DependencySchema):
+                self.__deps[module]._populate_deps(module_map)
+
+    def _reset_deps(self) -> None:
+        '''Resets the internal dependency dictionary.'''
+        self.__deps = {}
+
+    def check_filepaths(self, ignore_keys: Optional[List[Tuple[str, ...]]] = None) -> bool:
+        '''
+        Verifies that paths to all files in manifest are valid.
+
+        Args:
+            ignore_keys (list of keypaths): list of keypaths to ignore while checking
+
+        Returns:
+            True if all file paths are valid, otherwise False.
+        '''
+        error = False
+        for obj in [self, *self.get_dep()]:
+            if not isinstance(obj, PathSchemaBase):
+                continue
+            error |= not PathSchemaBase.check_filepaths(obj, ignore_keys=ignore_keys)
+        return not error

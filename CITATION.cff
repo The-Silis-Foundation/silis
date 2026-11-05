@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Silis: Silicon Scaffold"
+abstract: "Silis is an integrated development environment (IDE) designed to streamline the hardware design lifecycle from Register Transfer Level (RTL) to GDSII. Built to support the Open Hardware ecosystem, Silis integrates established open-source engines into a unified graphical interface that prioritizes a human-in-the-loop workflow. Unlike traditional flows that rely heavily on opaque, fully automated scripts, Silis provides a transparent and interactive cockpit. This approach allows users to visualize the immediate impact of design choices, enabling beginners to navigate the complexities of physical design while offering experts granular control over synthesis, floorplanning, and routing parameters for optimal chip performance."
+authors:
+  - family-names: Robin
+    given-names: Jerome Antony
+  - given-names: Eatheswar
+  - family-names: Sanjay
+    given-names: Venkat
+  - family-names: Mohammed
+    given-names: Afridh
+  - family-names: Mohammed
+    given-names: Adhil
+version: 2.5.0
+date-released: 2026-02-14
+license: AGPL-3.0
+repository-code: "https://github.com/The-Silis-Foundation/silis"
+url: "https://github.com/The-Silis-Foundation/silis"
+keywords:
+  - EDA
+  - VLSI
+  - RTL-to-GDSII
+  - Open Hardware
+  - ASIC Design
+  - Physical Design
+  - OpenROAD
+  - Verilog
+  - Silicon

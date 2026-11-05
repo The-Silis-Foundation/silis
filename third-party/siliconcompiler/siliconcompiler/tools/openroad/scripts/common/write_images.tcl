@@ -1,0 +1,584 @@
+# Adopted from https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/3f9740e6b3643835e918d78ae1d377d65af0f0fb/flow/scripts/save_images.tcl
+
+proc sc_image_heatmap { args } {
+    sta::parse_key_args "sc_image_heatmap" args \
+        keys {-name -heatmap -title -gif -pixels} \
+        flags {-dont_allow_bin_adjust}
+
+    sta::check_argc_eq1 "sc_image_heatmap" $args
+
+    set path [lindex $args 0]
+
+    lassign [sc_cfg_tool_task_get var ord_heatmap_bins] ord_heatmap_bins_x ord_heatmap_bins_y
+
+    set name $keys(-name)
+    set ident $keys(-heatmap)
+    set title $keys(-title)
+    set pixels 512
+    if { [info exists keys(-pixels)] } {
+        set pixels $keys(-pixels)
+    }
+
+    file mkdir reports/images/heatmap
+
+    gui::set_heatmap $ident ShowLegend 1
+    gui::set_heatmap $ident ShowNumbers 1
+
+    if { ![info exists flags(-dont_allow_bin_adjust)] } {
+        set heatmap_xn $ord_heatmap_bins_x
+        set heatmap_yn $ord_heatmap_bins_y
+
+        if { $heatmap_xn < 1 } {
+            set heatmap_xn 1
+        }
+        if { $heatmap_yn < 1 } {
+            set heatmap_yn 1
+        }
+
+        set min_heatmap_bin 1.0
+        set max_heatmap_bin 100.0
+
+        set box [[ord::get_db_block] getDieArea]
+        set heatmap_x [expr { [ord::dbu_to_microns [$box dx]] / $heatmap_xn }]
+        set heatmap_y [expr { [ord::dbu_to_microns [$box dy]] / $heatmap_yn }]
+
+        if { $heatmap_x < $min_heatmap_bin } {
+            set heatmap_x $min_heatmap_bin
+        } elseif { $heatmap_x > $max_heatmap_bin } {
+            set heatmap_x $max_heatmap_bin
+        }
+        if { $heatmap_y < $min_heatmap_bin } {
+            set heatmap_y $min_heatmap_bin
+        } elseif { $heatmap_y > $max_heatmap_bin } {
+            set heatmap_y $max_heatmap_bin
+        }
+        gui::set_heatmap $ident GridX $heatmap_x
+        gui::set_heatmap $ident GridY $heatmap_y
+    }
+
+    gui::set_heatmap $ident rebuild
+
+    if { ![gui::get_heatmap_bool $ident has_data] } {
+        return
+    }
+
+    gui::set_display_controls "Heat Maps/${name}" visible true
+
+    set save_args []
+    if { [info exists keys(-gif)] && $keys(-gif) >= 0 } {
+        lappend save_args -gif $keys(-gif)
+    }
+
+    sc_save_image \
+        -title "$title heatmap" \
+        {*}$save_args \
+        -pixels $pixels \
+        reports/images/heatmap/$path
+
+    gui::set_display_controls "Heat Maps/${name}" visible false
+}
+
+proc sc_image_placement { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+
+    global sc_topmodule
+
+    sc_image_setup_default
+
+    # The placement view without routing
+    gui::set_display_controls "Layers/*" visible false
+    gui::set_display_controls "Instances/Physical/*" visible false
+
+    sc_save_image \
+        -title "placement" \
+        reports/images/${sc_topmodule}.placement.png
+}
+
+proc sc_image_routing { } {
+    if { ![sc_has_routing] } {
+        return
+    }
+
+    global sc_topmodule
+
+    sc_image_setup_default
+
+    gui::set_display_controls "Nets/Power" visible false
+    gui::set_display_controls "Nets/Ground" visible false
+
+    sc_save_image \
+        -title "routing" \
+        reports/images/${sc_topmodule}.routing.png
+}
+
+proc sc_image_everything { } {
+    global sc_topmodule
+
+    sc_image_setup_default
+    sc_save_image \
+        -title "snapshot" \
+        reports/images/${sc_topmodule}.png
+}
+
+proc sc_image_irdrop { net scene } {
+    if { ![sc_cfg_tool_task_check_in_list power var reports] } {
+        return
+    }
+
+    if { ![sc_has_placed_instances] || [sc_has_unplaced_instances] } {
+        return
+    }
+
+    if { [sc_has_sta_mcmm_support] } {
+        if {
+            ![sc_is_scene_enabled $scene power] &&
+            ![sc_is_scene_enabled $scene leakagepower] &&
+            ![sc_is_scene_enabled $scene dynamicpower]
+        } {
+            return
+        }
+    }
+
+    sc_image_setup_default
+
+    file mkdir reports/images/heatmap/irdrop
+
+    # suppress error message related to failed analysis,
+    # that is okay, we just won't take a screenshot
+    set msgs "38 39 69"
+    foreach msg $msgs {
+        suppress_message PSM $msg
+    }
+    set analyze_args []
+    lappend analyze_args -source_type STRAPS
+    if { [sc_check_version 24 3 2487] } {
+        lappend analyze_args -allow_reuse
+    }
+    set failed [catch { analyze_power_grid -net $net -corner $scene {*}$analyze_args } err]
+    foreach msg $msgs {
+        unsuppress_message PSM $msg
+    }
+    if { $failed } {
+        utl::warn FLW 1 "Unable to generate IR drop heatmap for $net on $scene"
+        return
+    }
+
+    set gif -1
+    if { [sc_check_version 24 3 5987] } {
+        set gif [save_animated_gif -start "reports/images/heatmap/irdrop/${net}.${scene}.gif"]
+        if { $gif == "" } {
+            set gif 0
+        }
+    }
+    foreach layer [[ord::get_db_tech] getLayers] {
+        if { [$layer getRoutingLevel] == 0 } {
+            continue
+        }
+        set layer_name [$layer getName]
+
+        gui::set_heatmap IRDrop Net $net
+        gui::set_heatmap IRDrop Corner $scene
+        gui::set_heatmap IRDrop Layer $layer_name
+        gui::set_heatmap IRDrop rebuild
+
+        set label ""
+        if { [sc_check_version 24 3 5987] } {
+            set box [[ord::get_db_block] getDieArea]
+            set x [ord::dbu_to_microns [$box xMax]]
+            set y [ord::dbu_to_microns [$box yMin]]
+            set label [add_label -position "$x $y" -anchor "bottom right" -color white $layer_name]
+        }
+
+        sc_image_heatmap \
+            -name "IR Drop" \
+            -heatmap "IRDrop" \
+            -title "IR drop for $net on $layer_name for $scene" \
+            -gif $gif \
+            "irdrop/${net}.${scene}.${layer_name}.png"
+
+        if { $label != "" } {
+            gui::delete_label $label
+        }
+    }
+    if { $gif >= 0 } {
+        if { [sc_check_version 24 3 11279] } {
+            save_animated_gif -end -key $gif
+        } else {
+            save_animated_gif -end
+        }
+    }
+}
+
+proc sc_image_routing_congestion { } {
+    if { ![sc_has_global_routing] } {
+        return
+    }
+
+    sc_image_setup_default
+
+    sc_image_heatmap \
+        -name "Routing Congestion" \
+        -heatmap "Routing" \
+        -title "routing congestion" \
+        -dont_allow_bin_adjust \
+        "routing_congestion.png"
+}
+
+proc sc_image_estimated_routing_congestion { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+
+    sc_image_setup_default
+
+    suppress_message GRT 10
+    suppress_message GRT 42
+    catch {
+        sc_image_heatmap \
+            -name "Estimated Congestion (RUDY)" \
+            -heatmap "RUDY" \
+            -title "estimated routing congestion" \
+            -dont_allow_bin_adjust \
+            "estimated_routing_congestion.png"
+    } err
+    unsuppress_message GRT 10
+    unsuppress_message GRT 42
+}
+
+proc sc_image_power_density { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+    global sc_scenarios
+
+    sc_image_setup_default
+
+    file mkdir reports/images/heatmap/power_density
+
+    if { [sc_has_sta_mcmm_support] } {
+        foreach scene $sc_scenarios {
+            if {
+                ![sc_is_scene_enabled $scene power] &&
+                ![sc_is_scene_enabled $scene leakagepower] &&
+                ![sc_is_scene_enabled $scene dynamicpower]
+            } {
+                continue
+            }
+
+            if { [sc_check_version 26 1 1336] } {
+                gui::set_heatmap Power Scene $scene
+            } else {
+                gui::set_heatmap Power Corner $scene
+            }
+            gui::set_heatmap Power rebuild
+
+            sc_image_heatmap \
+                -name "Power Density" \
+                -heatmap "Power" \
+                -title "power density for $scene" \
+                "power_density/${scene}.png"
+        }
+    } else {
+        foreach corner [sta::corners] {
+            set corner_name [$corner name]
+
+            gui::set_heatmap Power Corner $corner_name
+            gui::set_heatmap Power rebuild
+
+            sc_image_heatmap \
+                -name "Power Density" \
+                -heatmap "Power" \
+                -title "power density for $corner_name" \
+                "power_density/${corner_name}.png"
+        }
+    }
+}
+
+proc sc_image_placement_density { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+
+    sc_image_setup_default
+
+    sc_image_heatmap \
+        -name "Placement Density" \
+        -heatmap "Placement" \
+        -title "placement density" \
+        "placement_density.png"
+}
+
+proc sc_image_module_view { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+
+    if { [llength [[ord::get_db_block] getModInsts]] < 1 } {
+        return
+    }
+
+    global sc_topmodule
+    sc_image_setup_default
+
+    gui::set_display_controls "Misc/Module view" visible true
+    gui::set_display_controls "Nets/*" visible false
+
+    sc_save_image \
+        -title "module view" \
+        reports/images/${sc_topmodule}.modules.png
+}
+
+proc sc_image_clocks { } {
+    if { ![sc_has_placed_instances] } {
+        return
+    }
+
+    global sc_topmodule
+    sc_image_setup_default
+
+    # The clock view: all clock nets and buffers
+    gui::set_display_controls "Layers/*" visible true
+    gui::set_display_controls "Nets/*" visible false
+    gui::set_display_controls "Nets/Clock" visible true
+    gui::set_display_controls "Instances/*" visible false
+    gui::set_display_controls "Instances/StdCells/Clock tree/*" visible true
+    if { [select -name "clk*" -type Inst] == 0 } {
+        # Nothing selected
+        return
+    }
+
+    sc_save_image \
+        -title "clocks" \
+        reports/images/${sc_topmodule}.clocks.png
+}
+
+proc sc_image_clocktree { } {
+    gui::show_widget "Clock Tree Viewer"
+    global sc_topmodule
+    global sc_scenarios
+
+    sc_image_setup_default
+    gui::set_display_controls "Layers/*" visible true
+    gui::set_display_controls "Nets/*" visible false
+    gui::set_display_controls "Nets/Clock" visible true
+
+    set clock_state []
+    foreach clock [all_clocks] {
+        lappend clock_state $clock [$clock is_propagated]
+    }
+    set_propagated_clock [all_clocks]
+
+    file mkdir reports/images/clocks
+    foreach clock [all_clocks] {
+        if { [llength [get_property $clock sources]] == 0 } {
+            # Skip virtual clocks
+            continue
+        }
+        file mkdir reports/images/clocktree
+
+        set clock_name [get_name $clock]
+        foreach corner $sc_scenarios {
+            set path reports/images/clocktree/${clock_name}.${corner}.png
+            utl::info FLW 1 "Saving \"$clock_name\" clock tree for $corner to $path"
+            save_clocktree_image $path \
+                -clock $clock_name \
+                -width 1024 \
+                -height 1024 \
+                -corner $corner
+        }
+
+        if { [info commands gui::select_clockviewer_clock] != "" } {
+            set select_clk_args []
+            if { [sc_check_version 24 3 7421] } {
+                lappend select_clk_args 2
+            }
+            gui::select_clockviewer_clock ${clock_name} {*}$select_clk_args
+            sc_save_image \
+                -title "clock - ${clock_name}" \
+                -pixels 512 \
+                reports/images/clocks/${sc_topmodule}.${clock_name}.png
+        }
+    }
+
+    foreach {clock state} $clock_state {
+        if { $state } {
+            set_propagated_clock $clock
+        } else {
+            unset_propagated_clock $clock
+        }
+    }
+
+    gui::hide_widget "Clock Tree Viewer"
+}
+
+proc sc_image_timing_histograms { } {
+    if { ![sc_check_version 24 3 3939] } {
+        return
+    }
+
+    if { [sc_has_sta_mcmm_support] && ![sc_check_version 26 1 1179] } {
+        # Disabled due to segfault
+        return
+    }
+
+    file mkdir reports/images/timing
+
+    if { [sc_cfg_tool_task_check_in_list setup var reports] } {
+        set path reports/images/timing/setup.histogram.png
+        utl::info FLW 1 "Saving \"setup timing histogram\" to $path"
+        save_histogram_image $path \
+            -mode setup \
+            -width 500 \
+            -height 500
+    }
+    if { [sc_cfg_tool_task_check_in_list hold var reports] } {
+        set path reports/images/timing/hold.histogram.png
+        utl::info FLW 1 "Saving \"hold timing histogram\" to $path"
+        save_histogram_image $path \
+            -mode hold \
+            -width 500 \
+            -height 500
+    }
+}
+
+proc sc_image_optimizer { } {
+    global sc_topmodule
+    sc_image_setup_default
+
+    # The resizer view: all instances created by the resizer grouped
+    gui::set_display_controls "Layers/*" visible false
+    gui::set_display_controls "Instances/*" visible true
+    gui::set_display_controls "Instances/Physical/*" visible false
+
+    set hold_count [select -name "hold*" -type Inst -highlight 0] ;# green
+    set input_count [select -name "input*" -type Inst -highlight 1] ;# yellow
+    set output_count [select -name "output*" -type Inst -highlight 1]
+    set repeater_count [select -name "repeater*" -type Inst -highlight 3] ;# magenta
+    set fanout_count [select -name "fanout*" -type Inst -highlight 3]
+    set load_slew_count [select -name "load_slew*" -type Inst -highlight 3]
+    set max_cap_count [select -name "max_cap*" -type Inst -highlight 3]
+    set max_length_count [select -name "max_length*" -type Inst -highlight 3]
+    set wire_count [select -name "wire*" -type Inst -highlight 3]
+    set rebuffer_count [select -name "rebuffer*" -type Inst -highlight 4] ;# red
+    set split_count [select -name "split*" -type Inst -highlight 5] ;# dark green
+
+    set select_count [expr {
+        $hold_count +
+        $input_count +
+        $output_count +
+        $repeater_count +
+        $fanout_count +
+        $load_slew_count +
+        $max_cap_count +
+        $max_length_count +
+        $wire_count +
+        $rebuffer_count +
+        $split_count
+    }]
+
+    if { $select_count == 0 } {
+        # Nothing selected
+        return
+    }
+
+    sc_save_image \
+        -title "optimizer" \
+        reports/images/${sc_topmodule}.optimizer.png
+}
+
+proc sc_image_markers { } {
+    global sc_topmodule
+    sc_image_setup_default
+
+    global sc_starting_markers
+
+    file mkdir reports/images/markers
+    foreach markerdb [[ord::get_db_block] getMarkerCategories] {
+        if { [$markerdb getMarkerCount] == 0 } {
+            continue
+        }
+
+        if { [lsearch -exact $sc_starting_markers [$markerdb getName]] != -1 } {
+            continue
+        }
+
+        gui::select_marker_category $markerdb
+
+        sc_save_image \
+            -title "markers - [$markerdb getName]" \
+            reports/images/markers/${sc_topmodule}.[$markerdb getName].png
+    }
+
+    gui::select_marker_category NULL
+}
+
+# Setup
+file mkdir reports/images
+gui::save_display_controls
+sc_image_setup_default
+
+# General images
+if { [sc_cfg_tool_task_check_in_list snapshot var reports] } {
+    sc_image_everything
+}
+if { [sc_cfg_tool_task_check_in_list placement_view var reports] } {
+    sc_image_placement
+}
+if { [sc_cfg_tool_task_check_in_list routing_view var reports] } {
+    sc_image_routing
+}
+
+if { [sc_cfg_tool_task_check_in_list module_view var reports] } {
+    sc_image_module_view
+}
+
+# Markers
+if { [sc_cfg_tool_task_check_in_list markers_view var reports] } {
+    sc_image_markers
+}
+
+# Histograms
+sc_image_timing_histograms
+
+# Heatmaps
+if { [sc_cfg_tool_task_check_in_list placement_density var reports] } {
+    sc_image_placement_density
+}
+
+if { [sc_cfg_tool_task_check_in_list routing_congestion var reports] } {
+    sc_image_estimated_routing_congestion
+    sc_image_routing_congestion
+}
+
+if { [sc_cfg_tool_task_check_in_list power var reports] } {
+    if { [sc_cfg_tool_task_check_in_list power_density var reports] } {
+        sc_image_power_density
+    }
+
+    if { [sc_cfg_tool_task_check_in_list ir_drop var reports] } {
+        foreach net [sc_psm_check_nets] {
+            foreach scene $sc_scenarios {
+                sc_image_irdrop $net $scene
+            }
+        }
+    }
+}
+
+# Clocks
+if { [sc_cfg_tool_task_check_in_list clock_placement var reports] } {
+    sc_image_clocks
+}
+if { [sc_cfg_tool_task_check_in_list clock_trees var reports] } {
+    sc_image_clocktree
+}
+
+# Optimizations
+if { [sc_cfg_tool_task_check_in_list optimization_placement var reports] } {
+    sc_image_optimizer
+}
+
+# Restore
+sc_image_clear_selection
+gui::restore_display_controls

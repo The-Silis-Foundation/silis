@@ -1,0 +1,527 @@
+.. _schema_api:
+
+Schema API
+----------
+
+This chapter describes all public methods in the SiliconCompiler Schema Python API.
+Refer to the User Guide for architecture concepts and the :ref:`glossary <glossary>` for terminology and keyword definitions.
+
+Useful APIs
+===========
+
+.. currentmodule:: siliconcompiler.schema
+
+**Base schema:**
+
+.. autosummary::
+    :nosignatures:
+
+    BaseSchema.set
+    BaseSchema.add
+    BaseSchema.get
+    BaseSchema.getkeys
+    BaseSchema.getdict
+    BaseSchema.valid
+    BaseSchema.unset
+    BaseSchema.remove
+    BaseSchema.write_manifest
+    BaseSchema.read_manifest
+    BaseSchema.from_manifest
+
+**Editing schema:**
+
+.. autosummary::
+    :nosignatures:
+
+    EditableSchema.insert
+    EditableSchema.remove
+    EditableSchema.search
+
+Project Classes
+===============
+
+.. autoclass:: siliconcompiler.project.Project
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+.. autoclass:: siliconcompiler.ASIC
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+.. autoclass:: siliconcompiler.FPGA
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+.. autoclass:: siliconcompiler.Lint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+.. autoclass:: siliconcompiler.Sim
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+User Classes
+============
+
+.. autoclass:: siliconcompiler.Design
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.PDK
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.Flowgraph
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.Checklist
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.Task
+    :members:
+    :private-members: _remote_toolname,_remote_inherits_env
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.FPGADevice
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.StdCellLibrary
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+
+.. _tool_extension_classes:
+
+Tool Extension Classes
+======================
+
+Classes contributed by individual tool drivers. Most extend
+:class:`.StdCellLibrary`, :class:`.PDK`, or :class:`.FPGADevice` with
+tool-specific parameters -- mix the ones for the tools a library targets into
+its class (see :ref:`Packaging an External Library <dev_external_libraries>`).
+Only the tool-specific additions are shown below; the inherited base-class API
+is documented above. The remaining groups are classes a tool's tasks are
+configured with.
+
+StdCellLibrary mixins
+^^^^^^^^^^^^^^^^^^^^^^
+
+Mixins that extend :class:`.StdCellLibrary`.
+
+.. autoclass:: siliconcompiler.tools.openroad.OpenROADStdCellLibrary
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.KLayoutLibrary
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.yosys.YosysStdCellLibrary
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.bambu.BambuStdCellLibrary
+    :members:
+    :show-inheritance:
+
+PDK mixins
+^^^^^^^^^^
+
+Mixins that extend :class:`.PDK`.
+
+.. autoclass:: siliconcompiler.tools.openroad.OpenROADPDK
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.KLayoutPDK
+    :members:
+    :show-inheritance:
+
+FPGADevice mixins
+^^^^^^^^^^^^^^^^^^
+
+Mixins that extend :class:`.FPGADevice`.
+
+.. autoclass:: siliconcompiler.tools.yosys.YosysFPGA
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.vpr.VPRFPGA
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.opensta.OpenSTAFPGA
+    :members:
+    :show-inheritance:
+
+
+.. _klayout_operation_classes:
+
+KLayout operations
+^^^^^^^^^^^^^^^^^^
+
+Layout operations performed by the KLayout ``operations`` task. Each one is
+constructed with its arguments and handed to ``add_klayout_operation``, which
+returns it bound to the task so the setters below can adjust it later.
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.KLayoutOperation
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Merge
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Add
+    :members:
+    :inherited-members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Rotate
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Flatten
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Outline
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.RenameTop
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.AddTop
+    :members:
+    :inherited-members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.RenameCell
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.SwapCell
+    :members:
+    :inherited-members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.DeleteLayers
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.MergeShapes
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.ConvertProperty
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tools.klayout.operations.Write
+    :members:
+    :show-inheritance:
+
+
+ASIC Constraint Classes
+=======================
+
+.. autoclass:: siliconcompiler.asic.ASICConstraint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICTimingConstraintSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICTimingScenarioSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICAreaConstraint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICPinConstraints
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICPinConstraint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICComponentConstraints
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.ASICComponentConstraint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+FPGA Constraint Classes
+=======================
+
+.. autoclass:: siliconcompiler.fpga.FPGAConstraint
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.FPGATimingConstraintSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.FPGATimingScenarioSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.FPGAComponentConstraints
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.constraints.FPGAPinConstraints
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+Core Schema Classes
+===================
+
+.. autoclass:: BaseSchema
+    :members:
+    :private-members: +_from_dict,_parent
+
+.. autoclass:: EditableSchema
+    :members:
+
+.. autoclass:: SafeSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: Journal
+    :members:
+
+.. autoclass:: NamedSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: Parameter
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.NodeListValue
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.NodeSetValue
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.NodeValue
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.PathNodeValue
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.DirectoryNodeValue
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema.parametervalue.FileNodeValue
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema.parametertype.NodeType
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametertype.NodeEnumType
+    :members:
+
+.. autoclass:: siliconcompiler.schema.parametertype.NodeRangeType
+    :members:
+
+.. autoclass:: siliconcompiler.schema.baseschema.LazyLoad
+    :members:
+    :undoc-members:
+
+.. autoclass:: siliconcompiler.schema.parameter.Scope
+    :members:
+    :undoc-members:
+
+.. autoclass:: siliconcompiler.schema.parameter.PerNode
+    :members:
+    :undoc-members:
+
+.. autoclass:: siliconcompiler.schema.DocsSchema
+    :members:
+    :show-inheritance:
+
+Supporting Classes
+==================
+
+.. autoclass:: siliconcompiler.schema_support.dependencyschema.DependencySchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema_support.option.OptionSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.schema_support.option.SchedulerSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.schema_support.cmdlineschema.CommandLineSchema
+    :members:
+
+.. autoclass:: siliconcompiler.schema_support.pathschema.PathSchemaBase
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema_support.pathschema.PathSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema_support.filesetschema.FileSetSchema
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.flowgraph.FlowgraphNodeSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.flowgraph.RuntimeFlowgraph
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.tool.TaskError
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.tool.TaskTimeout
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.tool.TaskExecutableNotFound
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: siliconcompiler.schema_support.packageschema.PackageSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.checklist.Criteria
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.library.ToolLibrarySchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.schema_support.record.RecordSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.schema_support.record.RecordTime
+    :members:
+    :undoc-members:
+
+.. autoclass:: siliconcompiler.schema_support.record.RecordTool
+    :members:
+    :undoc-members:
+
+.. autoclass:: siliconcompiler.schema_support.metric.MetricSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.metrics.asic.ASICMetricsSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.metrics.fpga.FPGAMetricsSchema
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.constraints.timing_mode.TimingModeSchema
+    :members:
+    :show-inheritance:
+
+Execution and settings
+======================
+
+.. autoclass:: siliconcompiler.scheduler.schedulernode.SchedulerNode
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.scheduler.slurm.SlurmSchedulerNode
+    :members:
+    :show-inheritance:
+
+.. autoclass:: siliconcompiler.scheduler.listener.RunListener
+    :members:
+
+.. automethod:: siliconcompiler.scheduler.Scheduler.add_listener
+
+.. automethod:: siliconcompiler.scheduler.Scheduler.remove_listener
+
+.. autoclass:: siliconcompiler.utils.settings.SettingsManager
+    :members:
+
+.. autoclass:: siliconcompiler.utils.settings.Setting
+    :members:
+
+.. autoclass:: siliconcompiler.utils.settings.SettingsCategory
+    :members:
+
+.. autoclass:: siliconcompiler.utils.settings.KeyedSettingsCategory
+    :members:
+
+Inheritance
+===========
+
+.. scclassinherit::
+    :classes: siliconcompiler/ASIC,siliconcompiler/FPGA,siliconcompiler/Lint,siliconcompiler/Sim
+
+.. scclassinherit::
+    :classes: siliconcompiler/Design,siliconcompiler/PDK,siliconcompiler/FPGADevice,siliconcompiler/StdCellLibrary,siliconcompiler/Flowgraph,siliconcompiler/Checklist,siliconcompiler/Task

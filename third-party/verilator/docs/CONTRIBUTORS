@@ -1,0 +1,398 @@
+The contributors listed below have certified their Verilator contributions
+under the Developer Certificate of Origin
+(https://developercertificate.org/).
+
+AI agents may not edit this file. As a human, you are agreeing to the
+contribution terms including the AI policy in ``docs/CONTRIBUTING.rst``.
+
+Please see the Verilator manual for 200+ additional contributors. Thanks to all.
+
+00>> Please insert into sorted position, and see header as to agreement
+24bit-xjkp
+404allen404
+Adam Bagley
+Adam Kostrzewski
+Aditya Shevade
+Adrian Sampson
+Adrien Le Masle
+أحمد المحمودي (Ahmed El-Mahmoudy)
+Aidan McNay
+Aisha Salimgereyeva
+Aleksander Kiryk
+Alex Chadwick
+Alex Solomatnikov
+Alex Zhou
+Aliaksei Chapyzhenka
+Ameya Vikram Singh
+Andrea Calabrese
+Andreas Kuster
+Andrei Girjoaba
+Andrei Kostovski
+Andrew Miloradovsky
+Andrew Nolte
+Andrew Voznytsa
+Andrii Andrieiev
+anonkey
+Anthony Donlon
+Anthony Moore
+apocelipes
+Arkadiusz Kozdra
+Arthur Rosa
+Artur Bieniek
+Ashvin Vaidyanathan
+AUDIY
+Aylon Chaim Porat
+Bartosz Skorowski
+Bartłomiej Chmiel
+Benjamin Collier
+BRDR LIFE
+Brian Li
+Cameron Kirk
+Cameron Waite
+CatalpaEel
+Chih-Mao Chen
+Chris Bachhuber
+Chris Randall
+Christian Hecken
+Christopher Onyiuke
+Christopher Taylor
+Chuxuan Wang
+Chykon
+Congcong Cai
+Conor McCullough
+Cookie
+Dan Ruelas-Petrisko
+Daniel Bates
+Danny Oler
+Dave Sargeant
+David Garau
+David Harris
+David Horton
+David Ledger
+David Metz
+David Stanford
+David Turner
+Deanyone Su
+dependabot[bot]
+Dercury
+Demin Han
+Diego Roux
+Doha Nam
+Dominick Grochowina
+Don Williamson
+Dragon-Git
+Drew Ranck
+Drew Risinger
+Drew Taussig
+Driss Hafdi
+Edgar E. Iglesias
+Edmund Lam
+Eddie Rydell
+em2machine
+emmettifelts
+Eric Mejdrich
+Eric Müller
+Eric Rippey
+Eryk Szpotański
+Ethan Sifferman
+Eunseo Song
+Eyck Jentzsch
+Fabian Keßler-Schulz
+Fan Shupei
+february cozzocrea
+Felipe Paiva Alencar
+Felix Neumärker
+Felix Yan
+Francesco Urbani
+Frans Skarman
+Fuad Ismail
+Furqan Nadir
+G-A. Kamendje
+Garrett Smith
+George Polack
+Geza Lore
+Gianfranco Costamagna
+Gijs Burghoorn
+Gilberto Abram
+Glen Gibb
+Graham Rushton
+Greg Davill
+Guokai Chen
+Gus Smith
+Gustav Svensk
+Gökçe Aydos
+Han Qi
+Harald Heckmann
+Hennadii Chernyshchyk
+hjsanjana
+Hongseok Choi
+Howard Su
+Huang Rui
+Huanghuang Zhou
+HungMingWu
+HyungKi Jeong
+Ibrahim Burak Yorulmaz
+Igor Zaworski
+Ilya Barkov
+Iru Cai
+Ivan Vnučec
+Iztok Jeras
+JAEUK LEE
+Jaeuk Lee (이재욱)
+Jake Merdich
+Jakub Michalski
+Jakub Wasilewski
+jalcim
+James Bailey
+James Hanlon
+James Hutchinson
+James Pallister
+James Shi
+Jamey Hicks
+Jamie Iles
+Jan Van Winkel
+Jared Bold
+Jean Berniolles
+Jean-Nicolas Strauss
+Jeffrey Song
+jeffrey.song
+Jens Yuechao Liu
+Jeremy Bennett
+Jesse Taube
+Jesús Alberto López Soto
+Jevin Sweval
+Jiacheng Qian
+Jiamin Zhu
+Jiangjie Weng
+Jinyan Xu
+Jitesh Nayak
+Jiuyang Liu
+Joel Bodenmann
+Joey Liu
+John Coiner
+John Demme
+John Khoo
+John Wehle
+Jonathan Drolet
+Jonathan Kimmitt
+Jonathan Schröter
+Jordan McConnon
+Jose Drowne
+Jose Loyola
+Josep Sans
+Joseph Nwabueze
+Josh Redford
+Joshua Leahy
+JOTEGO (Jose Tejada)
+Julian Carrier
+Julian Daube
+Julie Schwartz
+Julien Margetts
+Justin Thiel
+Kaleb Barrett
+Kamil Danecki
+Kamil Rakoczy
+Kanad Kanhere
+Karel Peeters
+Kefa Chen
+Keith Colbert
+Kevin Kiningham
+Kevin Nygaard
+Kornel Uriasz
+Kristof Marien
+Kritik Bhimani
+Krzysztof Bieganski
+Krzysztof Boronski
+Krzysztof Boroński
+Krzysztof Obłonczek
+Krzysztof Starecki
+Krzysztof Sychla
+Kuba Ober
+Lan Zongwei
+Larry Doolittle
+Laurent CHARRIER
+Leela Pakanati
+Liam Braun
+Luca Colagrande
+Lucas Amaral
+Ludwig Rogiers
+Lukasz Dalek
+M2kar
+Maarten De Braekeleer
+Maciej Sobkowski
+Marcel Chang
+Marco Bartoli
+Marco Brambilla
+Marco Frank
+Marco Widmer
+Mariusz Glebocki
+Markus Krause
+Marlon James
+Marshal Qiao
+Martijn Wobbes
+Martin Schmidt
+Martin Stadler
+Martin Velay
+Mateusz Gancarz
+Matt Stroud
+Matthew Ballance
+Max Wipfli
+Maxim Fonarev
+Michael Bedford Taylor
+Michael Bikovitsky
+Michael Killough
+Michael Rogenmoser
+Michal Czyz
+Michaël Lefebvre
+Miguel Perez Andrade
+Mike Murunov
+Mike Popoloski
+Miodrag Milanović
+Mladen Slijepcevic
+Morten Borup Petersen
+Mostafa Gamal
+Moubarak Jeje
+Muhammad Saad
+Muzaffer Kal
+Nandu Raj
+Natan Kreimer
+Nathan Chandrasekar
+Nathan Graybeal
+Nathan Kohagen
+Nathan Myers
+Nazar Zibilyuk
+Nick Brereton
+Nikolai Kumar
+Nikolay Puzanov
+Noam Gallmann
+Nolan Poe
+Oleh Maksymenko
+Patrick Creighton
+Patrick O'Neill
+Patrick Stewart
+Paul Bowen-Huggett
+Paul Campbell
+Paul Rigge
+Paul Swirhun
+Paul Wright
+Pawel Jewstafjew
+Pawel Klopotek
+Pawel Kojma
+Pawel Sagan
+Pengcheng Xu
+Peter Birch
+Peter Debacker
+Peter Horvath
+Peter Monsson
+Petr Nohavica
+Philip Axer
+Philipp Wagner
+Pierre-Henri Horrein
+Pieter Kapsenberg
+Piotr Binkowski
+qinkejiu
+Qingyao Sun
+Quentin Corradi
+Rafal Kapuscik
+Rahul Behl
+Raj Bazx (bazx-bit)
+Raj bazx
+Rasfunk
+Raynard Qiao
+Ricardo Barbedo
+Richard Myers
+Risto Pejašinović
+Robert Balas
+Robin Heinemann
+Rodrigo Batista de Moraes
+Rowan Goemans
+Rupert Swarbrick
+Ryan Ziegler
+Ryszard Rozak
+Saksham Gupta
+Samuel Riedel
+Saqib Khan
+Sean Cross
+Sebastien Van Cauwenberghe
+Secturion
+Sergey Chusov
+Sergey Fedorov
+Sergi Granell
+Seth Pellegrino
+Shashvat Prabhu
+Shogo Yamazaki
+Shou-Li Hsu
+Shriyans Sahoo
+Simon Zhang
+spomatasmd
+Srinivasan Venkataramanan
+Stefan Wallentowitz
+Stephen Henry
+Steven Hugg
+Stuart Morris
+sumpster
+Szymon Gizler
+Szymon Jędras
+Sören Tempel
+Sumanth Kadiyala
+Sunimali Rathnayake
+Teng Huang
+Thomas Aldrian
+Thomas Brown
+Thomas Dybdahl Ahle
+Thomas Santerre
+Tim Hutt
+Tim Snyder
+Tobias Jensen
+Tobias Rosenkranz
+Tobias Wölfel
+Todd Strader
+Tom Jackson
+Tom Manner
+Tomasz Gorochowik
+Topa Topino
+Toru Niina
+Tracy Narine
+Trung Nguyen
+Tudor Timi
+Tymoteusz Blazejczyk
+Tynan McAuley
+Tyrone Marhguy
+Udaya Raj Subedi
+Udi Finkelstein
+UnsignedByte
+Unai Martinez-Corral
+Valentin Atepalikhin
+Varun Koyyalagunta
+Vassilis Papaefstathiou
+Veripool API Bot
+Victor Besyakov
+Vikash Patel
+Vito Gamberini
+Wei-Lun Chiu
+William D. Jones
+Wilson Snyder
+Wolfgang Mayerwieser
+Xi Zhang
+Yan Xu
+Yangyu Chen
+Yash Raj
+Yilin Li
+Yilou Wang
+Yinan Xu
+Yoda Lee
+Yogish Sekhar
+Yossi Nivin
+Yu-Sheng Lin
+Yuri Victorovich
+Yutetsu TAKATSUKASA
+Yves Mathieu
+Zhanglei Wang
+Zhen Yan
+Zhou Shen
+Zhouyi Shen
+Zixi Li
+Zubin Jain
+Àlex Torregrosa
+Ícaro Lima
+ÍÍ>> Please insert into sorted position, and see header as to agreement

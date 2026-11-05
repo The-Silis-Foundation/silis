@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('simulator')
+
+# The DPI update reads the inouts and writes their drivers in the same call.
+test.compile(verilator_flags2=['--hierarchical', '-Wno-UNOPTFLAT'])
+
+test.execute()
+
+test.file_grep(test.obj_dir + "/VTest/Test.sv", r'^module\s+(\S+)\s+', "Test")
+
+test.passes()

@@ -1,0 +1,425 @@
+import shlex
+from typing import Optional, List, Union
+
+from siliconcompiler.tools._common import distinct
+from siliconcompiler.tools.verilator import VerilatorTask
+
+
+class CompileTask(VerilatorTask):
+    '''
+    Compiles Verilog and C/C++ sources into an executable. In addition to the
+    standard RTL inputs, this task reads C/C++ sources.
+    Outputs an executable in ``outputs/<design>.vexe``.
+    '''
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("mode", "<cc,systemc>", "defines compilation mode for Verilator",
+                           defvalue="cc")
+        self.add_parameter("trace", "bool", "if true, enables trace generation")
+        self.add_parameter("trace_type", "<vcd,fst>",
+                           "specifies type of wave file to create when [trace] is set",
+                           defvalue="vcd")
+        self.add_parameter("trace_structs", "bool",
+                           "Enable tracing structure names",
+                           defvalue=True)
+        self.add_parameter("trace_depth", "int",
+                           "Specify the number of levels deep to enable tracing")
+
+        self.add_parameter("main", "bool",
+                           "if true, generate a toplevel C++ wrapper and relax the C++ file "
+                           "requirement. See --main in Verilator docs for more info",
+                           defvalue=False)
+
+        # The header search paths come from the design: runtime_options reads the
+        # idir of every fileset holding C sources. This covers the directories that
+        # no fileset owns. The design describes sources and search paths, not the
+        # flags a compiler is invoked with, so cflags and ldflags stay here.
+        self.add_parameter("cincludes", "[dir]",
+                           "additional include directories to provide to the C++ compiler "
+                           "invoked by Verilator, on top of the idir of the filesets "
+                           "carrying the C sources")
+        self.add_parameter("cflags", "[str]",
+                           "flags to provide to the C++ compiler invoked by Verilator")
+        self.add_parameter("ldflags", "[str]",
+                           "flags to provide to the linker invoked by Verilator")
+
+        self.add_parameter("pins_bv", "int<1..>",
+                           "controls datatypes used to represent SystemC inputs/outputs. "
+                           "See --pins-bv in Verilator docs for more info")
+
+        self.add_parameter("initialize_random", "bool",
+                           "true/false, when true registers will reset with a random value")
+
+        self.add_parameter("timescale", "(str,str)",
+                           "default simulation timescale as a (unit, precision) pair (e.g. "
+                           "(\"1ns\", \"1ps\")). Passed to Verilator via --timescale.")
+
+    def set_verilator_mode(self, mode: str,
+                           step: Optional[str] = None,
+                           index: Optional[str] = None):
+        """
+        Sets the compilation mode for Verilator.
+
+        Args:
+            mode (str): The compilation mode.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "mode", mode, step=step, index=index)
+
+    def set_verilator_trace(self, enable: bool,
+                            step: Optional[str] = None,
+                            index: Optional[str] = None):
+        """
+        Enables or disables trace generation.
+
+        Args:
+            enable (bool): Whether to enable trace generation.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "trace", enable, step=step, index=index)
+
+    def get_verilator_trace(self,
+                            step: Optional[str] = None,
+                            index: Optional[str] = None) -> bool:
+        """
+        Returns whether trace generation is enabled.
+
+        Args:
+            step (str, optional): The specific step to read the configuration from.
+            index (str, optional): The specific index to read the configuration from.
+        """
+        return self.get("var", "trace", step=step, index=index)
+
+    def set_verilator_tracetype(self, trace_type: str,
+                                step: Optional[str] = None,
+                                index: Optional[str] = None):
+        """
+        Sets the type of wave file to create when trace is enabled.
+
+        Args:
+            trace_type (str): The trace type.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "trace_type", trace_type, step=step, index=index)
+
+    def get_verilator_tracetype(self,
+                                step: Optional[str] = None,
+                                index: Optional[str] = None) -> str:
+        """
+        Returns the type of wave file to create when trace is enabled.
+
+        Args:
+            step (str, optional): The specific step to read the configuration from.
+            index (str, optional): The specific index to read the configuration from.
+        """
+        return self.get("var", "trace_type", step=step, index=index)
+
+    def set_verilator_trace_structs(self, enable: bool,
+                                    step: Optional[str] = None,
+                                    index: Optional[str] = None):
+        """
+        Enables or disables the decomposition of structures & packed arrays
+        in fields in the output traces.
+
+        Args:
+            enable (bool): Whether to decompose structures in the output trace.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "trace_structs", enable, step=step, index=index)
+
+    def get_verilator_trace_structs(self,
+                                    step: Optional[str] = None,
+                                    index: Optional[str] = None) -> bool:
+        """
+        Returns whether structures & packed arrays are decomposed into fields
+        in the output traces.
+
+        Args:
+            step (str, optional): The specific step to read the configuration from.
+            index (str, optional): The specific index to read the configuration from.
+        """
+        return self.get("var", "trace_structs", step=step, index=index)
+
+    def set_verilator_trace_depth(self, level: int,
+                                  step: Optional[str] = None,
+                                  index: Optional[str] = None):
+        """
+        Specify the depth limit at which to stop tracing module signals.
+
+        Args:
+            level (int): The number of levels of hierarchy to trace.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "trace_depth", level, step=step, index=index)
+
+    def get_verilator_trace_depth(self,
+                                  step: Optional[str] = None,
+                                  index: Optional[str] = None) -> Optional[int]:
+        """
+        Returns the depth limit at which to stop tracing module signals,
+        or None if no limit is set.
+
+        Args:
+            step (str, optional): The specific step to read the configuration from.
+            index (str, optional): The specific index to read the configuration from.
+        """
+        return self.get("var", "trace_depth", step=step, index=index)
+
+    def set_verilator_main(self, enable: bool,
+                           step: Optional[str] = None,
+                           index: Optional[str] = None):
+        """
+        Enables or disables toplevel C++ wrapper generation.
+
+        Args:
+            enable (bool): Whether to enable toplevel wrapper generation.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "main", enable, step=step, index=index)
+
+    def add_verilator_cincludes(self, include: Union[str, List[str]],
+                                step: Optional[str] = None,
+                                index: Optional[str] = None,
+                                clobber: bool = False):
+        """
+        Adds include directories for the C++ compiler.
+
+        The include directories of the filesets carrying the C sources are passed to
+        the compiler already, so this is only needed for directories that no such
+        fileset owns.
+
+        Args:
+            include (Union[str, List[str]]): The include directory/directories to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "cincludes", include, step=step, index=index)
+        else:
+            self.add("var", "cincludes", include, step=step, index=index)
+
+    def add_verilator_cflags(self, flag: Union[str, List[str]],
+                             step: Optional[str] = None,
+                             index: Optional[str] = None,
+                             clobber: bool = False):
+        """
+        Adds flags for the C++ compiler.
+
+        Args:
+            flag (Union[str, List[str]]): The flag(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "cflags", flag, step=step, index=index)
+        else:
+            self.add("var", "cflags", flag, step=step, index=index)
+
+    def add_verilator_ldflags(self, flag: Union[str, List[str]],
+                              step: Optional[str] = None,
+                              index: Optional[str] = None,
+                              clobber: bool = False):
+        """
+        Adds flags for the linker.
+
+        Args:
+            flag (Union[str, List[str]]): The flag(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "ldflags", flag, step=step, index=index)
+        else:
+            self.add("var", "ldflags", flag, step=step, index=index)
+
+    def set_verilator_pinsbv(self, width: int,
+                             step: Optional[str] = None,
+                             index: Optional[str] = None):
+        """
+        Sets the datatype width for SystemC inputs/outputs.
+
+        Args:
+            width (int): The bit width.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "pins_bv", width, step=step, index=index)
+
+    def set_verilator_timescale(self, unit: str, precision: str,
+                                step: Optional[str] = None,
+                                index: Optional[str] = None):
+        """
+        Sets the default simulation timescale.
+
+        Emits ``--timescale <unit>/<precision>`` to Verilator, setting the
+        default time unit and precision for modules that do not specify their
+        own ``timescale`` directive.
+
+        Args:
+            unit (str): The time unit (e.g. "1ns").
+            precision (str): The time precision (e.g. "1ps").
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "timescale", (unit, precision), step=step, index=index)
+
+    def set_verilator_initializerandom(self, enable: bool,
+                                       step: Optional[str] = None,
+                                       index: Optional[str] = None):
+        """
+        Enables or disables random initialization of registers.
+
+        Args:
+            enable (bool): Whether to enable random initialization.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "initialize_random", enable, step=step, index=index)
+
+    def task(self):
+        return "compile"
+
+    def _setup_c_file_requirement(self):
+        """Set up the C file requirement. Override in subclasses to customize."""
+        added_key = False
+        for lib, fileset in self.project.get_filesets():
+            if lib.has_file(fileset=fileset, filetype="c"):
+                self.add_required_key(lib, "fileset", fileset, "file", "c")
+                added_key = True
+        if not added_key and not self.get("var", "main"):
+            self.logger.warning("No c files found. c files are required for verilator compilation "
+                                "unless the \"main\" option is enabled.")
+            self.add_required_key(self.project.design, "fileset",
+                                  self.project.get("option", "fileset")[0], "file", "c")
+
+    def setup(self):
+        super().setup()
+        self.set_threads()
+
+        self.add_output_file(ext="vexe")
+
+        # Mark required
+        self.add_required_key("var", "mode")
+        self.add_required_key("var", "trace")
+        # trace_type is only read when tracing is enabled
+        if self.get("var", "trace"):
+            self.add_required_key("var", "trace_type")
+            self.add_required_key("var", "trace_structs")
+            if self.get("var", "trace_depth") is not None:
+                self.add_required_key("var", "trace_depth")
+
+        self.add_required_key("var", "initialize_random")
+        self.add_required_key("var", "main")
+        if self.get("var", "timescale"):
+            self.add_required_key("var", "timescale")
+
+        self._setup_c_file_requirement()
+
+        if self.get("var", "cincludes"):
+            self.add_required_key("var", "cincludes")
+        if self.get("var", "cflags"):
+            self.add_required_key("var", "cflags")
+        if self.get("var", "ldflags"):
+            self.add_required_key("var", "ldflags")
+
+        if self.get("var", "pins_bv") is not None:
+            self.add_required_key("var", "pins_bv")
+
+    def runtime_options(self):
+        options = super().runtime_options()
+
+        if self.get("var", "initialize_random"):
+            options.extend(['--x-assign', 'unique'])
+
+        if self.get("var", "main"):
+            options.extend(['--main', '--timing'])
+
+        timescale = self.get("var", "timescale")
+        if timescale:
+            unit, precision = timescale
+            options.extend(['--timescale', f'{unit}/{precision}'])
+
+        options.extend(['--exe', '--build'])
+
+        options.extend(['-j', self.get_threads()])
+
+        mode = self.get("var", "mode")
+        if mode == "cc":
+            options.append('--cc')
+        elif mode == 'systemc':
+            options.append('--sc')
+        else:
+            raise ValueError("mode invalid")
+
+        pins_bv = self.get('var', 'pins_bv')
+        if pins_bv is not None:
+            options.extend(['--pins-bv', pins_bv])
+
+        options.extend(['-o', f'../outputs/{self.design_topmodule}.vexe'])
+
+        c_flags = self.get('var', 'cflags')
+
+        # Headers for the C sources live in the idir of the fileset that carries
+        # them, the same way they do for the Verilog sources.
+        c_includes = []
+        for lib, fileset in self.project.get_filesets():
+            if lib.has_file(fileset=fileset, filetype="c"):
+                c_includes.extend(lib.get_idir(fileset))
+        c_includes.extend(self.find_files('var', 'cincludes'))
+        c_includes = distinct(c_includes)
+
+        if self.get("var", "trace"):
+            trace_type = self.get('var', 'trace_type')
+            if trace_type == 'vcd':
+                ext = 'vcd'
+                trace_opt = '--trace'
+            elif trace_type == 'fst':
+                ext = 'fst'
+                trace_opt = '--trace-fst'
+            else:
+                raise ValueError("invalid trace type")
+
+            options.append(trace_opt)
+
+            # add siliconcompiler specific defines
+            if self.get("var", "main"):
+                options.extend([
+                    "-DSILICONCOMPILER_TRACE_DIR=\"reports\"",
+                    f"-DSILICONCOMPILER_TRACE_FILE=\"reports/{self.design_topmodule}.{ext}\""
+                ])
+            else:
+                c_flags.append("-DSILICONCOMPILER_TRACE_DIR=\"reports\"")
+                c_flags.append(
+                    f"-DSILICONCOMPILER_TRACE_FILE=\"reports/{self.design_topmodule}.{ext}\"")
+
+            if self.get("var", "trace_structs"):
+                options.append("--trace-structs")
+
+            if (level := self.get("var", "trace_depth")) is not None:
+                options.extend(("--trace-depth", level))
+
+        if c_includes:
+            c_flags.extend([f'-I{include}' for include in c_includes])
+
+        if c_flags:
+            options.extend(['-CFLAGS', shlex.join(c_flags)])
+
+        ld_flags = self.get('var', 'ldflags')
+        if ld_flags:
+            options.extend(['-LDFLAGS', shlex.join(ld_flags)])
+
+        for lib, fileset in self.project.get_filesets():
+            for value in lib.get_file(fileset=fileset, filetype="c"):
+                options.append(value)
+
+        return options

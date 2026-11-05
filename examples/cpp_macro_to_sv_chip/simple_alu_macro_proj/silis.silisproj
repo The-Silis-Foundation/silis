@@ -1,0 +1,16 @@
+{
+    "project_name": "simple_alu_macro",
+    "top_module": "simple_alu",
+    "pdk": "sky130",
+    "macros": [],
+    "auto_sdc": true,
+    "rtl_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/simple_alu_macro_proj/source/simple_alu.v"
+    ],
+    "sdc_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/simple_alu_macro_proj/source/simple_alu.sdc"
+    ],
+    "tb_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/simple_alu_macro_proj/source/tb_simple_alu.v"
+    ]
+}

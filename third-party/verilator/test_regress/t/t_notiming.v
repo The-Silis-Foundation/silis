@@ -1,0 +1,45 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2022 Antmicro Ltd
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+  event e;
+
+  initial begin
+     int x;
+     #1
+     fork @e; @e; join;
+     @e
+     wait(x == 4)
+     x = #1 8;
+     if (x != 8) $stop;
+     if ($time != 0) $stop;
+     @e
+     if (!e.triggered) $stop;
+     if ($time != 1) $stop;
+     $write("*-* All Finished *-*\n");
+     $finish;
+  end
+
+  initial #1 ->e;
+  initial #2 $stop; // timeout
+
+   mailbox#(int) m = new;
+   semaphore s = new;
+   initial begin
+       int i;
+       m.put(i);
+       m.get(i);
+       m.peek(i);
+       s.get();
+   end
+   assert property (@(e) s_eventually 1'h1);
+   assert property (@(e) 1'h1 s_until 1'h1);
+   assert property (@(e) 1'h1 s_until_with 1'h1);
+endmodule
+
+`ifdef VERILATOR_TIMING
+`error "VERILATOR_TIMING should not be defined with --no-timing"
+`endif

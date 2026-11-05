@@ -1,0 +1,742 @@
+{
+  "openroad": {
+    "git-url": "https://github.com/The-OpenROAD-Project/OpenROAD.git",
+    "git-commit": "193e09db41a24f55aee0d5c15f85576359561baa",
+    "auto-update": true,
+    "_comment-drop-pkgs": [
+      "The documentation toolchain and the -dev half of the GUI libraries. pandoc,",
+      "groff and every libxcb*-dev are build-only by the generic rules already, so",
+      "only bsdmainutils has to be named. The matching runtime xcb libraries stay:",
+      "they are separate packages and the sweep does no autoremove."
+    ],
+    "docker-drop-pkgs": [
+      "bsdmainutils"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "surelog": {
+    "git-url": "https://github.com/chipsalliance/Surelog.git",
+    "git-commit": "v1.87",
+    "auto-update": true,
+    "_comment-drop-pkgs": [
+      "The JRE here runs ANTLR's parser generator at build time only --",
+      "install-chisel.sh declares its own JRE, so removing this one does not leave",
+      "sbt without a java to run. The rest of what this image builds with (cmake,",
+      "swig, uuid-dev, python3-dev, lcov, pkg-config) is build-only by the generic",
+      "rules already."
+    ],
+    "docker-drop-pkgs": [
+      "default-jre",
+      "default-jre-headless"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "opensta": {
+    "git-url": "https://github.com/parallaxsw/OpenSTA.git",
+    "git-commit": "d66ee62d580326afc32227437fda2152751c36d8",
+    "auto-update": true,
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "netgen": {
+    "git-url": "https://github.com/RTimothyEdwards/netgen.git",
+    "git-commit": "fb7876c7a6f9d58a3d88a49e302e682c1d12e00d",
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "ghdl": {
+    "git-url": "https://github.com/ghdl/ghdl.git",
+    "_comment-keep-pkgs": [
+      "zlib1g-dev: \"ghdl -e\" links -lz into every elaborated design, and",
+      "lib/ghdl/libgrt.a with it -- which is why docker-prune-dirs below lists no",
+      "archives. libllvm18: ghdl1-llvm links libLLVM.so.18.1 and nothing records",
+      "it, because ghdl is built from source and the link never becomes a package",
+      "dependency."
+    ],
+    "docker-keep-pkgs": [
+      "zlib1g-dev",
+      "libllvm18"
+    ],
+    "git-commit": "v6.0.0",
+    "auto-update": true,
+    "_comment-drop-pkgs": [
+      "The distribution clang stack that arrives under ghdl's \"llvm-dev\", the",
+      "LLVM tools and the Ada compiler. libllvm18 and libgnat-13 stay -- ghdl1-llvm",
+      "links both at run time (ldd confirms) and ghdl shells out to no compiler of",
+      "its own -- which is why libllvm18 is in docker-keep-pkgs.",
+      "",
+      "\"llvm\" is the unversioned metapackage. Without it the sweep keeps llvm-18:",
+      "nothing classes llvm as build-only, so it counts as a runtime dependent and",
+      "pins the version it points at."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "llvm",
+      "llvm-18",
+      "llvm-18-tools",
+      "gnat",
+      "gnat-13",
+      "gnat-13-x86-64-linux-gnu"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "RUN time, so no exception list is needed: lib/ghdl/libgrt.a, linked into every design by \"ghdl -e\"",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "magic": {
+    "git-url": "https://github.com/RTimothyEdwards/magic.git",
+    "git-commit": "c7f11d2169f6af8751ae22b5d70250b331e1a667",
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "bluespec": {
+    "git-url": "https://github.com/B-Lang-org/bsc.git",
+    "git-commit": "2026.07.1",
+    "version-prefix": "",
+    "auto-update": true,
+    "_comment-drop-pkgs": [
+      "The Haskell toolchain bsc is built with. Its libghc-*-dev packages and",
+      "tcl-dev are build-only by the generic rules, so only ghc has to be named --",
+      "and naming it during the sweep rather than after it is what lets the",
+      "libbsd-dev, libffi-dev, libgmp-dev, libmd-dev and libncurses-dev it holds go",
+      "with it. bsc and bluetcl are compiled binaries whose runtime needs are",
+      "libgmp10, libffi8 and libtcl8.6 -- separate packages, and no autoremove",
+      "means they stay."
+    ],
+    "docker-drop-pkgs": [
+      "ghc"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "klayout": {
+    "version": "0.30.12",
+    "git-url": "https://github.com/KLayout/klayout.git",
+    "auto-update": true,
+    "run-version": "source version.sh && echo $KLAYOUT_VERSION",
+    "release-notes": "https://www.klayout.de/development.html",
+    "docker-cmds": [
+      "RUN echo \"#!/bin/bash\" > $SC_PREFIX/install-klayout.sh",
+      "RUN echo \"sudo apt-get install -y $SC_PREFIX/klayout.deb\" >> $SC_PREFIX/install-klayout.sh",
+      "RUN echo \"sudo rm $SC_PREFIX/klayout.deb\" >> $SC_PREFIX/install-klayout.sh",
+      "RUN chmod +x $SC_PREFIX/install-klayout.sh"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "sv2v": {
+    "git-url": "https://github.com/zachjs/sv2v.git",
+    "git-commit": "493a88f930802da68f592c192ec86991eaf95c49",
+    "auto-update": true,
+    "docker-cmds": [
+      "# The Haskell Stack build tool, a statically linked 90MB binary that",
+      "# install-sv2v.sh drops in the prefix to compile sv2v with. sv2v is a",
+      "# standalone binary once built and never invokes it again.",
+      "RUN rm $SC_PREFIX/stack"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "verilator": {
+    "git-url": "https://github.com/verilator/verilator.git",
+    "_comment-keep-pkgs": [
+      "zlib1g-dev and liblz4-dev: verilator compiles the generated model after the",
+      "build, and since 5.040 --trace-fst writes through libfstwriter -- the model",
+      "includes <lz4.h> and <zlib.h> and verilated.mk links -llz4 -lz. Both are",
+      "-dev packages, so the sweep would take them. ccache: verilated.mk sets",
+      "OBJCACHE ?= ccache and invokes it unconditionally."
+    ],
+    "docker-keep-pkgs": [
+      "zlib1g-dev",
+      "liblz4-dev",
+      "ccache"
+    ],
+    "git-commit": "v5.052",
+    "auto-update": true,
+    "docker-cmds": [
+      "# Drop the debug builds. verilator_bin_dbg is 88MB against",
+      "# verilator_bin's 17MB and nothing in the flows selects it.",
+      "#",
+      "# g++, make, perl and zlib1g-dev all stay: they are what compiles the",
+      "# generated model at run time, and --trace-fst links -lz into it. What this",
+      "# used to remove by name -- libfl-dev, libgoogle-perftools-dev, perl-doc,",
+      "# help2man, autoconf -- the sweep classes build-only on its own.",
+      "RUN rm $SC_PREFIX/bin/*_dbg $SC_PREFIX/share/verilator/bin/*_dbg"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "bambu": {
+    "git-url": "https://github.com/ferrandi/PandA-bambu.git",
+    "_comment-keep-pkgs": [
+      "bambu compiles its 32-bit MDPI simulation runtime at run time, which needs",
+      "libc6-dev (libc-dev is the virtual name), and links lib/panda/*.a into the",
+      "designs it generates -- so docker-prune-dirs below lists no archives."
+    ],
+    "docker-keep-pkgs": [
+      "libc6-dev",
+      "libc-dev"
+    ],
+    "git-commit": "2024.10",
+    "auto-update": false,
+    "docker-cmds": [
+      "# Remove ORFS Stuff",
+      "RUN rm -r $SC_PREFIX/share/panda/asap7",
+      "RUN rm -r $SC_PREFIX/share/panda/nangate45",
+      "RUN rm -r $SC_PREFIX/share/panda/scripts"
+    ],
+    "_comment-drop-pkgs": [
+      "The clang and boost build APIs are -dev packages the generic rules catch;",
+      "only graphviz (doxygen's renderer) and autoconf-archive have to be named.",
+      "bambu shells out to clang-16, clang++-16 and llvm-link-16 at run time, so",
+      "the clang *runtime* packages are not listed here.",
+      "",
+      "gcc-multilib, g++-multilib and libc6-dev are NOT droppable: bambu compiles",
+      "its 32-bit MDPI simulation runtime at run time. Neither is lib/panda/*.a,",
+      "which it links into the designs it generates."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin",
+      "graphviz",
+      "autoconf-archive"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "vpr": {
+    "git-url": "https://github.com/verilog-to-routing/vtr-verilog-to-routing.git",
+    "git-commit": "fe77ace273b3f0558763e0e91d409b2d13344eff",
+    "auto-update": false,
+    "_comment-drop-pkgs": [
+      "vpr's build pulls the distribution clang stack, and nothing in the image",
+      "links it: 65MB of libclang-cpp.so and 35MB of libclang-18.so reach sc_tools",
+      "through this image's apt.txt if it is not named here."
+    ],
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "bin/*.a",
+      "lib/*.a"
+    ]
+  },
+  "icepack": {
+    "git-url": "https://github.com/YosysHQ/icestorm.git",
+    "git-commit": "v1.1",
+    "auto-update": false,
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "nextpnr": {
+    "git-url": "https://github.com/YosysHQ/nextpnr.git",
+    "git-commit": "nextpnr-0.9",
+    "docker-depends": "icepack",
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime",
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "chisel": {
+    "version": "2.0.11",
+    "git-url": "https://github.com/sbt/sbt.git",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "icarus": {
+    "git-url": "https://github.com/steveicarus/iverilog.git",
+    "git-commit": "v13_0",
+    "auto-update": true,
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "yosys": {
+    "git-url": "https://github.com/YosysHQ/yosys.git",
+    "_comment-keep-pkgs": [
+      "yosys' \"show\" shells out to dot and opens the result in xdot. The images",
+      "built on top of this one (sby, wildebeest, yosys-moosic) inherit this:",
+      "siliconcompiler.utils.toolimages unions a tool's lists with those of the tools",
+      "it is built on."
+    ],
+    "docker-keep-pkgs": [
+      "graphviz",
+      "xdot"
+    ],
+    "git-commit": "v0.70",
+    "version-prefix": "",
+    "auto-update": true,
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "xyce": {
+    "git-url": "https://github.com/Xyce/Xyce.git",
+    "git-commit": "Release-7.10.0",
+    "version-prefix": "Release-",
+    "auto-update": true,
+    "docker-drop-pkgs": [
+      "libllvm17*",
+      "llvm-17",
+      "llvm-17-*",
+      "mpi-default-bin",
+      "libboost-mpi1.*",
+      "libboost-mpi-python1.*",
+      "libboost-graph-parallel1.*",
+      "libamd-comgr2",
+      "libamdhip64-*",
+      "libucx0",
+      "libopenmpi3*",
+      "openmpi-bin"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "trilinos/lib/*.a"
+    ]
+  },
+  "xdm": {
+    "version": "2.7.0",
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "slurm": {
+    "version": "24.05.7",
+    "git-url": "https://github.com/SchedMD/slurm.git",
+    "auto-update": false,
+    "docker-extra-files": [
+      "docker/slurm"
+    ],
+    "docker-cmds": [
+      "COPY slurm $SC_PREFIX/slurm_cfg",
+      "RUN mv $SC_PREFIX/slurm_cfg/install-slurm.sh $SC_PREFIX/",
+      "RUN chmod +x $SC_PREFIX/install-slurm.sh"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a",
+      "lib/slurm/*.a"
+    ]
+  },
+  "montage": {
+    "version": "6.9.11",
+    "auto-update": false,
+    "docker-skip": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "verible": {
+    "version": "v0.0-4051-g9fdb4057",
+    "git-url": "https://github.com/chipsalliance/verible.git",
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "gtkwave": {
+    "git-commit": "v3.3.116",
+    "git-url": "https://github.com/gtkwave/gtkwave.git",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "sby": {
+    "git-url": "https://github.com/YosysHQ/sby.git",
+    "git-commit": "v0.68",
+    "docker-depends": "yosys",
+    "build-depends": [
+      "bitwuzla",
+      "boolector"
+    ],
+    "auto-update": true,
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "bitwuzla": {
+    "git-url": "https://github.com/bitwuzla/bitwuzla.git",
+    "git-commit": "0.9.1",
+    "version-prefix": "",
+    "auto-update": true
+  },
+  "boolector": {
+    "git-url": "https://github.com/Boolector/boolector.git",
+    "git-commit": "3.2.4",
+    "version-prefix": "",
+    "auto-update": true
+  },
+  "yosys-moosic": {
+    "git-url": "https://github.com/gadfort/moosic-yosys-plugin.git",
+    "git-commit": "fbe57eaae507f50e2504777b2438fa9eb451dab9",
+    "docker-depends": "yosys",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "wildebeest": {
+    "git-url": "https://github.com/zeroasiccorp/wildebeest.git",
+    "git-commit": "676398124406ffc62a18dd0624471b950e18046f",
+    "docker-depends": "yosys",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "surfer": {
+    "git-url": "https://gitlab.com/surfer-project/surfer.git",
+    "git-commit": "v0.7.0",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "keplerformal": {
+    "git-url": "https://github.com/keplertech/kepler-formal.git",
+    "git-commit": "8170b6a4fc01b6793c3d6efeb70775704fca797e",
+    "auto-update": true,
+    "docker-drop-pkgs": [
+      "clang",
+      "clang-18",
+      "clang-format-18",
+      "libclang-cpp18",
+      "libclang1-18",
+      "llvm-18-linker-tools",
+      "llvm-18-runtime",
+      "llvm-runtime"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  },
+  "vcd2fst": {
+    "git-url": "https://github.com/Silimate/vcd2fst.git",
+    "git-commit": "eed4fee1066056887559ab60ac078b785bdc15b5",
+    "auto-update": true,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "mlir": {
+    "git-url": "https://github.com/llvm/llvm-project.git",
+    "git-commit": "llvmorg-19.1.5",
+    "auto-update": false,
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man"
+    ]
+  },
+  "soda": {
+    "git-url": "https://github.com/pnnl/soda-opt.git",
+    "git-commit": "af0f8779949643ae3791f053449509de0a633aa9",
+    "auto-update": false,
+    "docker-depends": "mlir",
+    "docker-cmds": [
+      "# libclang-cpp.so and libclang.so are only loaded by c-index-test, which",
+      "# install-mlir.sh no longer installs. The static half of the LLVM/MLIR dev",
+      "# tree needs no line here: soda-opt is statically linked, this image",
+      "# declares no docker-keep-archives, and the prune takes every archive that",
+      "# is not declared.",
+      "RUN rm $SC_PREFIX/lib/libclang-cpp.so* $SC_PREFIX/lib/libclang.so* \\",
+      "    $SC_PREFIX/lib/libLTO.so* $SC_PREFIX/lib/libRemarks.so*"
+    ],
+    "_comment-prune-dirs": [
+      "The archive globs are measured against a build of this image. They",
+      "are one level above the directories that hold the archives linked at",
+      "The archive globs are measured against a build of this image: what",
+      "the blanket \"delete every *.a\" used to catch here."
+    ],
+    "docker-prune-dirs": [
+      "include",
+      "lib/cmake",
+      "lib/pkgconfig",
+      "share/doc",
+      "share/man",
+      "lib/*.a"
+    ]
+  }
+}

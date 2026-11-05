@@ -1,0 +1,16 @@
+#!/bin/bash
+######################################################################
+# DESCRIPTION: Fuzzer one-line setup & run
+#
+# SPDX-FileCopyrightText: 2019 Eric Rippey
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+######################################################################
+
+# Run all steps needed to configure and start fuzzer
+# Note that this assumes the system is a Debian-like Linux distribution
+
+set -e
+
+sudo ./setup_root
+./setup_user
+./run

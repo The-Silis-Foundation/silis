@@ -1,0 +1,1497 @@
+import logging
+import os
+import queue
+import re
+import time
+import threading
+import types
+
+import os.path
+
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Any, List, Dict, Set, Tuple
+
+from rich import box
+from rich.theme import Theme
+from rich.live import Live
+from rich.table import Table
+from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn
+from rich.console import Console
+from rich.console import Group
+from rich.padding import Padding
+from rich.text import Text
+
+from siliconcompiler import NodeStatus
+from siliconcompiler.utils.logging import SCColorLoggerFormatter, SCConsoleQuietFilter, \
+    SC_LOG, SC_LOGERROR
+from siliconcompiler.utils.paths import workdir
+from siliconcompiler.flowgraph import RuntimeFlowgraph
+from siliconcompiler.schema_support.record import RecordTime
+from siliconcompiler.utils.units import format_time
+from siliconcompiler.report.dashboard.cli.layout import Layout
+from siliconcompiler.report.dashboard.cli.keyboard import Keyboard
+from siliconcompiler import _metadata
+
+
+class View(Enum):
+    NORMAL = auto()
+    HELP = auto()
+
+
+class LogBuffer:
+    """
+    A buffer for storing log messages, designed to be thread-safe and to work
+    in conjunction with a `LogBufferHandler` for dashboard or UI display.
+    It uses a `collections.deque` to maintain a fixed-size history of log lines.
+    """
+    def __init__(self, queue: queue.Queue, n: int = 15, event: threading.Event = None):
+        """
+        Initializes the LogBuffer.
+
+        Args:
+            queue (queue.Queue): A thread-safe queue to push new log lines to.
+            n (int): The maximum number of log lines to retain in the buffer's history.
+                     Defaults to 15.
+            event (threading.Event, optional): An optional `threading.Event` object.
+                                             If provided, this event is set whenever
+                                             a new log line is added, signaling
+                                             consumers that new data is available.
+                                             Defaults to None.
+        """
+        self.queue = queue
+        self.buffer = deque(maxlen=n)
+        self.lock = threading.Lock()
+        if not event:
+            # Create dummy event
+            event = threading.Event()
+        self.event = event
+
+    def make_handler(self, logger_unicode_map, formatter_source=None) -> logging.Handler:
+        """
+        Creates and returns a `LogBufferHandler` instance associated with this `LogBuffer`.
+
+        This handler can then be added to a Python logger to direct log messages
+        to this buffer.
+
+        Args:
+            formatter_source (logging.Handler, optional): When provided, the
+                returned handler formats each record with this source handler's
+                current formatter rather than its own. Lets the dashboard track
+                formatter changes that other code applies to the project's
+                terminal handler (e.g. the scheduler swapping in a blank
+                in-run formatter) without explicit synchronization.
+
+        Returns:
+            logging.Handler: An instance of `LogBufferHandler`.
+        """
+        return LogBufferHandler(self, logger_unicode_map, formatter_source=formatter_source)
+
+    def add_line(self, line: str):
+        """
+        Adds a new log line to the internal queue and signals the event.
+
+        This method is called by the `LogBufferHandler` (or directly) to
+        append a processed log line to the buffer. It also sets the internal
+        threading event to notify any waiting consumers.
+
+        Args:
+            line (str): The log line (string) to add.
+        """
+        self.queue.put(line)
+        self.event.set()
+
+    def get_lines(self, lines: int = None) -> List[str]:
+        """
+        Retrieves the last logged lines from the buffer.
+
+        New lines are first moved from the internal queue to the buffer,
+        and then the requested number of lines are returned from the buffer's history.
+
+        Args:
+            lines (int, optional): The maximum number of recent lines to retrieve.
+                                   If None, all lines currently in the buffer are returned.
+                                   Defaults to None.
+
+        Returns:
+            list[str]: A list of the last logged lines.
+        """
+        new_lines = []
+        try:
+            for _ in range(self.queue.qsize()):
+                new_lines.append(self.queue.get_nowait())
+        except queue.Empty:
+            pass
+        if not self.queue.empty():
+            # Set event since queue is not empty
+            self.event.set()
+
+        with self.lock:
+            self.buffer.extend(new_lines)
+            buffer_list = list(self.buffer)
+
+            if lines is None or lines > len(buffer_list):
+                return buffer_list
+            return buffer_list[-lines:]
+
+
+class LogBufferHandler(logging.Handler):
+    """
+    A custom logging handler that buffers log records and processes them
+    for display in a dashboard or other UI, replacing console color codes
+    with a simplified markdown-like format.
+    """
+    def __init__(self, parent: LogBuffer, logger_unicode_map, formatter_source=None):
+        """
+        Initializes the LogBufferHandler.
+
+        Args:
+            parent (LogBuffer): The parent `LogBuffer` instance to which processed
+                                log lines will be added.
+            formatter_source (logging.Handler, optional): If provided, records
+                are formatted using this handler's current formatter rather
+                than this handler's own. Lets the dashboard track formatter
+                changes that other code applies to the project's terminal
+                handler (e.g. the scheduler swapping in a blank in-run
+                formatter) without explicit synchronization.
+        """
+        super().__init__()
+        self._parent = parent
+        self._formatter_source = formatter_source
+
+        # The log pane stands in for the terminal while the dashboard owns the
+        # screen, so it drops whatever ['option', 'quiet'] muted.
+        self.addFilter(SCConsoleQuietFilter())
+
+        self.__logger_unicode_map = logger_unicode_map
+        if self.__logger_unicode_map:
+            self.__logger_unicode_map = self.__logger_unicode_map.copy()
+            for key, value in self.__logger_unicode_map.items():
+                self.__logger_unicode_map[key] = f"| {value}  |"
+            self.__unicode_rep = re.compile(r"^\|\s[\u001ba-zA-Z0-9\[\\ ]+\s+\|")
+        else:
+            self.__unicode_rep = None
+
+    def format(self, record):
+        """
+        Format a record using ``formatter_source.formatter`` when one is set,
+        falling back to this handler's own formatter otherwise. The dashboard
+        relies on this so log lines stay in sync with whatever formatter the
+        project's terminal handler is currently using.
+        """
+        if self._formatter_source is not None:
+            formatter = self._formatter_source.formatter
+            if formatter is not None:
+                return formatter.format(record)
+        return super().format(record)
+
+    def emit(self, record):
+        """
+        Processes a log record, formats it, replaces console color codes,
+        and adds the transformed line to the parent `LogBuffer`.
+
+        Args:
+            record (logging.LogRecord): The log record to process.
+        """
+        log_entry = self.format(record)
+        if self.__unicode_rep:
+            log_entry = self.__unicode_rep.sub(
+                self.__logger_unicode_map.get(record.levelname, record.levelname), log_entry)
+        else:
+            log_entry = log_entry.replace("[", "\\[")
+
+            # Replace console coloring
+            for color, replacement in (
+                    (SCColorLoggerFormatter.reset.replace("[", "\\["), "[/]"),
+                    (SCColorLoggerFormatter.blue.replace("[", "\\["), "[blue]"),
+                    (SCColorLoggerFormatter.yellow.replace("[", "\\["), "[yellow]"),
+                    (SCColorLoggerFormatter.red.replace("[", "\\["), "[red]"),
+                    (SCColorLoggerFormatter.bold_red.replace("[", "\\["), "[bold red]")):
+                log_entry = log_entry.replace(color, replacement)
+        self._parent.add_line(log_entry)
+
+
+@dataclass
+class _FlowTopology:
+    """
+    Cached topology data for a single (design, jobname) flow.
+
+    The recursive distance walk in `_get_job` is the most expensive piece of
+    every dashboard update, but its result depends only on the flowgraph
+    structure (plus which nodes are SKIPPED -- see `signature`). Caching this
+    lets status-only updates avoid O(N^2) recomputation on every refresh.
+    """
+    nodes: List[Tuple[str, str]]
+    nodeorder: Dict[Tuple[str, str], Tuple[int, int]]
+    node_dists: Dict[Tuple[str, str], Dict[Tuple[str, str], int]]
+    flow_entry_nodes: Set[Tuple[str, str]]
+    flow_exit_nodes: Set[Tuple[str, str]]
+    check_flow_nodes: Set[Tuple[str, str]]
+    lowest_priority: int
+    signature: Any
+
+
+@dataclass
+class JobData:
+    """
+    A data class to hold information about a single job's progress and status.
+
+    Attributes:
+        total (int): The total number of nodes in the job.
+        visible (int): The total number of visible nodes in the job.
+        success (int): The number of successfully completed nodes.
+        error (int): The number of nodes that resulted in an error.
+        skipped (int): The number of skipped nodes.
+        finished (int): The total number of finished nodes (success or error).
+        jobname (str): The name of the job.
+        design (str): The name of the design associated with the job.
+        runtime (float): The total runtime of the job so far.
+        complete (bool): A flag indicating if the job has completed.
+        nodes (List[dict]): A list of dictionaries, each containing detailed
+                            information about a single node in the flowgraph.
+    """
+    total: int = 0
+    visible: int = 0
+    success: int = 0
+    error: int = 0
+    skipped: int = 0
+    finished: int = 0
+    jobname: str = ""
+    design: str = ""
+    runtime: float = 0.0
+    complete: bool = False
+    nodes: List[dict] = field(default_factory=list)
+
+
+@dataclass
+class SessionData:
+    """
+    A data class to hold aggregated information about the entire run session,
+    which may include multiple jobs.
+
+    Attributes:
+        total (int): The total number of nodes across all jobs.
+        visible (int): The total number of visible nodes across all jobs.
+        success (int): The total number of successfully completed nodes across all jobs.
+        error (int): The total number of nodes that resulted in an error across all jobs.
+        skipped (int): The total number of skipped nodes across all jobs.
+        finished (int): The total number of finished nodes across all jobs.
+        runtime (float): The maximum runtime among all jobs.
+        jobs (Dict[str, JobData]): A dictionary mapping job identifiers to their
+                                   corresponding JobData objects.
+    """
+    total: int = 0
+    visible: int = 0
+    success: int = 0
+    error: int = 0
+    skipped: int = 0
+    finished: int = 0
+    runtime: float = 0.0
+    jobs: Dict[str, JobData] = field(default_factory=dict)
+
+
+class NodeType(Enum):
+    """Enumeration to categorize flowgraph nodes as entry, exit, or other."""
+    ENTRY = "entry"
+    EXIT = "exit"
+    OTHER = "other"
+
+
+class Board:
+    """
+    The main class for rendering the live dashboard UI.
+
+    This class orchestrates the display of job progress, logs, and status updates
+    in the terminal using the `rich` library. It runs in a separate thread to
+    provide a non-blocking UI.
+    """
+    __status_color_map = {
+        NodeStatus.PENDING: "blue",
+        NodeStatus.QUEUED: "blue",
+        NodeStatus.RUNNING: "orange4",
+        NodeStatus.SUCCESS: "green",
+        NodeStatus.ERROR: "red",
+        NodeStatus.SKIPPED: "bright_black",
+        NodeStatus.TIMEOUT: "red",
+    }
+    __theme = Theme(
+        {
+            # Text colors
+            "text.primary": "white",
+            "text.secondary": "cyan",
+            # Background colors
+            "background.primary": "grey15",
+            "background.secondary": "dark_blue",
+            # Highlight and accent colors
+            "highlight": "green",
+            "accent": " cyan",
+            # Status colors
+            "error": "red",
+            "warning": "yellow",
+            "success": "green",
+            # Node status colors
+            **{f"node.{status}": color for status, color in __status_color_map.items()},
+            # Custom style for headers
+            "header": "bold underline cyan",
+        }
+    )
+    _symbols = {
+        "headers": {
+            "status": "🚦",
+            "node": "🌐",
+            "time": "⏳",
+            "log": "📜",
+        },
+        "metrics": {
+            "warnings": "⚠️",
+            "errors": "🚫",
+        },
+        "logging": {
+            logging.getLevelName(logging.DEBUG): "🐛",
+            logging.getLevelName(logging.INFO): "ℹ️",
+            logging.getLevelName(logging.WARNING): "⚠️",
+            logging.getLevelName(logging.ERROR): "🚫",
+            logging.getLevelName(logging.CRITICAL): "🚨",
+            # Output the tool itself produced, on stdout and on stderr.
+            logging.getLevelName(SC_LOG): "📜",
+            logging.getLevelName(SC_LOGERROR): "❌"
+        },
+        "node": {
+            NodeType.ENTRY: "🏠",
+            NodeType.EXIT: "🎯"
+        }
+    }
+
+    __USE_ICONS = False
+    __USE_LINK = False
+
+    __JOB_BOARD_BOX = box.SIMPLE_HEAD
+
+    def __init__(self, manager):
+        """
+        Initializes the Board.
+
+        Args:
+            manager: Unused, retained for call-site compatibility
+                (``MPManager.get_dashboard``). The board and its render thread
+                live entirely in the main process, so its state is held in
+                plain in-process primitives (see ``__init__`` below) rather than
+                SyncManager proxies; no manager is needed.
+        """
+        self._console = Console(theme=Board.__theme)
+
+        # auto_refresh is disabled: the render loop drives every repaint
+        # explicitly via live.update(..., refresh=True), so rich's background
+        # refresh thread would only redraw the same renderable between our
+        # updates -- extra CPU and an extra thread for no visual gain.
+        self.live = Live(
+            console=self._console,
+            screen=True,
+            auto_refresh=False
+        )
+
+        self._active = self._console.is_terminal
+        if not self._active:
+            self._console = None
+            return
+
+        self._layout = Layout()
+        self.__view = View.NORMAL
+
+        if Board.__USE_ICONS:
+            self._layout.show_node_type = True
+        else:
+            Board._symbols.clear()
+
+        # "Please repaint" signal, fired both by new log lines and by job-data
+        # changes (_update_render_data). Whether that repaint also needs to
+        # reload job data is decided separately via the data_modified flag below.
+        #
+        # These are deliberately plain in-process ``threading``/``queue``
+        # primitives, not SyncManager proxies. The board and its render thread
+        # live entirely in the main process (workers drop the dashboard handler
+        # and let the parent own all dispatch), so proxies would buy nothing --
+        # and under the ``fork`` start method they are actively dangerous: a
+        # forked node worker inherits the manager's live socket connection, and
+        # concurrent use from the render thread and the child corrupts the
+        # manager's framed protocol, deadlocking every proxy on a recv that
+        # never returns. Plain primitives are fork-immune (and faster).
+        self._render_event = threading.Event()
+        self._render_stop_event = threading.Event()
+        self._render_thread = None
+
+        # Holds thread job data
+        self._board_info = types.SimpleNamespace()
+        self._board_info.data_modified = False
+        self._job_data = {}
+        self._job_data_lock = threading.Lock()
+
+        self._render_data = SessionData()
+        self._render_data_lock = threading.Lock()
+
+        # Cache of flowgraph topology per project_id. The render thread is the
+        # only consumer of _get_job, and callers already serialize via
+        # _job_data_lock, so the cache itself does not need its own lock.
+        self._topology_cache: Dict[str, _FlowTopology] = {}
+
+        self._log_handler_queue = queue.Queue()
+
+        # The log buffer shares the render event so a new log line wakes the
+        # loop to repaint promptly. It does not touch data_modified, so a
+        # log-only wake repaints without triggering a job-data reload.
+        self._log_handler = LogBuffer(self._log_handler_queue, n=120, event=self._render_event)
+
+        # Sleep time for the dashboard
+        self._dwell = 0.2
+
+        self._metrics = ("warnings", "errors")
+
+        self.__help_dwell = 5.0
+        self.__last_help = 0.0
+
+    def show_help(self):
+        """
+        Show or hide the help text in the dashboard. This method toggles the visibility
+        of the help text and updates the timestamp for when the help was last toggled.
+        """
+        if self._layout.show_help_text:
+            return
+
+        self._layout.toggle_show_help_text()
+        self.__last_help = time.time()
+
+    def make_log_hander(self, formatter_source=None) -> logging.Handler:
+        """
+        Creates and returns a logging handler that directs logs to this board.
+
+        Args:
+            formatter_source (logging.Handler, optional): When provided, the
+                returned handler formats records using this source handler's
+                current formatter. See :class:`LogBufferHandler` for details.
+
+        Returns:
+            logging.Handler: The log handler instance.
+        """
+        return self._log_handler.make_handler(
+            Board._symbols.get("logging", None),
+            formatter_source=formatter_source)
+
+    def open_dashboard(self):
+        """Starts the dashboard rendering thread if it is not already running."""
+        if not self._active:
+            return
+
+        if not self.is_running():
+            self._update_render_data(None)
+
+            with self._job_data_lock:
+                if not self._render_thread or not self._render_thread.is_alive():
+                    self._render_thread = threading.Thread(target=self._render, daemon=True)
+                    self._render_event.clear()
+                    self._render_stop_event.clear()
+
+                    Keyboard.start()
+
+                    self.show_help()
+
+                    self._render_thread.start()
+
+    def update_manifest(self, project):
+        """
+        Updates the dashboard with the latest data from a project object's manifest.
+
+        Args:
+            project: The SiliconCompiler project object.
+        """
+        if not self._active:
+            return
+
+        self._update_render_data(project)
+
+    def is_running(self) -> bool:
+        """
+        Checks if the dashboard rendering thread is currently active.
+
+        Returns:
+            bool: True if the dashboard is running, False otherwise.
+        """
+        if not self._active:
+            return False
+
+        try:
+            with self._job_data_lock:
+                if not self._render_thread:
+                    return False
+
+                return self._render_thread.is_alive()
+        except BrokenPipeError:
+            if not self._render_thread:
+                return False
+
+            return self._render_thread.is_alive()
+
+    def end_of_run(self, project):
+        """
+        Signals that the run has completed, performing a final update.
+
+        Args:
+            project: The SiliconCompiler project object at the end of the run.
+        """
+        if not self.is_running():
+            return
+
+        self._update_render_data(project, complete=True)
+
+    def stop(self, force: bool = False):
+        """
+        Stops the dashboard rendering thread and cleans up the terminal display.
+
+        Args:
+            force (bool): When True, tear down even if some jobs are still
+                incomplete. The completeness guard exists so a stray stop()
+                does not kill the live view mid-run; a genuine failure teardown
+                passes force=True to bypass it.
+        """
+        if not self.is_running():
+            return
+
+        if not force and self._job_data:
+            if any([not job.complete for job in self._job_data.values()]):
+                return
+
+        self._render_stop_event.set()
+        # Wake the render loop so it observes the stop event promptly.
+        self._render_event.set()
+
+        Keyboard.stop()
+
+        # Restore the help
+        self.__last_help = 0.0
+        if self._layout.show_help_text:
+            self._layout.toggle_show_help_text()
+
+        # Wait for rendering to finish
+        self.wait()
+
+        # Restore terminal
+        self.live.stop()
+
+        # Print final render to avoid losing it
+        if self.live._screen:
+            try:
+                self._console.print(self._get_rendable())
+            except Exception:
+                pass
+
+        # On a failure teardown (force=True), dump the full retained log buffer
+        # to normal-terminal scrollback. The final frame above only shows the
+        # log lines that fit the visible pane; on an early failure the tail
+        # that explains it has usually scrolled past that window, so reprinting
+        # the entire buffer ensures it survives. This is deliberately skipped
+        # for a normal teardown or a Ctrl+C interrupt (force=False): those are
+        # not failures and the live view already served the log.
+        try:
+            lines = self._log_handler.get_lines() if force else []
+            if lines:
+                self._console.rule("[bold]Full log")
+                for line in lines:
+                    try:
+                        # highlight=False keeps rich from recoloring numbers/
+                        # paths inside the line, matching the live log pane
+                        # (which renders each line as a plain table cell).
+                        self._console.print(f"[white]{line}[/]", highlight=False)
+                    except Exception:
+                        # Malformed/unterminated markup in a buffered line must
+                        # not drop it from the dump (that would defeat the whole
+                        # point). Fall back to printing it verbatim as plain
+                        # text with markup disabled.
+                        try:
+                            self._console.print(line, markup=False, highlight=False)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        try:
+            self._console.show_cursor()
+        except Exception:
+            pass
+
+    def wait(self):
+        """Waits for the dashboard rendering thread to finish."""
+        if not self.is_running():
+            return
+
+        self._render_thread.join()
+
+    @staticmethod
+    def _has_parallelism(running_starts, done_intervals) -> bool:
+        """
+        Returns True iff at least two tasks have been observed running at the
+        same time. Two concurrent in-flight nodes count, as do any pair of
+        completed nodes whose wall-clock intervals (derived from totaltime
+        and tasktime metrics) overlap.
+        """
+        if len(running_starts) >= 2:
+            return True
+        intervals = sorted(done_intervals)
+        for (_, end), (start, _) in zip(intervals, intervals[1:]):
+            if start < end:
+                return True
+        return False
+
+    @staticmethod
+    def format_status(status: str) -> str:
+        """
+        Formats a node status string with rich-compatible color markup.
+
+        Args:
+            status (str): The status of the node (e.g., 'RUNNING', 'SUCCESS').
+
+        Returns:
+            str: A formatted string with the status styled for display.
+        """
+        return f"[node.{status.lower()}]{status.upper()}[/]"
+
+    @staticmethod
+    def format_node(design: str, jobname: str, step: str, index: int, multi_job: bool) -> str:
+        """
+        Formats a node's identifier for display in the dashboard.
+
+        Args:
+            design (str): The design name.
+            jobname (str): The job name.
+            step (str): The step name.
+            index (int): The step index.
+            multi_job (bool): Flag indicating if multiple jobs are running, which
+                              determines the format of the identifier.
+
+        Returns:
+            str: A formatted string representing the node.
+        """
+        if multi_job:
+            return f"{design}/{jobname}/{step}/{index}"
+        else:
+            return f"{step}/{index}"
+
+    def _render_log(self, layout: Layout):
+        """
+        Renders the log message area of the dashboard.
+
+        Args:
+            layout (Layout): The current layout object containing dimensions.
+
+        Returns:
+            rich.group.Group or None: A renderable Group object for the log
+                                      area, or None if there's no space.
+        """
+        if layout.log_height == 0:
+            return None
+
+        number_of_lines = layout.log_height
+
+        table = Table(box=None, width=layout.width, padding=(0, 0))
+        table.add_column(overflow="ellipsis", no_wrap=True, vertical="bottom")
+        table.show_edge = False
+        table.show_lines = False
+        table.show_footer = False
+        table.show_header = False
+        for line in self._log_handler.get_lines(number_of_lines):
+            table.add_row(f"[white]{line}[/]")
+        while table.row_count < number_of_lines:
+            table.add_row("")
+
+        return table
+
+    def _render_job_dashboard(self, layout: Layout):
+        """
+        Renders the main job status board.
+
+        Args:
+            layout (Layout): The current layout object containing dimensions.
+
+        Returns:
+            rich.group.Group or None: A renderable Group containing the job table,
+                                      or None if there is no space or no data.
+        """
+        # Don't render anything if there is not enough space
+        if layout.job_board_height == 0:
+            return None
+
+        with self._render_data_lock:
+            job_data = self._render_data.jobs.copy()  # Access jobs from SessionData
+
+        number_of_jobs = layout.job_board_height
+        number_of_jobs -= 1  # accounting for the header
+        number_of_jobs -= 1  # accounting for padding
+        table_box = self.__JOB_BOARD_BOX
+        number_of_jobs -= 1  # accounting for the header
+
+        table = Table(box=table_box, pad_edge=False)
+        table.show_edge = False
+        table.show_lines = False
+        table.show_footer = False
+        table.show_header = True
+
+        def get_column_header(title):
+            return Board._symbols.get("headers", {}).get(title, title.capitalize())
+
+        def get_metrics_header(title):
+            return Board._symbols.get("metrics", {}).get(title, title.capitalize())
+
+        table.add_column(get_column_header("status"))
+        if layout.show_node_type:
+            table.add_column(get_column_header(""))
+        table.add_column(get_column_header("node"))
+        table.add_column(get_column_header("time"), justify="right")
+        for metric in self._metrics:
+            table.add_column(get_metrics_header(metric), justify="right")
+        if layout.job_board_show_log:
+            table.add_column(get_column_header("log"))
+
+        multi_jobs = len(job_data) > 1
+
+        # jobname, node index, priority, node order
+        table_data_select = []
+        for projectid, job in job_data.items():
+            for n, node in enumerate(job.nodes):
+                if node["print"]["hide"]:
+                    continue
+                table_data_select.append(
+                    (projectid, n, node["print"]["priority"], node["print"]["order"])
+                )
+
+        # sort for priority
+        table_data_select = sorted(table_data_select, key=lambda d: (d[2], *d[3], d[0]))
+
+        # trim to size
+        table_data_select = table_data_select[0:number_of_jobs]
+
+        # sort for printing order
+        table_data_select = sorted(table_data_select, key=lambda d: (d[0], *d[3], d[2]))
+
+        table_data = []
+
+        for projectid, node_idx, _, _ in table_data_select:
+            job = job_data[projectid]
+            node = job.nodes[node_idx]
+
+            log_file = None
+            if layout.job_board_show_log:
+                for log, full_path in node["log"]:
+                    try:
+                        if os.path.getsize(full_path) > 0:
+                            if Board.__USE_LINK:
+                                log_file = f"[link=file://{full_path}][bright_black]{log}[/][/link]"
+                            else:
+                                log_file = f"[bright_black]{log}[/]"
+                            break
+                    except OSError:
+                        # File doesn't exist or inaccessible
+                        continue
+
+            if node["time"]["duration"] is not None:
+                duration = format_time(node["time"]["duration"], milliseconds_digits=1)
+            elif node["time"]["start"] is not None:
+                duration = format_time(time.time() - node["time"]["start"], milliseconds_digits=1)
+            else:
+                duration = ""
+
+            row_data = [
+                Board.format_status(node["status"]),
+                Board.format_node(
+                    job.design, job.jobname, node["step"], node["index"],
+                    multi_jobs
+                ),
+                duration,
+                *node["metrics"],
+                log_file]
+            if layout.show_node_type:
+                node_symbol = Board._symbols.get("node", {}).get(node["type"], "")
+                row_data.insert(1, node_symbol)
+            table_data.append(tuple(row_data))
+
+        for row_data in table_data:
+            table.add_row(*row_data)
+
+        if table.row_count == 0:
+            return None
+
+        return Group(table, Padding("", (0, 0)))
+
+    def _render_progress_bar(self, layout: Layout):
+        """
+        Renders the progress bar section of the dashboard.
+
+        Args:
+            layout (Layout): The current layout object containing dimensions.
+
+        Returns:
+            rich.group.Group or rich.padding.Padding: A renderable object for the
+                                                      progress bars.
+        """
+        if layout.progress_bar_height == 0:
+            return None
+
+        with self._render_data_lock:
+            job_data = self._render_data.jobs.copy()
+
+        ref_time = time.time()
+        wall_strs = {}
+        cpu_strs = {}
+        for name, job in job_data.items():
+            total = 0.0
+            done_intervals = []
+            done_totaltimes = []
+            running_starts = []
+            for node in job.nodes:
+                duration = node["time"]["duration"]
+                start = node["time"]["start"]
+                totaltime = node["time"].get("totaltime")
+
+                if duration is not None:
+                    total += duration
+                elif start is not None:
+                    total += ref_time - start
+                    running_starts.append(start)
+                if totaltime is not None:
+                    done_totaltimes.append(totaltime)
+                    if duration is not None:
+                        done_intervals.append((totaltime - duration, totaltime))
+
+            wall_baseline = max(done_totaltimes, default=0.0)
+            if running_starts:
+                wall = wall_baseline + (ref_time - min(running_starts))
+            else:
+                wall = wall_baseline
+
+            wall_strs[name] = format_time(wall, milliseconds_digits=1)
+            if Board._has_parallelism(running_starts, done_intervals):
+                cpu_strs[name] = format_time(total, milliseconds_digits=1)
+            else:
+                cpu_strs[name] = ""
+
+        job_info = []
+        for name, job in job_data.items():
+            done = job.finished == job.total
+            job_info.append((
+                done, f"{job.design}/{job.jobname}", job.total, job.success,
+                wall_strs[name], cpu_strs[name]))
+
+        number_of_bars = layout.progress_bar_height - 1  # accounting for the padding
+        while job_info and len(job_info) > number_of_bars:
+            for job in job_info:
+                if job[0]:
+                    # complete complete and can be removed
+                    job_info.remove(job)
+                    break
+            # remove first job
+            if job_info:
+                del job_info[0]
+
+        if not job_info:
+            return None
+
+        # Compute column widths and CPU visibility from displayed rows only,
+        # so trimmed-away jobs don't pad the visible columns or force a CPU
+        # column to appear when none of the rendered jobs has parallelism.
+        visible_walls = [row[4] for row in job_info]
+        visible_cpus = [row[5] for row in job_info]
+        wall_width = max([*[len(s) for s in visible_walls], 0])
+        cpu_width = max([*[len(s) for s in visible_cpus], 0])
+        show_cpu = any(visible_cpus)
+
+        columns = [
+            TextColumn("[progress.description]{task.description}"),
+            MofNCompleteColumn(),
+            BarColumn(bar_width=60),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn(f" {{task.fields[walltime]:>{wall_width}}}"),
+        ]
+        if show_cpu:
+            sep_width = 3  # " / "
+            columns.append(TextColumn(f"{{task.fields[separator]:<{sep_width}}}"))
+            columns.append(TextColumn(f"{{task.fields[cputime]:>{cpu_width}}}"))
+
+        progress = Progress(*columns)
+        for _, name, total, success, walltime, cputime in job_info:
+            progress.add_task(
+                f"[text.primary]Progress ({name}):",
+                total=total,
+                completed=success,
+                walltime=walltime,
+                separator=" / " if cputime else "",
+                cputime=cputime,
+            )
+
+        return Group(progress, Padding("", (0, 0)))
+
+    def _render(self):
+        """
+        Main rendering loop for the dashboard.
+
+        This method runs in a separate thread. It waits for update events,
+        fetches the latest data, re-renders the components, and updates the
+        live display.
+        """
+
+        def update_data():
+            try:
+                self._update_rendable_data()
+            except Exception:
+                # Broad on purpose. stop() tears the session down around this
+                # thread -- it sets the stop event, stops the keyboard and stops
+                # the live display while the loop may still be mid-pass, and the
+                # finally below calls this again on the way out. Whatever a
+                # half-torn-down session raises, a shutdown is not worth a cascade
+                # of errors on the way to the exit; stop() itself guards every
+                # console call the same way.
+                pass
+
+        def check_stop_event():
+            try:
+                return self._render_stop_event.is_set()
+            except Exception:
+                # See update_data: if this cannot be answered the session is going
+                # away, so stop.
+                return True
+
+        def data_changed():
+            # Unlocked peek at the data-changed flag. This is only an
+            # optimization to skip the locked read+copy in update_data() on
+            # log-only wakes; update_data() re-checks and clears the flag under
+            # _job_data_lock, so a racing update is caught on the next wake
+            # (data changes fire _render_event too).
+            try:
+                return self._board_info.data_modified
+            except Exception:
+                # See update_data. update_data re-checks the flag under the lock,
+                # so a lost peek only skips one reload.
+                return False
+
+        try:
+            update_data()
+
+            if not self.live.is_started:
+                # No initial refresh: no job data exists yet at open time, so a
+                # refresh here would just paint an empty frame. screen=True
+                # already clears the display on start, and the loop paints real
+                # content as soon as the first render event fires.
+                self.live.start()
+
+            while not check_stop_event():
+                # The render event wakes us for both new log lines and job-data
+                # changes; it also bounds the wait to ~_dwell so timers keep
+                # ticking. We repaint on every wake, but only reload job data
+                # (the locked read+copy in update_data) when data_modified is
+                # actually set -- a log-only wake just repaints, draining new
+                # lines via get_lines().
+                now = time.time()
+                dwell = self._dwell
+                try:
+                    if self._render_event.wait(timeout=dwell):
+                        self._render_event.clear()
+                except Exception:
+                    # See update_data: without the event there is nothing left to
+                    # wake this loop, so leave it.
+                    break
+
+                self._handle_keyboard()
+
+                if check_stop_event():
+                    break
+
+                if data_changed():
+                    update_data()
+                self.live.update(self._get_rendable(), refresh=True)
+
+                dwell = dwell - (time.time() - now)
+                if dwell > 0:
+                    time.sleep(dwell)
+
+        finally:
+            update_data()
+            if self.live:
+                self.live.update(self._get_rendable(), refresh=True)
+            else:
+                self._console.print(self._get_rendable())
+
+    def _handle_keyboard(self):
+        key = Keyboard.check_key()
+        if key is None:
+            return
+        key = key.lower()
+        if key == "h":
+            if self.__view == View.HELP:
+                self.__view = View.NORMAL
+            else:
+                self.__view = View.HELP
+        elif key == "d":
+            self._layout.toggle_show_debug_text()
+        elif key == "j":
+            self._layout.toggle_show_progress_bar()
+        elif key == "l":
+            self._layout.toggle_show_log()
+        elif key == "n":
+            self._layout.toggle_show_jobboard()
+        else:
+            if not self._layout.show_help_text:
+                self.show_help()
+
+    def _update_layout(self) -> Layout:
+        """
+        Updates the layout dimensions based on the current data and console size.
+
+        Returns:
+            Layout: The updated layout object.
+        """
+        with self._render_data_lock:
+            visible_progress_bars = len(self._render_data.jobs)
+            visible_jobs_count = self._render_data.visible
+
+        self._layout.update(
+            self._console.height,
+            self._console.width,
+            visible_jobs_count,
+            visible_progress_bars,
+        )
+
+        return self._layout
+
+    def _update_rendable_data(self):
+        """
+        Transfers job data from the in-process job dictionary to the local render
+        data object, aggregating session-wide statistics.
+        """
+        jobs = {}
+        with self._job_data_lock:
+            if self._board_info.data_modified:
+                self._board_info.data_modified = False
+                for job, data in self._job_data.items():
+                    jobs[job] = data
+
+        if not jobs:
+            return
+
+        with self._render_data_lock:
+            self._render_data.jobs.clear()
+            for job, data in jobs.items():
+                self._render_data.jobs[job] = data
+
+            self._render_data.total = sum(
+                [0, *[job.total for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.visible = sum(
+                [0, *[job.visible for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.success = sum(
+                [0, *[job.success for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.error = sum(
+                [0, *[job.error for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.skipped = sum(
+                [0, *[job.skipped for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.finished = sum(
+                [0, *[job.finished for job in self._render_data.jobs.values()]]
+            )
+            self._render_data.runtime = max(
+                [0, *[job.runtime for job in self._render_data.jobs.values()]]
+            )
+
+    def _render_help(self, layout: Layout):
+        groups = []
+        banner_height = 7 + 1
+        authors_height = 1 + 1
+        version_height = 1 + 1
+        help_info = [
+            ("h", "Toggle showing this help information"),
+            ("j", "Toggle showing job details"),
+            ("n", "Toggle showing node details"),
+            ("l", "Toggle showing log details")]
+        table_height = 6 + len(help_info)  # header + padding
+
+        banner = Padding(Text(_metadata.banner), pad=(0, 0, 1, 0))
+        authors = Padding(
+            Text(f"Authors: {', '.join(_metadata.authors)}", overflow="ellipsis", no_wrap=True),
+            pad=(0, 0, 1, 0))
+        version = Padding(
+            Text(f"Version: {_metadata.detailed_version}", overflow="ellipsis", no_wrap=True),
+            pad=(0, 0, 1, 0))
+
+        if layout.height >= banner_height + authors_height + table_height + version_height:
+            groups.append(banner)
+            groups.append(authors)
+            groups.append(version)
+        elif layout.height >= banner_height + table_height + authors_height:
+            groups.append(banner)
+            groups.append(authors)
+        elif layout.height >= banner_height + table_height:
+            groups.append(banner)
+
+        table = Table(title="Dashboard Help")
+
+        table.add_column("Key", style="bold cyan")
+        table.add_column("Description")
+
+        for key, help in help_info:
+            table.add_row(key, help)
+
+        groups.append(table)
+
+        return groups
+
+    def _render_view(self, layout: Layout):
+        """
+        Renders the entire dashboard view based on the current layout.
+        """
+        items = []
+        nodesboard = self._render_job_dashboard(layout)
+        if nodesboard:
+            items.append(nodesboard)
+
+        progress = self._render_progress_bar(layout)
+        if progress:
+            items.append(progress)
+
+        log = self._render_log(layout)
+        if log:
+            items.append(log)
+
+        if layout.help_text_height > 0:
+            items.append(Text("Press 'H' for help, press 'Ctrl+C' to quit.",
+                              no_wrap=True, overflow="ellipsis", style="bold white"))
+
+        return items
+
+    def _get_rendable(self):
+        """
+        Assembles the final renderable object for the `rich.live` display.
+
+        It gets the latest layout, renders each component (job board, progress bars, log),
+        and combines them into a single `rich.group.Group`.
+
+        Returns:
+            rich.group.Group: The complete, renderable dashboard layout.
+        """
+
+        if self._layout.show_help_text and (time.time() - self.__last_help) > self.__help_dwell:
+            self._layout.toggle_show_help_text()
+
+        layout = self._update_layout()
+
+        items = []
+        if self.__view == View.HELP:
+            items.extend(self._render_help(layout))
+        else:
+            items.extend(self._render_view(layout))
+
+        if layout.debug_text_height > 0:
+            items.append(Text(
+                f"Console: {layout.height}x{layout.width}, "
+                f"Sections: {layout.job_board_height}/{layout.progress_bar_height}/"
+                f"{layout.log_height}/{layout.help_text_height}/{layout.debug_text_height}",
+                no_wrap=True, overflow="ellipsis", style="bold white"))
+
+        return Group(*items)
+
+    def _update_render_data(self, project, complete=False):
+        """
+        Extracts job and node information from a project object and updates the
+        shared job data dictionary, triggering a render event.
+
+        Args:
+            project: The SiliconCompiler project object.
+            complete (bool, optional): Flag indicating if the job is complete. Defaults to False.
+        """
+
+        if not project:
+            return
+
+        job_data = self._get_job(project)
+        job_data.complete = complete
+
+        if not job_data.nodes:
+            return
+
+        project_id = f"{job_data.design}/{job_data.jobname}"
+        with self._job_data_lock:
+            if complete and project_id in self._job_data and self._job_data[project_id].complete:
+                # Dont update again, requires a start of a new run
+                return
+            self._job_data[project_id] = job_data
+            self._board_info.data_modified = True
+            self._render_event.set()
+
+    def _get_flow_topology(self, project, project_id):
+        """Compute (and cache) the topology-only parts of the flowgraph.
+
+        The recursive distance walk is the most expensive piece of `_get_job`
+        and depends only on the flowgraph structure plus the set of SKIPPED
+        nodes (since `get_node_inputs(record=...)` walks through skipped
+        nodes to their real predecessors). Caching by `project_id` lets
+        status-only updates skip the O(N^2) work entirely.
+
+        Returns None if the project has no configured flow.
+        """
+        flow = project.option.get_flow()
+        if not flow:
+            return None
+
+        check_flow = RuntimeFlowgraph.from_project(project)
+        runtime_flow = RuntimeFlowgraph(
+            project.get_flow(flow),
+            to_steps=project.option.get_to(),
+            prune_nodes=project.option.get_prune())
+        record = project.get("record", field='schema')
+
+        execnodes = runtime_flow.get_nodes()
+        check_flow_nodes = set(check_flow.get_nodes())
+
+        # Signature for cache invalidation. SKIPPED is the only status that
+        # changes which inputs a downstream node sees, so it's enough to
+        # invalidate on the SKIPPED set rather than re-running the heavier
+        # get_node_inputs probe for every node every call.
+        skipped = tuple(
+            sorted(
+                node for node in execnodes
+                if project.get("record", "status", step=node[0], index=node[1])
+                == NodeStatus.SKIPPED
+            )
+        )
+        # Edges of the static flow graph. Including these makes the cache
+        # invalidate when a user mutates flowgraph edges between calls (e.g.
+        # in a Jupyter session) -- node-set equality alone wouldn't catch
+        # that. O(N + E) per signature build, far cheaper than the recursive
+        # distance walk it gates.
+        flow_obj = project.get_flow(flow)
+        edges = tuple(
+            (node, tuple(sorted(flow_obj.get_graph_node(node[0], node[1]).get_input())))
+            for node in sorted(execnodes)
+        )
+        signature = (
+            flow,
+            tuple(execnodes),
+            tuple(sorted(check_flow_nodes)),
+            edges,
+            tuple(project.option.get_from() or ()),
+            tuple(project.option.get_to() or ()),
+            tuple(project.option.get_prune() or ()),
+            skipped,
+        )
+
+        cached = self._topology_cache.get(project_id)
+        if cached is not None and cached.signature == signature:
+            return cached
+
+        nodes = []
+        nodeorder = {}
+        node_inputs = {}
+        node_outputs = {}
+
+        for n, nodeset in enumerate(runtime_flow.get_execution_order()):
+            for m, node in enumerate(nodeset):
+                if node not in execnodes:
+                    continue
+                nodes.append(node)
+                nodeorder[node] = (n, m)
+                node_inputs[node] = runtime_flow.get_node_inputs(*node, record=record)
+                for in_node in project.get_flow(flow).get_graph_node(node[0],
+                                                                     node[1]).get_input():
+                    node_outputs.setdefault(in_node, set()).add(node)
+
+        flow_entry_nodes = set(project.get_flow(flow).get_entry_nodes())
+        flow_exit_nodes = set(runtime_flow.get_exit_nodes())
+
+        def get_node_distance(node, search, level=1):
+            dists = {}
+            if node not in search:
+                return dists
+            for snode in search[node]:
+                dists[snode] = level
+                dists.update(get_node_distance(snode, search, level=level + 1))
+            return dists
+
+        node_dists = {}
+        for cnode in nodes:
+            # use 2x + 1 to give completed nodes sorting priority
+            node_dists[cnode] = {
+                node: 2 * level + 1
+                for node, level in get_node_distance(cnode, node_inputs).items()
+            }
+            node_dists[cnode].update({
+                node: 2 * level
+                for node, level in get_node_distance(cnode, node_outputs).items()
+            })
+
+        topology = _FlowTopology(
+            nodes=nodes,
+            nodeorder=nodeorder,
+            node_dists=node_dists,
+            flow_entry_nodes=flow_entry_nodes,
+            flow_exit_nodes=flow_exit_nodes,
+            check_flow_nodes=check_flow_nodes,
+            lowest_priority=3 * len(execnodes),
+            signature=signature,
+        )
+        self._topology_cache[project_id] = topology
+        return topology
+
+    def _get_job(self, project) -> JobData:
+        """
+        Parses a project object to extract detailed information about the flowgraph,
+        node statuses, timings, and metrics.
+
+        This method calculates node display priority based on run status and
+        dependencies.
+
+        Args:
+            project: The SiliconCompiler project object to parse.
+
+        Returns:
+            JobData: A data object populated with the extracted information.
+        """
+        record = project.get("record", field="schema")
+
+        design = project.option.get_design()
+        jobname = project.option.get_jobname()
+        project_id = f"{design}/{jobname}"
+
+        nodes = []
+        nodestatus = {}
+        nodeorder = {}
+        node_priority = {}
+        flow_entry_nodes = set()
+        flow_exit_nodes = set()
+        check_flow_nodes = set()
+        try:
+            topology = self._get_flow_topology(project, project_id)
+            if topology is None:
+                raise RuntimeError("dummy error")
+
+            nodes = topology.nodes
+            nodeorder = topology.nodeorder
+            flow_entry_nodes = topology.flow_entry_nodes
+            flow_exit_nodes = topology.flow_exit_nodes
+            check_flow_nodes = topology.check_flow_nodes
+
+            for node in nodes:
+                node_priority[node] = topology.lowest_priority
+                status = project.get("record", "status", step=node[0], index=node[1])
+                if status is None:
+                    status = NodeStatus.PENDING
+                nodestatus[node] = status
+
+            running_nodes = set([node for node in nodes if NodeStatus.is_running(nodestatus[node])])
+            done_nodes = set([node for node in nodes if NodeStatus.is_done(nodestatus[node])])
+            error_nodes = set([node for node in nodes if NodeStatus.is_error(nodestatus[node])])
+
+            # Compute printing priority of nodes (status-dependent; cheap)
+            remaining_entry_nodes = flow_entry_nodes - done_nodes
+            startnodes = running_nodes.union(remaining_entry_nodes)
+            priority_node = {0: startnodes.union(error_nodes)}
+            for node in nodes:
+                dists = topology.node_dists[node]
+                levels = []
+                for snode in startnodes:
+                    if snode not in dists:
+                        continue
+                    levels.append(dists[snode])
+                if not levels:
+                    continue
+                priority_node.setdefault(min(levels), set()).add(node)
+            for level, level_nodes in priority_node.items():
+                for node in level_nodes:
+                    if node not in node_priority:
+                        continue
+                    node_priority[node] = min(node_priority[node], level)
+        except RuntimeError:
+            pass
+
+        job_data = JobData()
+        job_data.jobname = jobname
+        job_data.design = design
+        totaltimes = [
+            project.get("metric", "totaltime", step=step, index=index) or 0
+            for step, index in nodes
+        ]
+        if not totaltimes:
+            totaltimes = [0]
+        job_data.runtime = max(totaltimes)
+
+        for step, index in nodes:
+            status = nodestatus[(step, index)]
+
+            job_data.total += 1
+            if NodeStatus.is_error(status):
+                job_data.error += 1
+            if NodeStatus.is_success(status):
+                job_data.success += 1
+            if NodeStatus.is_done(status):
+                job_data.finished += 1
+
+            if status == NodeStatus.SKIPPED:
+                job_data.skipped += 1
+                continue
+
+            hide = (step, index) not in check_flow_nodes
+            if not hide:
+                job_data.visible += 1
+
+            starttime = None
+            duration = None
+            totaltime = None
+            if NodeStatus.is_done(status):
+                duration = project.get("metric", "tasktime", step=step, index=index)
+                totaltime = project.get("metric", "totaltime", step=step, index=index)
+            elif NodeStatus.is_running(status):
+                starttime = record.get_recorded_time(step, index, RecordTime.START)
+
+            node_metrics = []
+            for metric in self._metrics:
+                value = project.get('metric', metric, step=step, index=index)
+                if value is None:
+                    node_metrics.append("")
+                else:
+                    node_metrics.append(str(value))
+
+            node_type = NodeType.OTHER
+            if (step, index) in flow_entry_nodes:
+                node_type = NodeType.ENTRY
+            if (step, index) in flow_exit_nodes:
+                node_type = NodeType.EXIT
+
+            job_data.nodes.append(
+                {
+                    "step": step,
+                    "index": index,
+                    "status": status,
+                    "time": {
+                        "start": starttime,
+                        "duration": duration,
+                        "totaltime": totaltime
+                    },
+                    "metrics": node_metrics,
+                    "log": [(
+                        os.path.join(workdir(project, step=step, index=index, relpath=True),
+                                     f"{step}.log"),
+                        os.path.join(workdir(project, step=step, index=index),
+                                     f"{step}.log")
+                    ), (
+                        os.path.join(workdir(project, step=step, index=index, relpath=True),
+                                     f"sc_{step}_{index}.log"),
+                        os.path.join(workdir(project, step=step, index=index),
+                                     f"sc_{step}_{index}.log")
+                    )],
+                    "print": {
+                        "order": nodeorder[(step, index)],
+                        "priority": node_priority[(step, index)],
+                        "hide": hide
+                    },
+                    "type": node_type
+                }
+            )
+
+        return job_data

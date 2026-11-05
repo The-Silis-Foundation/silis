@@ -1,0 +1,67 @@
+name: rohd_wave_viewer
+description: "Flutter waveform viewer for inspecting VCD, FST, and GHW files in standalone apps, browsers, and Visual Studio Code."
+homepage: https://intel.github.io/rohd-website/
+repository: https://github.com/intel/rohd-wave-viewer
+version: 0.1.1
+issue_tracker: https://github.com/intel/rohd-wave-viewer/issues
+topics:
+  - waveform
+  - vcd
+  - hardware
+
+environment:
+  # Keep the package language floor at the Pub workspace minimum. CI and local
+  # builds use the newer Flutter release pinned by the repository workflows.
+  sdk: '>=3.6.0 <4.0.0'
+  flutter: '>=3.44.0'
+
+workspace:
+  - packages/dart_wellen
+
+dependencies:
+  bloc: ^9.0.0
+  # Font assets referenced by material_ui through cupertino_ui.
+  cupertino_icons: '>=1.0.9 <3.0.0'
+  dart_wellen: ^0.1.1
+  devtools_app_shared: ^0.5.0
+  equatable: '>=2.0.5 <4.0.0'
+  ffi: ^2.1.0
+  file_selector: ^1.0.3
+  flutter:
+    sdk: flutter
+  flutter_bloc: ^9.0.0
+  # Must match dart_wellen's generated bindings and Rust bridge dependencies.
+  flutter_rust_bridge: 2.7.1
+  flutter_simple_treeview: ^3.0.2
+  flutter_web_plugins:
+    sdk: flutter
+  material_ui: ^1.1.0
+  package_info_plus: ^10.2.1
+  rohd: '>=0.6.11 <0.8.0'
+  rohd_devtools_widgets: '>=0.1.1 <0.3.0'
+  rohd_hierarchy: '>=0.1.0 <0.3.0'
+  rohd_waveform: '>=0.1.0 <0.3.0'
+  web: ^1.0.0
+
+dev_dependencies:
+  bloc_test: ^10.0.0
+  ffigen: ^19.0.0
+  flutter_lints: ^3.0.0
+  flutter_test:
+    sdk: flutter
+  mocktail: ^1.0.3
+  test: ^1.24.9
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/help/
+    - assets/licenses/
+    - assets/waveforms/
+  fonts:
+    - family: SourceCodePro
+      fonts:
+        - asset: assets/fonts/SourceCodePro.ttf
+    - family: UbuntuMono
+      fonts:
+        - asset: assets/fonts/UbuntuMono-Regular.ttf

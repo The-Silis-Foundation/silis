@@ -1,0 +1,332 @@
+name: 'Tools CI Tests'
+
+on:
+  # Runs on pushes to test/ branches and main
+  push:
+    branches:
+      - 'main'
+      - 'test/**'
+  # Runs on all PRs
+  pull_request:
+  # Manual Dispatch
+  workflow_dispatch:
+    inputs:
+      rebuildall:
+        type: boolean
+        default: false
+        description: rebuild all tools
+  # Releases of SC
+  release:
+    types:
+      - published
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege by default. The repository's default workflow token is
+# write-all, so the scopes have to be named here to drop the rest. The jobs
+# that push to ghcr.io raise themselves to packages: write; every sc_* package
+# is linked to this repository, so GITHUB_TOKEN covers it and no PAT is needed.
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Every tool image and sc_tools, built where they do not exist yet, through the
+  # same workflow a package that adds tools to sc-install calls, so these runs are
+  # its test too.
+  #
+  # Pushed with GITHUB_TOKEN, scoped by this job's packages: write. On a pull
+  # request from a fork the token is read-only, so a run that has to build a new
+  # image fails at the push and a repo member has to run it; pulls, and any run
+  # whose images already exist, work for external contributors.
+  images:
+    name: 'Tool images'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/tool_images.yml
+    with:
+      rebuild-all: ${{ inputs.rebuildall == true }}
+
+  tag_release_images:
+    needs: images
+    name: Tag release images
+    if: always() && !cancelled() && github.event_name == 'release'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Log in to the Container registry
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    # Add 'latest' and the SC release version to sc_tools and the tool images, so a
+    # given SC release can be paired with the exact tool images it shipped with.
+    # imagetools copies the manifests in the registry, so no image is ever pulled.
+    - name: Tag images with latest and the ${{ github.ref_name }} release
+      run: |
+        retag() {
+          base=$(echo $1 | sed s/:.*//g)
+          echo "::group::$1 -> ${base}:latest, ${base}:$2"
+          docker buildx imagetools create --tag ${base}:latest --tag ${base}:$2 $1
+          echo "::endgroup::"
+        }
+
+        # sc_tools is tagged by content hash, so the SC version stands on its own,
+        # while the tool images carry the tool's own version and need the 'sc-' prefix
+        # to keep the two apart
+        retag ${{ needs.images.outputs.image }} ${{ github.ref_name }}
+        for image in ${{ needs.images.outputs.all-tool-images }}; do
+          retag $image sc-${{ github.ref_name }}
+        done
+
+  runner_image:
+    needs: images
+    name: Build SC runner image
+    if: always() && !cancelled() && github.event_name == 'release'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Download docker artifacts
+      uses: actions/download-artifact@v8
+      with:
+        name: tool-images
+
+    - name: Free Disk Space (Ubuntu)
+      uses: jlumbroso/free-disk-space@v2.0.0
+      with:
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: false
+        swap-storage: true
+
+    - name: Log in to the Container registry
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Determine runner latest tag
+      run: |
+        runner_latest_tag=$(echo ${{ needs.images.outputs.runner-image }} | sed s/:.*/:latest/g)
+        echo "RUNNER_TAG=${runner_latest_tag}" >> $GITHUB_ENV
+
+    - name: Build and Push Tool Docker image
+      uses: docker/build-push-action@v7.4.0
+      with:
+        context: ./sc_runner/
+        push: true
+        provenance: false
+        tags: |
+          ${{ needs.images.outputs.runner-image }}
+          ${{ env.RUNNER_TAG }}
+
+  cache:
+    name: Generate cache
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+
+          python3 -m pip install -e .[test]
+          python3 -m pip install -r ./examples/requirements.txt
+
+      - name: Gather cache
+        run: |
+          . .venv/bin/activate
+          python3 .github/workflows/bin/generate_cache.py
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: scpackage-cache
+          path: .sc/cache
+          retention-days: 1
+
+  tool_based_tests:
+    needs: [images, cache]
+    runs-on: ubuntu-latest
+
+    if: always() && !cancelled()
+
+    permissions:
+      contents: read
+      packages: read
+      # Codecov uploads with OIDC rather than an upload token
+      id-token: write
+
+    container:
+      image: ${{ needs.images.outputs.image }}
+
+    env:
+      SCTESTCACHE: ${{ github.workspace }}/.sc/cache/
+
+    timeout-minutes: 45
+    name: 'Tool-based tests'
+    steps:
+
+      - name: Checkout current SiliconCompiler
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup tests
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 -m venv .venv
+          source .venv/bin/activate
+
+          python3 -m pip install -e .[test,cocotb]
+          python3 -m pip install -r ./examples/requirements.txt
+
+      - name: Restore cache
+        uses: actions/download-artifact@v8
+        with:
+          name: scpackage-cache
+          path: ${{ env.SCTESTCACHE }}
+
+      - name: Start slurm
+        run: /start_slurm.sh
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+
+          # change running directory
+          mkdir testrun
+          cd testrun
+
+          pytest $GITHUB_WORKSPACE -n logical -m "eda and quick" --clean --cov --cov-report=xml --durations=0
+
+      - name: Upload coverage reports to Codecov
+        continue-on-error: true
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: coverage.xml
+          name: codecov-tools
+          verbose: true
+
+  daily_tests_job_docker_linux:
+    needs: [cache, images]
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+
+    if: always() && !cancelled()
+
+    env:
+      SCTESTCACHE: ${{ github.workspace }}/.sc/cache/
+
+    name: 'All docker tests (linux)'
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Checkout SiliconCompiler
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        id: setup-python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Fetch runner image
+        run: |
+          docker pull ${{ needs.images.outputs.image }}
+
+      - name: Restore cache
+        uses: actions/download-artifact@v8
+        with:
+          name: scpackage-cache
+          path: ${{ env.SCTESTCACHE }}
+
+      - name: Setup tests
+        run: |
+          ${{ steps.setup-python.outputs.python-path }} -m venv .venv
+          source .venv/bin/activate
+          python3 --version
+
+          python3 -m pip install --upgrade pip
+          python3 -m pip install .[test]
+
+      - name: Run tests
+        env:
+          SC_IMAGE: ${{ needs.images.outputs.image }}
+        run: |
+          source .venv/bin/activate
+
+          # change running directory
+          mkdir testrun
+          cd testrun
+
+          pytest $GITHUB_WORKSPACE -n logical -m "docker and quick" --durations=0 --clean
+
+  tools_changed_check:
+    runs-on: ubuntu-latest
+    name: Check if tools changed
+    outputs:
+      asic_changed: ${{ steps.changes.outputs.asic }}
+    steps:
+      - name: Checkout current SiliconCompiler
+        uses: actions/checkout@v7
+
+      - name: Checkout main SiliconCompiler
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: scmain
+
+      - name: Check tool updates
+        id: changes
+        run: |
+          toolsscript=.github/workflows/bin/check_tool_changes.py
+          toolsfile=siliconcompiler/toolscripts/_tools.json
+          asic_change=$(python3 $toolsscript scmain/${toolsfile} ${toolsfile} --workflow asic)
+          echo "asic=${asic_change}"
+          echo "asic=${asic_change}" >> $GITHUB_OUTPUT
+
+  run_daily_asic:
+    name: Run daily ASIC CI
+    needs: [images, tools_changed_check]
+    if: always() && !cancelled() && needs.tools_changed_check.outputs.asic_changed == 'Yes'
+    uses: ./.github/workflows/daily_ci.yml

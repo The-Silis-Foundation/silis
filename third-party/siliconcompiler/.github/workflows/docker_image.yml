@@ -1,0 +1,80 @@
+name: 'Get name of docker image'
+
+env:
+  REGISTRY: ghcr.io
+
+on:
+  workflow_call:
+    inputs:
+      tool:
+        description: 'Name of the tool'
+        required: false
+        default: 'tools'
+        type: string
+      sc_version:
+        description: 'SC version tag or "latest" version'
+        required: false
+        default: 'main'
+        type: string
+    outputs:
+      sc_tool:
+        description: 'Name and newest digest for the docker image of the input tool'
+        value: ${{ jobs.docker_image.outputs.sc_tool }}
+
+jobs:
+  docker_image:
+    name: 'Get docker image'
+    runs-on: ubuntu-latest
+
+    # Reusable, and called from scgallery as well as from daily_ci. A
+    # reusable workflow cannot be granted more than its caller holds, so this
+    # only ever reads.
+    permissions:
+      contents: read
+      packages: read
+
+    outputs:
+      sc_tool: ${{ steps.docker.outputs.sc_tool }}
+
+    steps:
+      - name: Checkout SiliconCompiler
+        if: inputs.sc_version != 'latest'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sc_version }}
+          repository: siliconcompiler/siliconcompiler
+          fetch-depth: 0
+
+      - name: Checkout full SiliconCompiler repo
+        if: inputs.sc_version == 'latest'
+        uses: actions/checkout@v7
+        with:
+          repository: siliconcompiler/siliconcompiler
+          fetch-depth: 0
+
+      - name: Find latest release
+        if: inputs.sc_version == 'latest'
+        run: |
+          version=$(git describe --abbrev=0 --tags --match="v*")
+          git checkout $version
+
+      - name: Setup
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python3 -m pip install --upgrade pip
+          pip install .
+
+      - name: Get newest docker image for the input tool
+        id: docker
+        run: |
+          . .venv/bin/activate
+          # The builder ships in the wheel now; a release checked out above from before
+          # that carries it as this script instead.
+          if python3 -c "import siliconcompiler.utils.toolimages" 2> /dev/null; then
+            builder="-m siliconcompiler.utils.toolimages"
+          else
+            builder="setup/docker/builder.py"
+          fi
+          sc_tool_name=$(python3 $builder --tool ${{ inputs.tool }} --registry ${{ env.REGISTRY }})
+          echo "sc_tool=${sc_tool_name}" >> $GITHUB_OUTPUT

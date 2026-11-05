@@ -1,0 +1,11 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2019 Stefan Wallentowitz
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+
+coverage_block_off -file "t/t_cover_line.v" -lines 145
+coverage_block_off -file "t/t_cover_line.v" -lines 179
+coverage_block_off -module "beta" -block "block"

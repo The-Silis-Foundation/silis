@@ -1,0 +1,1436 @@
+import glob
+import logging
+import os
+import re
+import shutil
+import sys
+import tempfile
+import threading
+
+import os.path
+
+from datetime import datetime
+
+from typing import Final, Iterable, Union, Dict, Optional, Tuple, List, Set, TYPE_CHECKING
+
+from siliconcompiler import NodeStatus, Task
+from siliconcompiler.schema import Journal
+from siliconcompiler.flowgraph import RuntimeFlowgraph
+from siliconcompiler.scheduler import SchedulerNode
+from siliconcompiler.scheduler import SlurmSchedulerNode
+from siliconcompiler.scheduler import TaskScheduler
+from siliconcompiler.scheduler.listener import RunListener, RunListeners
+from siliconcompiler.scheduler.schedulernode import SchedulerFlowReset, SchedulerNodeReset
+from siliconcompiler.scheduler.send_messages import EmailListener
+from siliconcompiler.scheduler.taskscheduler import _CallbackListener
+from siliconcompiler.tool import TaskExecutableNotFound, TaskExecutableNotReceived
+
+from siliconcompiler import utils
+from siliconcompiler.utils.logging import SCLoggerFormatter, report_schema_warnings
+from siliconcompiler.utils.multiprocessing import MPManager, get_process_context, forking
+from siliconcompiler.scheduler import SCRuntimeError
+from siliconcompiler.package.cleanup import auto_cleanup
+from siliconcompiler.utils.paths import collectiondir, jobdir, workdir
+from siliconcompiler.utils.curation import collect, filter_collection_keys
+
+if TYPE_CHECKING:
+    from siliconcompiler.project import Project
+    from siliconcompiler import Flowgraph
+    from siliconcompiler.schema_support.record import RecordSchema
+    from siliconcompiler.schema_support.metric import MetricSchema
+
+
+class Scheduler:
+    """
+    A class for orchestrating and executing a compilation flowgraph.
+
+    The Scheduler is responsible for managing the entire lifecycle of a compilation
+    run. It interprets the flowgraph defined in the Project object, determines which
+    nodes (steps) need to be run based on user settings (like 'from', 'to') and
+    the state of previous runs, and then executes the tasks in the correct order.
+
+    It handles setting up individual task nodes, managing dependencies, logging,
+    and reporting results.
+    """
+    __MAX_LOG_BACKUPS: Final[int] = 5
+
+    # Guards the read-modify-write of the registered listeners, which sit with
+    # the other process-wide state in MPManager.
+    __listeners_lock = threading.Lock()
+
+    @staticmethod
+    def add_listener(listener: RunListener) -> None:
+        """Registers a listener to hear every run in this process.
+
+        A run hears the listeners registered when it starts. Adding a listener
+        that is already registered does nothing.
+
+        Args:
+            listener (RunListener): The listener to add.
+
+        Raises:
+            TypeError: If the listener is not a :class:`RunListener`.
+        """
+        if not isinstance(listener, RunListener):
+            raise TypeError(f"{type(listener).__name__} is not a RunListener")
+
+        with Scheduler.__listeners_lock:
+            listeners = Scheduler._registered_listeners()
+            if listener not in listeners:
+                MPManager.get_transient_settings().set(
+                    'Scheduler', 'listeners', (*listeners, listener))
+
+    @staticmethod
+    def remove_listener(listener: RunListener) -> None:
+        """Stops a listener hearing runs that start from now on. Removing one
+        that is not registered does nothing.
+
+        Args:
+            listener (RunListener): The listener to remove.
+        """
+        with Scheduler.__listeners_lock:
+            listeners = Scheduler._registered_listeners()
+            if listener in listeners:
+                MPManager.get_transient_settings().set(
+                    'Scheduler', 'listeners',
+                    tuple(registered for registered in listeners if registered is not listener))
+
+    @staticmethod
+    def _registered_listeners() -> Tuple[RunListener, ...]:
+        """
+        Returns:
+            tuple of RunListener: The listeners :meth:`add_listener` registered.
+        """
+        return MPManager.get_transient_settings().get('Scheduler', 'listeners', ())
+
+    def __init__(self, project: "Project"):
+        """
+        Initializes the Scheduler.
+
+        Args:
+            project (Project): The Project object containing the configuration and flowgraph.
+
+        Raises:
+            SCRuntimeError: If the specified flow is not defined or fails validation.
+        """
+        self.__project = project
+        self.__logger: logging.Logger = project.logger.getChild("scheduler")
+        self.__name = project.name
+
+        flow = self.__project.option.get_flow()
+        if not flow:
+            raise SCRuntimeError("flow must be specified")
+
+        if flow not in self.__project.getkeys("flowgraph"):
+            raise SCRuntimeError("flow is not defined")
+
+        self.__flow: "Flowgraph" = self.__project.get_flow(flow)
+        from_steps = self.__project.option.get_from()
+        to_steps = self.__project.option.get_to()
+        prune_nodes = self.__project.option.get_prune()
+
+        if not self.__flow.validate(logger=self.__logger):
+            raise SCRuntimeError(f"{self.__flow.name} flowgraph contains errors and cannot be run.")
+        if not RuntimeFlowgraph.validate(
+                self.__flow,
+                from_steps=from_steps,
+                to_steps=to_steps,
+                prune_nodes=prune_nodes,
+                logger=self.__logger):
+            raise SCRuntimeError(f"{self.__flow.name} flowgraph contains errors and cannot be run.")
+
+        self.__flow_runtime = RuntimeFlowgraph.from_project(self.__project)
+        if not self.__flow_runtime.get_nodes():
+            raise SCRuntimeError(f"{self.__flow.name} flowgraph contains no nodes to run.")
+
+        self.__flow_load_runtime = RuntimeFlowgraph(
+            self.__flow,
+            to_steps=from_steps,
+            prune_nodes=prune_nodes)
+
+        self.__record: "RecordSchema" = self.__project.get("record", field="schema")
+        self.__metrics: "MetricSchema" = self.__project.get("metric", field="schema")
+
+        self.__tasks: Dict[Tuple[str, str], SchedulerNode] = {}
+        self.__skippedtasks: Set[Tuple[str, str]] = set()
+
+        # Create dummy handler
+        self.__joblog_handler = logging.NullHandler()
+        self.__org_job_name = self.__project.option.get_jobname()
+        self.__logfile = None
+
+        # Cancel state. This scheduler exists for the whole run, while the
+        # TaskScheduler that actually executes nodes is not built until setup
+        # has finished, so a cancel arriving during setup has to be held here
+        # and handed on. Guarded because it arrives on another thread -- a
+        # server answering a request -- while this one is mid-run.
+        self.__cancel_lock = threading.Lock()
+        self.__canceled = False
+        self.__task_scheduler: Optional[TaskScheduler] = None
+
+        # Replaced when the run starts, by the listeners registered then.
+        self.__listener: RunListener = RunListeners()
+
+        # Create tasks
+        for step, index in self.__flow.get_nodes():
+            node_cls = SchedulerNode
+
+            node_scheduler = self.__project.option.scheduler.get_name(step=step, index=index)
+            if node_scheduler == 'slurm':
+                node_cls = SlurmSchedulerNode
+            elif node_scheduler == 'docker':
+                # Imported at the point of selection: the docker package is the
+                # most expensive import in the tree and is only needed here.
+                from siliconcompiler.scheduler.docker import DockerSchedulerNode
+
+                node_cls = DockerSchedulerNode
+            elif node_scheduler is None:
+                pass
+            else:
+                raise SCRuntimeError(
+                    f"Unsupported scheduler '{node_scheduler}' for node {step}/{index}")
+            self.__tasks[(step, index)] = node_cls(self.__project, step, index)
+            if self.__flow.get(step, index, "tool") == "builtin":
+                self.__tasks[(step, index)].set_builtin()
+
+    @property
+    def manifest(self) -> str:
+        """
+        Returns the path to the job manifest
+        """
+        return os.path.join(jobdir(self.__project), f"{self.__name}.pkg.json")
+
+    @property
+    def log(self) -> Union[None, str]:
+        """
+        Returns path to the running job log
+        """
+        return self.__logfile
+
+    @property
+    def project(self) -> "Project":
+        """
+        Returns the Project object associated with this scheduler.
+
+        This property provides access to the central Project object, which holds
+        the entire design configuration, flowgraph, and results.
+
+        Returns:
+            Project: The Project object for the current project.
+        """
+        return self.__project
+
+    @property
+    def listener(self) -> RunListener:
+        """
+        Returns what hears this run's events, as one :class:`RunListener`.
+        """
+        return self.__listener
+
+    def _listeners(self) -> List[RunListener]:
+        """
+        The listeners that hear this run, collected as it starts: the project's
+        dashboard, the registered listeners, email, and the deprecated callbacks.
+
+        Returns:
+            list of RunListener: The listeners, in the order they are told.
+        """
+        listeners = []
+        if self.__project._dashboard:
+            listeners.append(self.__project._dashboard)
+        listeners.extend(Scheduler._registered_listeners())
+        listeners.append(EmailListener())
+        listeners.append(_CallbackListener())
+        return listeners
+
+    def __print_status(self, header: str) -> None:
+        """
+        Private helper to print the current status of all nodes for debugging.
+
+        Args:
+            header (str): A header message to print before the status list.
+        """
+        self.__logger.debug(f"#### {header} : {datetime.now().strftime('%H:%M:%S')}")
+        for step, index in self.__flow.get_nodes():
+            self.__logger.debug(f"({step}, {index}) -> "
+                                f"{self.__record.get('status', step=step, index=index)}")
+        self.__logger.debug("####")
+
+    def check_manifest(self) -> bool:
+        """
+        Checks the validity of the Project's manifest before a run.
+
+        Returns:
+            bool: True if the manifest is valid, False otherwise.
+        """
+        self.__logger.info("Checking manifest before running.")
+        # _init_run() has already been called on the project, so check it directly
+        # instead of resolving a copy again.
+        return self.__project._check_manifest()
+
+    def cancel(self) -> None:
+        """Stops this run.
+
+        Reached through :attr:`Project._scheduler`. Setup is a long stretch of the run
+        -- configuring nodes, checking tool versions, collecting sources -- and
+        the TaskScheduler is not built until the end of it, so a cancel landing
+        in that window is remembered and applied to that scheduler as soon as
+        there is one. Called from a thread other than the one running.
+        """
+        with self.__cancel_lock:
+            self.__canceled = True
+            task_scheduler = self.__task_scheduler
+
+        # Outside the lock: cancelling ends node processes, and run_core() takes
+        # the same lock to hand its scheduler over.
+        if task_scheduler:
+            task_scheduler.cancel()
+
+    def run_core(self) -> None:
+        """
+        Executes the core task scheduling loop.
+
+        This method initializes and runs the TaskScheduler, which manages the
+        execution of individual nodes based on their dependencies and status.
+        """
+        self.__record.record_python_packages()
+
+        task_scheduler = TaskScheduler(self.__project, self.__tasks, self.__listener)
+
+        with self.__cancel_lock:
+            self.__task_scheduler = task_scheduler
+            canceled = self.__canceled
+        if canceled:
+            # Canceled while this run was still in setup. The scheduler it was
+            # meant for exists now, so it is where the request lands.
+            task_scheduler.cancel()
+
+        task_scheduler.run(self.__joblog_handler)
+        task_scheduler.check()
+
+    def __install_file_logger(self) -> None:
+        """
+        Set up a per-job file logger for the current project and attach it to the
+        scheduler's logger.
+
+        Creates the job directory if needed, rotates an existing job.log to a timestamped
+        backup file (e.g., job.20260419-143400.log), installs a FileHandler
+        writing to job.log with the SCLoggerFormatter, and stores the handler on
+        self.__joblog_handler. Old backup files beyond the retention limit are removed.
+        """
+        os.makedirs(jobdir(self.__project), exist_ok=True)
+        file_log = os.path.join(jobdir(self.__project), "job.log")
+
+        # If current log exists, back it up with timestamp using file's modification time
+        if os.path.exists(file_log):
+            mtime = os.path.getmtime(file_log)
+            timestamp = datetime.fromtimestamp(mtime).strftime("%Y%m%d-%H%M%S")
+            bak_file_log = f"job.{timestamp}.log"
+            try:
+                os.rename(file_log, os.path.join(jobdir(self.__project), bak_file_log))
+            except OSError as e:
+                self.__logger.debug(f"Failed to rename log file {file_log}: {e}")
+
+        # Clean up old backups, keeping only the most recent ones
+        log_dir = jobdir(self.__project)
+        backup_files = sorted(glob.glob(os.path.join(log_dir, "job.*.log")))
+        # Exclude the current job.log from the list
+        backup_files = [f for f in backup_files if os.path.basename(f) != "job.log"]
+        if len(backup_files) > Scheduler.__MAX_LOG_BACKUPS:
+            for old_backup in backup_files[:-Scheduler.__MAX_LOG_BACKUPS]:
+                try:
+                    os.remove(old_backup)
+                except OSError as e:
+                    self.__logger.debug(f"Failed to remove backup log {old_backup}: {e}")
+
+        self.__logfile = file_log
+        self.__joblog_handler = logging.FileHandler(file_log)
+        self.__joblog_handler.setFormatter(SCLoggerFormatter())
+        self.project.logger.addHandler(self.__joblog_handler)
+
+    def run(self) -> None:
+        """
+        The main entry point to start the compilation flow.
+
+        This method orchestrates the entire run, including:
+        - Performing robust error handling and logging.
+        - Initializing the job directory and log files.
+        - Configuring and setting up all nodes in the flow.
+        - Validating the manifest.
+        - Executing the core run loop.
+        - Recording the final results and history.
+        """
+
+        # Determine job name first so we can create a log
+        if not self.__increment_job_name():
+            # No need to copy, no remove org job name
+            self.__org_job_name = None
+
+        # Clean the directory early if needed
+        self.__clean_build_dir_full()
+
+        try:
+            # Install job file logger
+            self.__install_file_logger()
+
+            self.__listener = RunListeners(self._listeners())
+            self.__listener.run_started(self.__project)
+
+            error = None
+            try:
+                # Configure run
+                self.__project._init_run()
+
+                # Informational check: warn if an editable install's environment is
+                # out of sync with its declared pyproject.toml dependencies.
+                utils.check_python_dependencies(self.__logger)
+
+                # Collect data sources that have gone unused, before this run's own
+                # resolves mark everything it needs as fresh. Throttled and very
+                # forgiving by default, and it never raises -- see auto_cleanup().
+                auto_cleanup(self.__project)
+
+                # Check validity of setup
+                if not self.check_manifest():
+                    raise SCRuntimeError("check_manifest() failed")
+
+                # Initialize schedulers
+                self.__init_schedulers()
+
+                self.__run_setup()
+                self.configure_nodes()
+
+                # Verify task classes
+                if not self.__check_task_classes():
+                    raise SCRuntimeError("Task classes are missing")
+
+                # Verify tool setups
+                if not self.__check_tool_versions():
+                    raise SCRuntimeError("Tools did not meet version requirements")
+
+                # Verify tool setups
+                if not self.__check_tool_requirements():
+                    raise SCRuntimeError("Tools requirements not met")
+
+                # Cleanup build directory
+                self.__clean_build_dir_incr()
+
+                # Check validity of flowgraphs IO
+                if not self.__check_flowgraph_io():
+                    raise SCRuntimeError("Flowgraph file IO constrains errors")
+
+                # Collect what the nodes that run elsewhere cannot reach
+                keys = set().union(*(task.collect_keys() for task in self.__tasks.values()))
+                if keys:
+                    collect_keys = [(key, step, index)
+                                    for key in sorted(keys)
+                                    for _, step, index in self.project.get(
+                                        *key, field=None).getvalues(return_values=False)]
+                    collect(self.project, keys=filter_collection_keys(collect_keys))
+
+                self.__listener.flow_started(self.__project)
+                flow_error = None
+                try:
+                    self.run_core()
+                except BaseException as e:
+                    flow_error = e
+                    raise
+                finally:
+                    try:
+                        # Store run in history
+                        self.__project._record_history()
+
+                        # Record final manifest
+                        self.__project.write_manifest(self.manifest)
+                    except BaseException as e:
+                        # Reported if the flow itself did not already fail.
+                        if flow_error is None:
+                            flow_error = e
+                        raise
+                    finally:
+                        self.__listener.flow_finished(self.__project, flow_error)
+            except BaseException as e:
+                error = e
+                raise
+            finally:
+                # Told before the error propagates, so a dashboard is down and
+                # the messages below reach the terminal.
+                self.__listener.run_finished(self.__project, error)
+        except KeyboardInterrupt:
+            pass
+        except SCRuntimeError:
+            raise
+        except Exception as e:
+            utils.print_traceback(self.__logger, e)
+
+            MPManager.error(str(e) or "uncaught exception")
+
+            raise SCRuntimeError(str(e))
+        finally:
+            if self.__joblog_handler is not None:
+                self.project.logger.removeHandler(self.__joblog_handler)
+                self.__joblog_handler.close()
+                self.__joblog_handler = logging.NullHandler()
+
+    def __check_tool_requirements(self) -> bool:
+        """
+        Performs pre-run validation checks.
+
+        This method ensures that all expected input files exist in the 'inputs/'
+        directory and that all required schema parameters have been set and can
+        be resolved correctly before the task is executed.
+
+        Returns:
+            bool: True if validation passes, False otherwise.
+        """
+        error = False
+
+        for (step, index) in self.__flow_runtime.get_nodes():
+            node = self.__tasks[(step, index)]
+
+            error |= not node.check_required_values()
+            error |= not node.check_required_paths()
+
+        return not error
+
+    def __check_task_classes(self) -> bool:
+        """
+        Verifies that all runtime nodes have loaded their specific Task implementation classes.
+
+        Iterates through all nodes in the execution flow and checks if the associated
+        task object is a generic instance of the base `Task` class. If so, it indicates
+        that the specific module for that tool/task was not loaded correctly.
+
+        Returns:
+            bool: `True` if all nodes are using specialized Task subclasses, `False` if any
+            node is using the base `Task` class.
+        """
+        nodes = self.__flow_runtime.get_nodes()
+        error = False
+
+        for (step, index) in nodes:
+            tool = self.__flow.get(step, index, "tool")
+            task = self.__flow.get(step, index, "task")
+
+            task_cls = self.project.get("tool", tool, "task", task, field="schema")
+            if type(task_cls) is Task:
+                self.__logger.error(f"Invalid task: {step}/{index} did not load "
+                                    "the correct class module")
+                error = True
+
+        return not error
+
+    @staticmethod
+    def __format_nodes(nodes: Iterable[Tuple[str, str]]) -> str:
+        """Formats nodes as a sorted, comma separated ``step/index`` list."""
+        return ", ".join(f"{step}/{index}" for step, index in sorted(nodes))
+
+    def __unreadable(self, step: str, index: str) -> Optional[str]:
+        """
+        Returns why an excluded node's outputs cannot be used, or None.
+
+        This is what ``setup_input_directory`` demands of an upstream before a
+        consumer will run, asked early enough to still do something about it. A
+        failure the user excused with ``[option,continue]`` is not a reason: that
+        branch supplies nothing on purpose.
+        """
+        if NodeStatus.is_error(self.__record.get('status', step=step, index=index)):
+            if self.__project.option.get_continue(step=step, index=index):
+                # The excuse Task._is_input_excused applies, read straight from
+                # the schema: that method needs a runtime context and this runs
+                # before any node has one.
+                return None
+            return "it is recorded as failed"
+
+        if not os.path.isdir(os.path.join(
+                workdir(self.__project, step=step, index=index), "outputs")):
+            return "it has no outputs directory"
+
+        return None
+
+    def __from_inputs(self) -> Set[Tuple[str, str]]:
+        """
+        Returns the nodes feeding a step the user named in ``[option,from]``.
+
+        These are the only nodes this run is *told* not to execute: ``-from place``
+        is a statement that whatever ``place`` reads is already correct. So when
+        their files are wrong, that is fatal and stays fatal -- rebuilding them
+        would answer a question the user has already answered.
+
+        Every other excluded upstream is excluded as a side effect of computing
+        the window, not by instruction. In a diamond fed by two arms, ``-from``
+        on one arm drops the other; nothing was said about that arm, so it can be
+        rebuilt when a node in the run needs it.
+        """
+        from_steps = set(self.__project.option.get_from())
+        if not from_steps:
+            return set()
+
+        protected: Set[Tuple[str, str]] = set()
+        for step, index in self.__flow_runtime.get_nodes():
+            if step in from_steps:
+                protected.update(self.__flow.get(step, index, 'input'))
+        return protected
+
+    def __upstreams_to_rebuild(self) -> Set[Tuple[str, str]]:
+        """
+        Returns excluded upstreams that this run cannot get what it needs from
+        *and* is free to rebuild.
+
+        Two things make an excluded upstream unusable, and neither sees the
+        other's cases:
+
+        - It cannot be *read*. ``setup_input_directory`` halts a consumer outright
+          when an upstream is recorded as failed or has no ``outputs/`` directory,
+          whatever was declared as ``input``. ``_validate_io`` cannot see this:
+          builtin tasks derive ``input`` from the runtime window, so an excluded
+          upstream contributes no requirement whose absence would be noticed.
+        - It can be read but does not *hold the right files*, which is exactly
+          what ``_validate_io`` checks.
+
+        What feeds a ``[option,from]`` step is excluded from the result either
+        way -- see :meth:`__from_inputs`. That case is left to
+        ``__check_flowgraph_io`` to report, and is the one disk-backed IO failure
+        that should stop the run.
+
+        Validation runs with the logger raised to ``CRITICAL``: this asks before
+        the answer is final, and logging errors for problems about to be resolved
+        is how the original defect misdirected people.
+        """
+        rebuild: Set[Tuple[str, str]] = set()
+        protected = self.__from_inputs()
+
+        cur_level = self.__project.logger.level
+        self.__project.logger.setLevel(logging.CRITICAL)
+        try:
+            for step, index in self.__flow_runtime.get_nodes():
+                if self.__is_skipped(step, index):
+                    # Never runs, so it reads nothing and requires nothing.
+                    continue
+
+                excluded = [node for node in self.__flow_runtime.get_node_inputs(
+                                step, index, record=self.__record)
+                            if node not in self.__flow_runtime.get_nodes()
+                            and node not in protected]
+                if not excluded:
+                    continue
+
+                for in_step, in_index in excluded:
+                    if self.__unreadable(in_step, in_index):
+                        rebuild.add((in_step, in_index))
+
+                tool = self.__flow.get(step, index, "tool")
+                task = self.__flow.get(step, index, "task")
+                task_class = self.__project.get("tool", tool, "task", task, field="schema")
+                with task_class.runtime(self.__tasks[(step, index)]) as task_obj:
+                    if not task_obj._validate_io():
+                        rebuild.update(excluded)
+        finally:
+            self.__project.logger.setLevel(cur_level)
+
+        return rebuild
+
+    def __is_skipped(self, step: str, index: str) -> bool:
+        """
+        Returns True when this run will not execute ``step``/``index``.
+
+        A node whose ``setup()`` raised ``TaskSkip`` never runs, so it never
+        receives inputs and cannot fail to. The rest of the IO path already
+        treats a skipped node as absent -- ``get_node_inputs`` walks straight
+        through one to reach its parents -- so validation has to agree, or a node
+        that was removed from the run gets to abort it.
+        """
+        return (step, index) in self.__skippedtasks or \
+            self.__record.get("status", step=step, index=index) == NodeStatus.SKIPPED
+
+    def __leading_entries(self, steps: Set[str]) -> List[str]:
+        """
+        Reduces a set of entry steps to those nothing else in the set reaches.
+
+        ``RuntimeFlowgraph`` walks backwards from the exit nodes and stops at the
+        first ``[option,from]`` node it meets, so an entry sitting downstream of
+        another hides it completely: adding ``syn`` beside an existing ``place``
+        leaves the window at ``place`` and changes nothing. Widening therefore
+        means *replacing* the entries that the new one feeds, not adding to them.
+        """
+        reachable: Set[str] = set()
+        for step in steps:
+            for index in self.__flow.getkeys(step):
+                seen: Set[Tuple[str, str]] = set()
+                queue: List[Tuple[str, str]] = [(step, index)]
+                while queue:
+                    for out_node in self.__flow.get_node_outputs(*queue.pop()):
+                        if out_node not in seen:
+                            seen.add(out_node)
+                            queue.append(out_node)
+                reachable.update(out_step for out_step, _ in seen)
+
+        return sorted(steps.difference(reachable))
+
+    def __configure_expand_for_missing_inputs(self) -> None:
+        """
+        Pulls excluded upstreams back into the run when the nodes that depend on
+        them cannot otherwise get their inputs.
+
+        option.from / option.to / option.prune say where the user wants the run
+        to start. They are not a claim that what sits on disk ahead of that point
+        is usable -- and when it is not, because the node never ran or ran and
+        failed, the only thing that can supply the missing file is that upstream.
+        So it is added to the run and re-executed, rather than the run aborting
+        on an input nobody can produce.
+
+        An upstream whose outputs *do* satisfy its consumers is left alone,
+        out of date or not. That is the ``from``/``to`` contract, and widening
+        the window there would re-run work the user asked to skip.
+
+        An upstream that is already in the run and still cannot supply the file
+        is a flowgraph error, not a scheduling one: re-running it produces the
+        same declared outputs. Those are left for ``__check_flowgraph_io`` to
+        report.
+
+        Expansion mutates ``[option,from]``, which is the single lever the whole
+        run derives its node set from -- ``Task._io_runtime_flow`` rebuilds from
+        it too -- so the manifest records the run that actually happened rather
+        than the one that was asked for.
+        """
+        # Each pass can only add nodes, so the flow's size bounds the walk back.
+        for _ in range(len(self.__flow.get_nodes())):
+            rebuild = self.__upstreams_to_rebuild()
+            if not rebuild:
+                # Either everything is satisfied, or what is left is a flowgraph
+                # error that adding a node cannot fix.
+                return
+
+            self.__logger.warning(
+                f"Adding {self.__format_nodes(rebuild)} to this run: the existing build "
+                "directory cannot supply what depends on it.")
+
+            entries = set(self.__project.option.get_from())
+            entries.update(step for step, _ in rebuild)
+            self.__project.option.add_from(self.__leading_entries(entries), clobber=True)
+            self.__flow_runtime = RuntimeFlowgraph.from_project(self.__project)
+
+            for step, index in rebuild:
+                # Now inside the window, so this also marks everything downstream.
+                self.__mark_pending(step, index)
+
+    def __check_flowgraph_io(self) -> bool:
+        """
+        Validate that every runtime node will receive its required input files.
+
+        The per-node validation is delegated to ``Task._validate_io`` so that
+        task subclasses (notably the builtin tasks, which select among their
+        upstream inputs at runtime) can implement their own fan-in semantics.
+
+        Returns:
+            bool: `True` if the flowgraph satisfies input/output requirements, `False` otherwise.
+        """
+        error = False
+
+        # The one disk-backed IO failure that should stop the run: [option,from]
+        # says what this node reads is already correct, so there is no rebuilding
+        # our way out of it being wrong.
+        for step, index in sorted(self.__from_inputs()):
+            reason = self.__unreadable(step, index)
+            if reason:
+                self.__logger.error(
+                    f"{step}/{index} supplies a [option,from] step but {reason}. "
+                    "Rerun without [option,from] to rebuild it.")
+                error = True
+
+        for (step, index) in self.__flow_runtime.get_nodes():
+            if self.__is_skipped(step, index):
+                continue
+
+            tool = self.__flow.get(step, index, "tool")
+            task = self.__flow.get(step, index, "task")
+            task_class = self.__project.get("tool", tool, "task", task, field="schema")
+
+            with task_class.runtime(self.__tasks[(step, index)]) as task_obj:
+                if not task_obj._validate_io():
+                    error = True
+
+        return not error
+
+    def __mark_pending(self, step: str, index: str) -> None:
+        """
+        Private helper to recursively mark a node and its dependents as PENDING.
+
+        When a node is determined to need a re-run, this function ensures that
+        it and all subsequent nodes in the flowgraph are marked as PENDING,
+        effectively queueing them for execution.
+
+        A node whose ``setup()`` removed it from this run is left alone. Its
+        SKIPPED status is not a result to be invalidated, it is the statement
+        that the node does not exist for this run -- and
+        ``RuntimeFlowgraph.get_node_inputs`` reads exactly that status to decide
+        whether to look *through* the node to its parents. Overwriting it with
+        PENDING strands every consumer downstream: they stop being able to see
+        past a node that will never produce anything. The descendant loop below
+        has always honoured this; the node itself did not, so a caller that
+        marks every node -- the SchedulerFlowReset handler -- undid its own
+        setup.
+
+        Args:
+            step (str): The step of the node to mark.
+            index (str): The index of the node to mark.
+        """
+        if (step, index) not in self.__flow_runtime.get_nodes():
+            return
+
+        if (step, index) not in self.__skippedtasks:
+            self.__record.set('status', NodeStatus.PENDING, step=step, index=index)
+        for next_step, next_index in self.__flow_runtime.get_nodes_starting_at(step, index):
+            if (next_step, next_index) in self.__skippedtasks:
+                continue
+
+            # Mark following steps as pending
+            self.__record.set('status', NodeStatus.PENDING, step=next_step, index=next_index)
+
+    def __run_setup(self) -> None:
+        """
+        Private helper to perform initial setup for the entire run.
+
+        This includes checking for a display environment, creating SchedulerNode
+        objects for each task, and copying results from a previous job if one
+        is specified.
+        """
+        self.__check_display()
+
+        # Create tasks
+        copy_from_nodes = set(self.__flow_load_runtime.get_nodes()).difference(
+            self.__flow_runtime.get_entry_nodes())
+        for step, index in self.__flow.get_nodes():
+            if self.__org_job_name and (step, index) in copy_from_nodes:
+                self.__tasks[(step, index)].copy_from(self.__org_job_name)
+
+        if self.__org_job_name:
+            # Copy collection directory
+            curret_job = self.__project.option.get_jobname()
+            self.__project.option.set_jobname(self.__org_job_name)
+            copy_from = collectiondir(self.__project)
+            self.__project.option.set_jobname(curret_job)
+            copy_to = collectiondir(self.__project)
+            if os.path.exists(copy_from):
+                # A collection's links are relative and stay inside it, so they are
+                # kept, where following one would copy its target again
+                shutil.copytree(copy_from, copy_to,
+                                symlinks=True,
+                                dirs_exist_ok=True,
+                                copy_function=utils.link_copy)
+
+        self.__reset_flow_nodes()
+
+    def __reset_flow_nodes(self) -> None:
+        """
+        Private helper to reset the status and metrics for all nodes in the flow.
+
+        This prepares the schema for a new run by clearing out results from any
+        previous executions.
+        """
+        # Reset record
+        for step, index in self.__flow.get_nodes():
+            self.__record.clear(step, index, keep=['remoteid', 'status', 'pythonpackage'])
+            self.__record.set('status', NodeStatus.PENDING, step=step, index=index)
+
+        # Reset metrics
+        for step, index in self.__flow.get_nodes():
+            self.__metrics.clear(step, index)
+
+    def __clean_build_dir_full(self, recheck: bool = False) -> None:
+        """
+        Remove stale build outputs from the current job directory to prepare for a fresh run.
+
+        When executed, deletes all files and subdirectories under the job directory for the current
+        project. If recheck is True, the method preserves an existing job.log file and leaves it
+        untouched. The method is a no-op if the run is associated with a remote job
+        (record.remoteid). When recheck is False, the cleanup only proceeds if the
+        project's 'option.clean' is true and 'option.from' is not set; when recheck is
+        True those option checks are bypassed.
+
+        Parameters:
+            recheck (bool): If True, perform a recheck cleanup that preserves job.log;
+                            also bypasses the usual option checks. Defaults to False.
+        """
+        if self.__record.get('remoteid'):
+            return
+
+        if not recheck:
+            if not self.__project.option.get_clean() or self.__project.option.get_from():
+                return
+
+        # If no step or nodes to start from were specified, the whole flow is being run
+        # start-to-finish. Delete the build dir to clear stale results.
+        cur_job_dir = jobdir(self.__project)
+        if os.path.isdir(cur_job_dir):
+            for delfile in os.listdir(cur_job_dir):
+                if delfile == "job.log" and recheck:
+                    continue
+                if delfile.startswith("sc_") and recheck:
+                    continue
+                if os.path.isfile(os.path.join(cur_job_dir, delfile)):
+                    os.remove(os.path.join(cur_job_dir, delfile))
+                else:
+                    shutil.rmtree(os.path.join(cur_job_dir, delfile))
+
+    def __clean_build_dir_incr(self) -> None:
+        """
+        Prune the job build directory to match the current flow and clean pending node directories.
+
+        Removes step directories and index subdirectories that are not present in the current
+        flow/runtime. For nodes whose recorded status indicates they are waiting, enters the
+        node's runtime context and invokes its clean_directory method to perform
+        node-specific cleanup.
+        """
+        keep_steps = set([step for step, _ in self.__flow.get_nodes()])
+        cur_job_dir = jobdir(self.__project)
+        for step in os.listdir(cur_job_dir):
+            if step.startswith("sc_"):
+                continue
+            if not os.path.isdir(os.path.join(cur_job_dir, step)):
+                continue
+            if step not in keep_steps:
+                shutil.rmtree(os.path.join(cur_job_dir, step))
+        for step in os.listdir(cur_job_dir):
+            if step.startswith("sc_"):
+                continue
+            if not os.path.isdir(os.path.join(cur_job_dir, step)):
+                continue
+            for index in os.listdir(os.path.join(cur_job_dir, step)):
+                if not os.path.isdir(os.path.join(cur_job_dir, step, index)):
+                    continue
+                if (step, index) not in self.__flow.get_nodes():
+                    shutil.rmtree(os.path.join(cur_job_dir, step, index))
+
+        # Clean nodes marked pending
+        for step, index in self.__flow_runtime.get_nodes():
+            if NodeStatus.is_waiting(self.__record.get('status', step=step, index=index)):
+                with self.__tasks[(step, index)].runtime():
+                    self.__tasks[(step, index)].clean_directory()
+                    parent_dir = os.path.dirname(self.__tasks[(step, index)].workdir)
+                    if os.path.exists(parent_dir) and len(os.listdir(parent_dir)) == 0:
+                        # Step directory is empty so safe to remove
+                        os.rmdir(parent_dir)
+
+    @staticmethod
+    def __flow_signature(flow: "Flowgraph") -> Tuple:
+        """
+        Returns a comparable summary of what a flow will actually execute.
+
+        Covers the node set, each node's tool and task, and its inputs -- which
+        is the edges. Two flows with the same signature run the same work, so
+        results carried over from one are meaningful to the other.
+        """
+        return tuple(sorted(
+            (step, index,
+             flow.get(step, index, "tool"),
+             flow.get(step, index, "task"),
+             tuple(sorted(flow.get(step, index, "input"))))
+            for step, index in flow.get_nodes()))
+
+    def __configure_check_flow_changed(self) -> Optional[str]:
+        """
+        Returns why this job's flow differs from the one that wrote the build
+        directory, or None when it is the same flow.
+
+        Whether the flow changed is a property of the *job*, so it is asked once,
+        here, from the job manifest -- which ``configure_nodes`` writes before any
+        node runs, and which therefore survives an interrupted run.
+
+        It used to be discovered only through ``requires_run()``, per node, behind
+        a status filter and two manifest-loading guards that each returned a
+        *node* reset first. A node that never ran, or was interrupted mid-write,
+        could not report it, so a whole run could proceed against a build
+        directory another flow had written.
+
+        A missing or unreadable job manifest is not treated as a change: there is
+        nothing to compare, and the per-node checks still apply.
+        """
+        if not os.path.exists(self.manifest):
+            return None
+
+        from siliconcompiler import Project
+        try:
+            with report_schema_warnings(self.__logger, f"Reading {self.manifest}"):
+                previous = Project.from_manifest(filepath=self.manifest)
+                previous_name = previous.option.get_flow()
+                previous_flow = previous.get_flow(previous_name)
+        except Exception as e:
+            self.__logger.debug(f"Unable to read {self.manifest} to compare flows: {e}")
+            return None
+
+        if previous_name != self.__flow.name:
+            return f"Flow changed from {previous_name} to {self.__flow.name}, " \
+                   "require full reset"
+
+        if Scheduler.__flow_signature(previous_flow) != \
+                Scheduler.__flow_signature(self.__flow):
+            # Same name, different work: the build directory was written by
+            # something else wearing this name.
+            return f"Flow {self.__flow.name} changed since the last run, require full reset"
+
+        return None
+
+    def __configure_collect_previous_information(self) -> Dict[Tuple[str, str], "Project"]:
+        """Collects information from previous runs for nodes that won't be re-executed.
+
+        This method identifies nodes that are marked for loading (not cleaning) and
+        are not part of the current 'from' execution path. For each of these
+        nodes, it attempts to load its manifest from a previous run.
+
+        Returns:
+            Dict[Tuple[str, str], "Project"]: A dictionary mapping (step, index)
+                tuples to their corresponding loaded Project objects from
+                previous runs.
+        """
+        from siliconcompiler import Project
+        self.__print_status("Start - collect")
+
+        extra_setup_nodes = {}
+        from_nodes = []
+        if self.__project.option.get_clean():
+            if self.__project.option.get_from():
+                from_nodes = self.__flow_runtime.get_entry_nodes()
+            load_nodes = self.__flow.get_nodes()
+        else:
+            if self.__project.option.get_from():
+                from_nodes = self.__flow_runtime.get_entry_nodes()
+            # Load every node that feeds something in the active runtime,
+            # not just nodes upstream of option.from. The original
+            # flow_load_runtime (to_steps=from_steps) silently dropped
+            # fork-sibling legs that re-converge downstream of from --
+            # their prior SUCCESS was never forwarded, so the join node
+            # would wait on a PENDING input forever.
+            runtime_steps = set(step for step, _ in self.__flow_runtime.get_nodes())
+            load_runtime = RuntimeFlowgraph(
+                self.__flow,
+                to_steps=runtime_steps,
+                prune_nodes=self.__project.option.get_prune())
+            load_nodes = load_runtime.get_nodes()
+
+        # Collect previous run information
+        with report_schema_warnings(self.__logger, "Reading previous run"):
+            for step, index in self.__flow.get_nodes():
+                if (step, index) not in load_nodes:
+                    # Node not marked for loading
+                    continue
+                if (step, index) in from_nodes:
+                    # Node will be run so no need to load
+                    continue
+
+                manifest = self.__tasks[(step, index)].get_manifest()
+                if os.path.exists(manifest):
+                    # ensure we setup these nodes again
+                    try:
+                        extra_setup_nodes[(step, index)] = Project.from_manifest(filepath=manifest)
+                    except Exception as e:
+                        self.__logger.debug(f"Reading {manifest} caused: {e}")
+                        pass
+
+        self.__print_status("End - collect")
+
+        return extra_setup_nodes
+
+    def __configure_run_setup(self, extra_setup_nodes: Dict[Tuple[str, str], "Project"]) -> None:
+        """Runs the setup() method for all flow nodes and forwards previous status.
+
+        This method iterates through all nodes in execution order and calls
+        their respective `setup()` methods.
+
+        It also uses the `extra_setup_nodes` to:
+        1. Prune nodes from `extra_setup_nodes` if their `setup()` method
+           returns False (indicating the node is no longer valid).
+        2. Forward the 'status' from a valid, previously-run node (found in
+           `extra_setup_nodes`) into the current job's records.
+
+        Args:
+            extra_setup_nodes (Dict[Tuple[str, str], "Project"]): A dictionary
+                of loaded Project objects from previous runs. This dictionary
+                may be modified in-place (nodes may be removed).
+        """
+        self.__print_status("Start - setup")
+        # Setup tools for all nodes to run
+        for layer_nodes in self.__flow.get_execution_order():
+            for step, index in layer_nodes:
+                with self.__tasks[(step, index)].runtime():
+                    node_kept = self.__tasks[(step, index)].setup()
+                if not node_kept:
+                    self.__skippedtasks.add((step, index))
+                if not node_kept and (step, index) in extra_setup_nodes:
+                    # remove from previous node data
+                    del extra_setup_nodes[(step, index)]
+
+                # Copy in old status information, this will be overwritten if needed
+                if (step, index) in extra_setup_nodes:
+                    schema = extra_setup_nodes[(step, index)]
+                    node_status = None
+                    try:
+                        node_status = schema.get('record', 'status', step=step, index=index)
+                    except:  # noqa E722
+                        pass
+                    if node_status == NodeStatus.SKIPPED and \
+                            (step, index) not in self.__skippedtasks:
+                        # A previous run removed this node; this run's setup() did
+                        # not. SKIPPED is a statement about a run, not a result to
+                        # carry over, and forwarding it here strands the node:
+                        # __is_skipped() excuses it from IO validation,
+                        # get_node_inputs looks straight through it, and
+                        # TaskScheduler only creates nodes that are PENDING -- so a
+                        # step the user just re-enabled would silently never run.
+                        # __reset_flow_nodes already set PENDING; leave it.
+                        node_status = None
+                    if node_status:
+                        # Forward old status
+                        self.__record.set('status', node_status, step=step, index=index)
+        self.__print_status("End - setup")
+
+    @staticmethod
+    def _configure_run_required(task: SchedulerNode) \
+            -> Optional[Union[SchedulerFlowReset, SchedulerNodeReset]]:
+        """
+        Helper method to run requires_run() with threads.
+
+        Anything this check raises is a statement about the *previous* run, not
+        this one: the comparison could not be made, so the node has to be redone.
+        requires_run() reports the failures it can name itself, but not every one
+        reaches it -- a manifest is loaded lazily, so a manifest this schema
+        cannot parse (one a newer schema wrote, say) raises where it is first
+        read, past the guard around the load. Returning a reset keeps that a
+        rerun rather than the end of the run: this runs in a process pool, and an
+        exception raised here comes back out of pool.map and takes the job with
+        it.
+        """
+        try:
+            with task.runtime(), \
+                    report_schema_warnings(task.logger,
+                                           f"Checking {task.step}/{task.index}",
+                                           level=logging.DEBUG):
+                task.requires_run()
+        except (SchedulerFlowReset, SchedulerNodeReset) as e:
+            return e
+        except Exception as e:
+            return SchedulerNodeReset(
+                f"Unable to determine if {task.step}/{task.index} changed since the "
+                f"previous run "
+                f"({e.__class__.__name__}: {e}), rerunning node")
+        return None
+
+    def __configure_check_run_required(self) -> List[Tuple[str, str]]:
+        """Checks which nodes require a re-run and which can be replayed.
+
+        This method iterates through all nodes that are currently marked as
+        'SUCCESS' (typically from a previous run). It calls `requires_run()`
+        on each to determine if inputs, parameters, or other dependencies
+        have changed.
+
+        - If `requires_run()` is True, the node is marked as 'pending' (and
+          will be re-executed).
+        - If `requires_run()` is False, the node is added to the 'replay' list,
+          indicating its previous results can be reused.
+
+        Returns:
+            List[Tuple[str, str]]: A list of (step, index) tuples for nodes
+                that do *not* require a re-run and whose results can be
+                replayed from the journal.
+        """
+        self.__print_status("Start - check")
+
+        replay: List[Tuple[str, str]] = []
+
+        nodes: List[Tuple[str, str]] = []
+
+        def filter_nodes(nodes: List[Tuple[str, str]]) -> None:
+            for step, index in tuple(nodes):
+                # Only look at successful nodes
+                if self.__record.get("status", step=step, index=index) != NodeStatus.SUCCESS:
+                    nodes.remove((step, index))
+
+        def create_node_group(nodes: List[Tuple[str, str]], size: int) -> List[Tuple[str, str]]:
+            group = []
+            for _ in range(size):
+                if nodes:
+                    group.append(nodes.pop(0))
+            return group
+
+        # Collect initial list of nodes to process
+        for layer_nodes in self.__flow.get_execution_order():
+            nodes.extend(layer_nodes)
+        running_nodes = self.__flow_runtime.get_nodes()
+
+        # Determine pool size
+        cores = utils.get_cores()
+        pool_size = self.project.option.scheduler.get_maxthreads() or cores
+        pool_size = max(1, min(cores, pool_size))
+
+        # Limit based on number of nodes if less than number of cores
+        filter_nodes(nodes)
+        if not nodes:
+            # No nodes left so just return
+            return []
+
+        pool_size = min(pool_size, len(nodes))
+
+        self.__logger.debug(f"Check pool size: {pool_size}")
+
+        # Imported here rather than at module scope: see get_process_context().
+        import multiprocessing
+
+        # Call this in case this was invoked without __main__
+        multiprocessing.freeze_support()
+
+        with forking(), get_process_context().Pool(pool_size) as pool:
+            while True:
+                # Filter nodes
+                filter_nodes(nodes)
+
+                # Generate a group of nodes to run
+                group = create_node_group(nodes, pool_size)
+                self.__logger.debug(f"Group to check: {group}")
+                if not group:
+                    # Group is empty
+                    break
+
+                tasks = [self.__tasks[(step, index)] for step, index in group]
+                # Suppress excess info messages during checks
+                cur_level = self.project.logger.level
+                self.project.logger.setLevel(logging.WARNING)
+                try:
+                    runcheck = pool.map(Scheduler._configure_run_required, tasks)
+                finally:
+                    self.project.logger.setLevel(cur_level)
+
+                for node, runrequired in zip(group, runcheck):
+                    if self.__record.get("status", step=node[0], index=node[1]) != \
+                            NodeStatus.SUCCESS:
+                        continue
+
+                    self.__logger.debug(f"  Result: {node} -> {runrequired}")
+
+                    if runrequired is not None:
+                        runrequired.log(self.__logger)
+
+                        if isinstance(runrequired, SchedulerFlowReset):
+                            raise runrequired
+
+                        if node in running_nodes:
+                            # This node must be run
+                            self.__mark_pending(*node)
+                        else:
+                            # option.from / option.to / option.prune exclude this
+                            # node, so it keeps its existing outputs and the run
+                            # continues on them. Only staleness is tolerated here;
+                            # outputs that cannot actually be used instead pull the
+                            # node back in -- see __configure_expand_for_missing_inputs.
+                            self.__logger.warning(
+                                f"{node[0]}/{node[1]} requires a rerun but is not in the "
+                                "current execution flow, skipping; nodes downstream will "
+                                "be built from its existing (out of date) outputs")
+                            replay.append(node)
+                    else:
+                        # import old information
+                        replay.append(node)
+
+        self.__print_status("End - check")
+
+        return replay
+
+    def configure_nodes(self) -> None:
+        """
+        Prepare and configure all flow nodes before execution, including loading prior run state,
+        running per-node setup, and marking nodes that require rerun.
+
+        This method:
+        - Loads available node manifests from previous jobs and uses them to populate setup data
+          where appropriate.
+        - Runs each node's setup routine to initialize tools and runtime state.
+        - For nodes whose parameters or inputs have changed, marks them and all downstream nodes
+          as pending so they will be re-executed.
+        - Replays preserved journaled results for nodes that remain valid to reuse previous outputs.
+        - On a SchedulerFlowReset, forces a full build-directory recheck and marks every node
+          as pending.
+        - Persists the resulting manifest for the current job before returning.
+        """
+        journal = Journal.access(self.__project)
+        journal.start()
+
+        extra_setup_nodes = self.__configure_collect_previous_information()
+
+        self.__configure_run_setup(extra_setup_nodes)
+
+        # Check for modified information
+        try:
+            # Job-level first: if the flow itself changed, nothing in the build
+            # directory is comparable and there is no point asking node by node.
+            flow_changed = self.__configure_check_flow_changed()
+            if flow_changed:
+                raise SchedulerFlowReset(flow_changed)
+
+            replay = self.__configure_check_run_required()
+
+            # Replay previous information
+            for step, index in replay:
+                if (step, index) in extra_setup_nodes:
+                    Journal.access(extra_setup_nodes[(step, index)]).replay(self.__project)
+        except SchedulerFlowReset as reset:
+            self.__logger.warning(f"{reset.msg}; rerunning every node")
+
+            # Mark all nodes as pending
+            self.__clean_build_dir_full(recheck=True)
+
+            for step, index in self.__flow.get_nodes():
+                self.__mark_pending(step, index)
+
+        self.__print_status("Before ensure")
+
+        # Ensure all nodes are marked as pending if needed
+        for layer_nodes in self.__flow_runtime.get_execution_order():
+            for step, index in layer_nodes:
+                status = self.__record.get("status", step=step, index=index)
+                if NodeStatus.is_waiting(status) or NodeStatus.is_error(status):
+                    self.__mark_pending(step, index)
+
+        # Pull back any excluded upstream whose outputs cannot satisfy the run.
+        # Done here, before the build directory is cleaned and the manifest is
+        # written, so the nodes this adds are treated like any other node in the
+        # run rather than appearing after those decisions were made.
+        self.__configure_expand_for_missing_inputs()
+
+        self.__print_status("FINAL")
+
+        # Write configured manifest
+        os.makedirs(os.path.dirname(self.manifest), exist_ok=True)
+        self.__project.write_manifest(self.manifest)
+
+        journal.stop()
+
+    def __check_display(self) -> None:
+        """
+        Private helper to automatically disable GUI display on headless systems.
+
+        If running on Linux without a DISPLAY or WAYLAND_DISPLAY environment
+        variable, this sets ['option', 'nodisplay'] to True to prevent tools
+        from attempting to open a GUI.
+        """
+
+        if not self.__project.option.get_nodisplay() and sys.platform == 'linux' \
+                and 'DISPLAY' not in os.environ and 'WAYLAND_DISPLAY' not in os.environ:
+            self.__logger.warning('Environment variable $DISPLAY or $WAYLAND_DISPLAY not set')
+            self.__logger.warning("Setting [option,nodisplay] to True")
+            self.__project.option.set_nodisplay(True)
+
+    def __increment_job_name(self) -> bool:
+        """
+        Private helper to auto-increment the jobname if ['option', 'jobincr'] is True.
+
+        This prevents overwriting previous job results by finding the highest
+        numbered existing job directory and creating a new one with an
+        incremented number.
+
+        Returns:
+            bool: True if the job name was incremented, False otherwise.
+        """
+        if not self.__project.option.get_clean():
+            return False
+        if not self.__project.option.get_jobincr():
+            return False
+
+        workdir = jobdir(self.__project)
+        if os.path.isdir(workdir):
+            # Strip off digits following jobname, if any
+            stem = self.__project.option.get_jobname().rstrip('0123456789')
+
+            dir_check = re.compile(fr'{stem}(\d+)')
+
+            jobid = 0
+            for job in os.listdir(os.path.dirname(workdir)):
+                m = dir_check.match(job)
+                if m:
+                    jobid = max(jobid, int(m.group(1)))
+            self.__project.option.set_jobname(f'{stem}{jobid + 1}')
+            for task in self.__tasks.values():
+                task._update_job()
+            return True
+        return False
+
+    def __check_tool_versions(self) -> bool:
+        """
+        Validates tool executables and versions for all local nodes.
+
+        This method iterates through all nodes defined in the flow runtime.
+        It performs checks only for nodes scheduled to run locally. Nodes
+        configured to run on a remote scheduler (e.g., LSF, Slurm) are
+        skipped. The entire check is also skipped if the project is
+        configured for remote execution.
+
+        For each local node, it:
+        1.  Runs from within a temporary directory to avoid conflicts.
+        2.  Enters the node's specific runtime context (e.g., sets env vars).
+        3.  Tries to resolve the executable path. Logs an error if not found.
+        4.  Calls `node.check_version()` to validate the tool version.
+        5.  Caches version results to avoid re-checking the same executable
+            for different nodes.
+
+        It logs an error for any node that fails validation (missing executable
+        or failed version check) and returns an overall status.
+
+        Returns:
+            bool: True if all local nodes pass validation or if checks
+                are skipped. False if any local node fails.
+        """
+        if self.__project.option.get_remote():
+            return True
+
+        error = False
+
+        with tempfile.TemporaryDirectory(
+                prefix=f"sc_tool_check_{self.project.option.get_jobname()}_") as d:
+            versions: Dict[str, Optional[str]] = {}
+
+            self.__logger.debug(f"Executing tool checks in: {d}")
+            for (step, index) in self.__flow_runtime.get_nodes():
+                if self.__project.option.scheduler.get_name(step=step, index=index) is not None:
+                    continue
+
+                node = self.__tasks[(step, index)]
+                with node.runtime():
+                    try:
+                        exe = node.get_exe_path()
+                    except TaskExecutableNotReceived:
+                        continue
+                    except TaskExecutableNotFound:
+                        exe = node.task.get("exe")
+                        self.__logger.error(f"Executable for {step}/{index} could not "
+                                            f"be found: {exe}")
+                        error = True
+                        continue
+
+                    try:
+                        if exe:
+                            version: Optional[str] = versions.get(exe, None)
+                            version, check = node.check_version(version, workdir=d)
+                            versions[exe] = version
+                            if not check:
+                                self.__logger.error(f"Executable for {step}/{index} did not "
+                                                    "meet version checks")
+                                error = True
+                    except NotImplementedError:
+                        self.__logger.error(f"Unable to process version for {step}/{index}")
+
+        return not error
+
+    def __init_schedulers(self) -> None:
+        """
+        Collect and invoke unique initialization callbacks from all task schedulers.
+
+        This method gathers init functions from all SchedulerNode instances, deduplicates them
+        (since multiple tasks may share the same scheduler class), and invokes each once to
+        perform early validation (e.g., checking Docker/Slurm availability).
+        """
+        self.__logger.debug("Collecting unique scheduler initialization callbacks")
+        init_funcs = set()
+        for step, index in self.__flow_runtime.get_nodes():
+            init_funcs.add(self.__tasks[(step, index)].init)
+
+        for init in sorted(init_funcs, key=lambda func: func.__qualname__):
+            self.__logger.debug(f"Initializing scheduler: {init.__qualname__}")
+            init(self.__project)

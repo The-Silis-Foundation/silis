@@ -1,0 +1,187 @@
+###############################
+# Reading SC Schema
+###############################
+
+source ./sc_manifest.tcl
+
+###############################
+# Task Preamble
+###############################
+
+set sc_refdir [sc_cfg_tool_task_get refdir]
+source "$sc_refdir/apr/preamble.tcl"
+
+###############################
+# Generate LEF
+###############################
+
+set lef_args []
+if { [sc_cfg_tool_task_get var ord_abstract_lef_bloat_layers] } {
+    lappend lef_args "-bloat_occupied_layers"
+} else {
+    lappend lef_args \
+        "-bloat_factor" \
+        [sc_cfg_tool_task_get var ord_abstract_lef_bloat_factor]
+}
+lappend lef_args "outputs/${sc_topmodule}.lef"
+
+sc_report_args -command write_abstract_lef -args $lef_args
+write_abstract_lef {*}$lef_args
+
+###############################
+# Generate CDL
+###############################
+
+if { [sc_cfg_tool_task_get var write_cdl] } {
+    # Write CDL
+    set sc_cdl_masters []
+    foreach lib $sc_logiclibs {
+        set filesets [sc_cfg_get library $lib asic aprfileset]
+        if { [llength $filesets] == 0 } {
+            continue
+        }
+        foreach fs [sc_get_filesets -library $lib -filesets $filesets] {
+            lassign $fs fs_lib fs_name
+            foreach cdl_file [sc_cfg_get_fileset $fs_lib $fs_name cdl] {
+                lappend sc_cdl_masters $cdl_file
+            }
+        }
+    }
+    write_cdl -masters $sc_cdl_masters "outputs/${sc_topmodule}.cdl"
+}
+
+###############################
+# Generate LVS Verilog
+###############################
+set remove_cells []
+foreach lib [sc_cfg_get asic asiclib] {
+    lappend remove_cells {*}[sc_cfg_get library $lib asic cells physicalonly]
+}
+write_verilog -include_pwr_gnd -remove_cells $remove_cells "outputs/${sc_topmodule}.lvs.vg"
+
+###############################
+# Generate SPEF
+###############################
+
+set estimate_parasitics_args []
+if { [sc_has_routing] || [sc_has_global_routing] } {
+    lappend estimate_parasitics_args -global_routing
+} else {
+    lappend estimate_parasitics_args -placement
+}
+
+if { [sc_cfg_tool_task_get var write_spef] } {
+    # just need to define a corner
+    define_process_corner -ext_model_index 0 X
+    foreach pexcorner [sc_cfg_tool_task_get var pex_corners] {
+        # The deck is per pex corner: looking pexmodelfileset up without the
+        # corner returns the whole corner -> fileset mapping, which would pool
+        # every corner's deck and extract them all with whichever came first.
+        set pexfileset [sc_cfg_get library $sc_pdk pdk pexmodelfileset openroad $pexcorner]
+        set pex_model [lindex [sc_cfg_get_fileset $sc_pdk $pexfileset openrcx] 0]
+        puts "Writing SPEF for $pexcorner"
+        if { [sc_check_version 26 3 23] } {
+            set_extraction_rules_file $pex_model
+            extract_parasitics
+        } else {
+            extract_parasitics -ext_model_file $pex_model
+        }
+        write_spef "outputs/${sc_topmodule}.${pexcorner}.spef"
+    }
+
+    if { [sc_cfg_tool_task_get var use_spef] } {
+        set lib_pex [dict create]
+        foreach scenario $sc_scenarios {
+            set pexcorner [sc_cfg_get constraint timing scenario $scenario pexcorner]
+
+            dict set lib_pex $scenario $pexcorner
+        }
+
+        # read in spef for timing corners
+        foreach corner $sc_scenarios {
+            set pexcorner [dict get $lib_pex $corner]
+
+            puts "Reading SPEF for $pexcorner into $corner"
+            read_spef -corner $corner \
+                "outputs/${sc_topmodule}.${pexcorner}.spef"
+        }
+    } else {
+        # estimate for metrics
+        estimate_parasitics {*}$estimate_parasitics_args
+    }
+} else {
+    # estimate for metrics
+    estimate_parasitics {*}$estimate_parasitics_args
+}
+
+###############################
+# Write Liberty Timing Models
+###############################
+
+if { [sc_cfg_tool_task_get var write_liberty] } {
+    foreach scene $sc_scenarios {
+        puts "Writing timing model for $scene"
+        if { [sc_has_sta_mcmm_support] } {
+            write_timing_model -library_name "${sc_topmodule}_${scene}" \
+                -scene $scene \
+                "outputs/${sc_topmodule}.${scene}.lib"
+        } else {
+            write_timing_model -library_name "${sc_topmodule}_${scene}" \
+                -corner $scene \
+                "outputs/${sc_topmodule}.${scene}.lib"
+        }
+    }
+}
+
+###############################
+# Write SDF
+###############################
+
+if { [sc_cfg_tool_task_get var write_sdf] } {
+    foreach scene $sc_scenarios {
+        puts "Writing SDF for $scene"
+        if { [sc_has_sta_mcmm_support] } {
+            write_sdf -scene $scene \
+                -include_typ \
+                "outputs/${sc_topmodule}.${scene}.sdf"
+        } else {
+            write_sdf -corner $scene \
+                -include_typ \
+                "outputs/${sc_topmodule}.${scene}.sdf"
+        }
+    }
+}
+
+###############################
+# Check Power Network
+###############################
+
+foreach scene $sc_scenarios {
+    if { [sc_cfg_exists constraint timing scenario $scene voltage] } {
+        foreach net [dict keys [sc_cfg_get constraint timing scenario $scene voltage]] {
+            set_pdnsim_net_voltage -corner $scene \
+                -net $net \
+                -voltage [sc_cfg_get constraint timing scenario $scene voltage $net]
+        }
+    }
+}
+
+foreach net [sc_psm_check_nets] {
+    foreach scene $sc_scenarios {
+        if {
+            ![sc_is_scene_enabled $scene power] &&
+            ![sc_is_scene_enabled $scene leakagepower] &&
+            ![sc_is_scene_enabled $scene dynamicpower]
+        } {
+            continue
+        }
+        puts "Analyzing supply net: $net on $scene"
+        analyze_power_grid -net $net -corner $scene
+    }
+}
+
+###############################
+# Task Postamble
+###############################
+
+source "$sc_refdir/apr/postamble.tcl"

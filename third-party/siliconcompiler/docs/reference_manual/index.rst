@@ -1,0 +1,50 @@
+.. _reference_manual:
+
+###############
+References
+###############
+
+The following sections provides details on the functions, modules and objects included in SiliconCompiler.
+To learn how to use SiliconCompiler, see the :ref:`user guide <user_guide>`.
+
+.. _building_blocks:
+
+.. toctree::
+   :caption: Building Blocks
+   :maxdepth: 1
+   :numbered:
+
+   Targets <predef_modules/targets>
+   Flows <predef_modules/flows>
+   Tools  <predef_modules/tools>
+   PDKs <predef_modules/pdks>
+   Libraries <predef_modules/libs>
+   Checklists <predef_modules/checklists>
+   Data Sources <predef_modules/resolvers>
+
+.. _api_refs:
+
+.. toctree::
+   :caption: API References
+   :maxdepth: 4
+   :numbered:
+
+   schema
+   schema_api
+   apps
+   server_api
+   leflib_api
+   uniquify_api
+
+.. toctree::
+   :caption: Appendix
+   :maxdepth: 3
+   :numbered:
+
+   appendix/design_resources
+   appendix/slurmsetup
+   appendix/licenses
+   appendix/changelog
+   appendix/schema_changelog
+   appendix/machine_readable
+   appendix/dashboard_how_to_guide

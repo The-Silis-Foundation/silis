@@ -1,0 +1,169 @@
+..
+   SPDX-FileCopyrightText: 2003-2026 Wilson Snyder
+   SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+.. _simulation runtime arguments:
+
+Simulation Runtime Arguments
+============================
+
+The following are the arguments that may be passed to a Verilated
+executable, provided that executable calls
+``VerilatedContext*->commandArgs(argc, argv)``.
+
+All simulation runtime arguments begin with "+verilator", so that the
+user's executable may skip over all "+verilator" arguments when parsing its
+command line.
+
+Summary:
+
+   .. include:: ../_build/gen/args_verilated.rst
+
+Options:
+
+.. option:: +verilator+assert+lock
+
+   Only allow command line options to disable / enable assertions.
+   Disables RTL from changing assertion handling via ``$asserton``,
+   ``$assertoff``, and ``$assertcontrol``. Also prevents ``VerilatedContext*``
+   assertion control functions from updating assertion handling.
+
+.. option:: +verilator+coverage+file+<filename>
+
+   When a model was Verilated using :vlopt:`--coverage`, sets the filename
+   to write coverage data into. Defaults to :file:`coverage.dat`.
+
+.. option:: +verilator+debug
+
+   Enable simulation runtime debugging. Equivalent to
+   :vlopt:`+verilator+debugi+4 <+verilator+debugi+\<value\>>`.
+
+   To be useful, the model typically must first be compiled with debug
+   capabilities by Verilating with :vlopt:`--runtime-debug` or `-CFLAGS
+   -DVL_DEBUG=1`.
+
+.. option:: +verilator+debugi+<value>
+
+   Enable simulation runtime debugging at the provided level.
+
+.. option:: +verilator+error+limit+<value>
+
+   Set number of non-fatal errors (e.g. assertion failures) before exiting
+   simulation runtime. Also affects number of `$stop` calls needed before
+   exit. Does not affect `$fatal`. Defaults to 1.
+
+.. option:: +verilator+help
+
+   Display help and exit.
+
+.. option:: +verilator+log+file+<filename>
+
+   Log all stdout and stderr to the specified output filename. If not specified
+   the normal stdout/stderr streams are used.
+
+.. option:: +verilator+noassert
+
+   Disable assert checking per runtime argument. This is the same as
+   calling ``VerilatedContext*->assertOn(false)`` in the model.
+
+.. option:: +verilator+prof+exec+file+<filename>
+
+   When a model was Verilated using :vlopt:`--prof-exec`, sets the
+   simulation runtime filename to dump to. Defaults to
+   :file:`profile_exec.dat`.
+
+.. option:: +verilator+prof+exec+start+<value>
+
+   When a model was Verilated using :vlopt:`--prof-exec`, the simulation
+   runtime will wait until $time is at this value (expressed in units of
+   the time precision), then start the profiling warmup, then
+   capturing. Generally this should be set to some time that is well within
+   the normal operation of the simulation, i.e. outside of reset. If 0, the
+   dump is disabled. Defaults to 1.
+
+.. option:: +verilator+prof+exec+window+<value>
+
+   When a model was Verilated using :vlopt:`--prof-exec`, after $time
+   reaches :vlopt:`+verilator+prof+exec+start+\<value\>`, Verilator will
+   warm up the profiling for this number of eval() calls, then will capture
+   the profiling of this number of eval() calls. Defaults to 2, which makes
+   sense for a single-clock-domain module where it's typical to want to
+   capture one posedge eval() and one negedge eval().
+
+.. option:: +verilator+prof+threads+file+<filename>
+
+   Removed in 5.020. Was an alias for
+   :vlopt:`+verilator+prof+exec+file+\<filename\>`
+
+.. option:: +verilator+prof+threads+start+<value>
+
+   Removed in 5.020. Was an alias for
+   :vlopt:`+verilator+prof+exec+start+\<value\>`
+
+.. option:: +verilator+prof+threads+window+<value>
+
+   Removed in 5.020. Was an alias for
+   :vlopt:`+verilator+prof+exec+window+\<value\>`
+
+.. option:: +verilator+prof+vlt+file+<filename>
+
+   When a model was Verilated using :vlopt:`--prof-pgo`, sets the
+   profile-guided optimization data runtime filename to dump to. Defaults
+   to :file:`profile.vlt`.
+
+.. option:: +verilator+quiet
+
+   Disable printing the simulation summary report, see :ref:`Simulation
+   Summary Report`.
+
+.. option:: +verilator+rand+reset+<value>
+
+   When a model was Verilated using :vlopt:`--x-initial unique
+   <--x-initial>`, sets the simulation runtime initialization technique. 0
+   = Reset to zeros. 1 = Reset to all-ones. 2 = Randomize. See
+   :ref:`Unknown States`.  Default is 0.
+
+.. option:: +verilator+seed+<value>
+
+   For $random and :vlopt:`--x-initial unique <--x-initial>`, set the
+   simulation runtime random seed value. If not specified, the seed
+   defaults to 1. If specified as 0, a non-zero seed is generated at
+   startup; the picked value is exposed through ``$get_initial_random_seed``
+   so the run can be reproduced later by passing
+   ``+verilator+seed+<that_value>``.
+
+.. option:: +verilator+solver+file+<filename>
+
+   If specified, when the randomization solver is used, open the given
+   filename for writing, and log all random solver commands and responses
+   to it.
+
+.. option:: +verilator+V
+
+   Shows the verbose version, including configuration information.
+
+.. option:: +verilator+version
+
+   Displays program version and exits.
+
+.. option:: +verilator+vpi+<library>[:<bootstrap>]
+
+   Load a VPI shared library before simulation starts. Only available when the
+   model was Verilated with :vlopt:`--vpi` and :vlopt:`--main` (or
+   :vlopt:`--binary`). ``<library>`` is the path to the shared library. If
+   ``:<bootstrap>`` is given, that named no-argument function is called;
+   otherwise the library's ``vlog_startup_routines`` array (IEEE 1800 38.37.2) is
+   invoked. May be repeated to load multiple libraries.
+
+   Runtime loading is supported on POSIX platforms only (it relies on the
+   executable exporting its VPI symbols to the loaded library); on Windows the
+   argument is rejected and the VPI code must instead be statically linked
+   into the model.
+
+.. option:: +verilator+wno+unsatconstr+<value>
+
+   Disable unsatisfied constraint warnings at simulation runtime. When set to
+   1, warnings about unsatisfied constraints during ``randomize()`` calls will
+   not be displayed. Defaults to 0 (warnings enabled). This can also be
+   controlled via the C++ API using
+   ``Verilated::threadContextp()->warnUnsatConstr(false)``.

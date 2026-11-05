@@ -1,0 +1,14 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`begin_keywords "1800-2023"
+
+`define ZERO 0
+
+`ifdef ( ZERO )
+// ...
+`endif

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    echo "${BASH_SOURCE[0]} must be executed."
+    return
+fi
+
+__print_help() {
+    # Print help information for this file
+    echo "Usage: $0"
+    echo "  Options:"
+    echo "    --which           print which executable would be used"
+    echo "    --version         print the version of the executable, if supported"
+    echo "    --directory       print the execution directory"
+    echo "    --command         print the execution command"
+    echo "    --skipcd          do not change directory into replay directory"
+    echo "    --skipexports     do not export environmental variables"
+    echo "    --cmdprefix <cmd> prefix to add to the replay command, such as gdb"
+    echo "    --cmdarg <args>   arguments to append to the replay command"{% for mode in modes %}
+    echo "    {{ "%-18s"|format("--" ~ mode) }}run the command in the tool's {{ mode }} mode"{% endfor %}
+    echo "    --node            execute entire node"
+    echo "    -h,--help         print this help"
+}
+
+# Parse replay arguments
+CD_WORK="{{ work_dir }}"
+PRINT=""
+CMDPREFIX=""
+CMDARGS=""
+MODE=""
+SKIPEXPORT=0
+DONODE={{ node_only }}
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --which)
+            PRINT="which"
+            shift
+            ;;
+        --version)
+            PRINT="version"
+            shift
+            ;;
+        --directory)
+            PRINT="directory"
+            shift
+            ;;
+        --command)
+            PRINT="command"
+            shift
+            ;;
+        --skipcd)
+            CD_WORK="."
+            shift
+            ;;
+        --skipexports)
+            SKIPEXPORT=1
+            shift
+            ;;
+        --cmdprefix)
+            CMDPREFIX="$2"
+            shift
+            shift
+            ;;
+        --cmdarg)
+            CMDARGS="$2"
+            shift
+            shift
+            ;;
+        --node)
+            DONODE=1
+            shift
+            ;;{% for mode in modes %}
+        --{{ mode }})
+            MODE="{{ mode }}"
+            shift
+            ;;{% endfor %}
+        -h|--help)
+            __print_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option $1"
+            __print_help
+            exit 1
+            ;;
+    esac
+done
+
+{% if exports|length > 0 %}if [ $SKIPEXPORT == 0 ]; then
+    # Environmental variables{% for key, value in exports.items() %}
+    export {{ key }}="{{ value }}"{% endfor %}
+fi{% endif %}
+
+# Switch to the working directory
+cd "$CD_WORK"
+
+case $PRINT in
+    "which")
+        which {{ executable }}
+        exit 0
+        ;;
+    "version")
+        {% if version_flag is defined %}{{ executable }} {{ version_flag }}{% else %}echo "--version is not supported"{% endif %}
+        exit 0
+        ;;
+    "directory")
+        echo "Working directory: $PWD"
+        exit 0
+        ;;
+    "command")
+        {% for mode, mode_cmds in modes.items() %}[ "$MODE" == "{{ mode }}" ] && echo {{ quote(mode_cmds|join(' ')) }} && exit 0
+        {% endfor %}echo {{ quote(cmds|join(' ')) }}
+        exit 0
+        ;;
+esac
+{% macro command(cmds) %}$CMDPREFIX \{% for cmd in cmds %}
+{% if not loop.first %}  {% endif %}{{ cmd }} \{% endfor %}
+  ${CMDARGS}{% endmacro %}
+if [ $DONODE == 1 ]; then
+python3 -m siliconcompiler.scheduler.run_node \
+    -cfg "{{ cfg_file }}" \
+    -builddir "${PWD}/../../../../" \
+    -step "{{ step }}" \
+    -index "{{ index }}" \
+    -cwd "$PWD" \
+    -replay
+{% for mode, mode_cmds in modes.items() %}elif [ "$MODE" == "{{ mode }}" ]; then
+{{ command(mode_cmds) }}
+{% endfor %}{% if cmds|length > 0 %}else
+# Command execution
+{{ command(cmds) }}
+{% endif %}fi

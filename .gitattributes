@@ -1,0 +1,22 @@
+# GitHub Linguist language statistics overrides
+# Vendored and third-party libraries: ignore from repo language breakdown
+
+# ROHD Wave Viewer (Flutter / Dart / compiled web JS)
+core/signalpeeker/web/** linguist-vendored
+core/signalpeeker/web/rohd/** linguist-vendored
+third-party/rohd-wave-viewer/** linguist-vendored
+
+# Schematic Viewer & Web assets
+schematicviewer/web/** linguist-vendored
+core/schematicviewer/web/** linguist-vendored
+
+# Monaco Editor bundle
+third-party/monaco/** linguist-vendored
+
+# SV Pathfinder & node dependencies
+third-party/sv-pathfinder/** linguist-vendored
+**/node_modules/** linguist-vendored
+
+# C++ third-party dependencies & builds
+third-party/** linguist-vendored
+build_appimage/** linguist-vendored

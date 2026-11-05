@@ -1,0 +1,101 @@
+#pragma once
+#include <QWidget>
+#include <vector>
+#include <string>
+#include <QRectF>
+#include <QPointF>
+
+class FastLayoutViewer : public QWidget {
+    Q_OBJECT
+public:
+    explicit FastLayoutViewer(QWidget* parent = nullptr);
+
+    void clear();
+    void set_lod(float std_cell_threshold, float nets_threshold);
+    void set_core(float x, float y, float w, float h);
+    void load_std_cells(const std::vector<float>& x, const std::vector<float>& y, 
+                        const std::vector<float>& w, const std::vector<float>& h);
+    void load_cells_flat(const float* data, size_t count);
+    void load_tap_cells(const std::vector<float>& x, const std::vector<float>& y, 
+                        const std::vector<float>& w, const std::vector<float>& h);
+    void load_macros(const std::vector<float>& x, const std::vector<float>& y, 
+                     const std::vector<float>& w, const std::vector<float>& h,
+                     const std::vector<std::string>& names);
+    void load_pins(const std::vector<float>& x, const std::vector<float>& y, 
+                   const std::vector<float>& w, const std::vector<float>& h,
+                   const std::vector<std::string>& names);
+    void load_power(const std::vector<float>& x, const std::vector<float>& y, 
+                    const std::vector<float>& w, const std::vector<float>& h);
+    void load_signals(const std::vector<float>& x1, const std::vector<float>& y1, 
+                      const std::vector<float>& x2, const std::vector<float>& y2);
+    void load_regions(const std::vector<float>& x, const std::vector<float>& y, 
+                      const std::vector<float>& w, const std::vector<float>& h,
+                      const std::vector<std::string>& names);
+    void load_voltage_islands(const std::vector<float>& x, const std::vector<float>& y, 
+                             const std::vector<float>& w, const std::vector<float>& h,
+                             const std::vector<float>& voltages,
+                             const std::vector<std::string>& names);
+    void load_blockages(const std::vector<float>& x, const std::vector<float>& y, 
+                        const std::vector<float>& w, const std::vector<float>& h);
+    void set_heatmap(int mode, const std::vector<float>& data, int grid_w = 0, int grid_h = 0);
+    void set_heatmap_bounds(float x, float y, float w, float h);
+    void fit_in_view();
+    void pan_to(float x, float y, float target_zoom = -1.0f);
+    void highlight_box(float x, float y, float w, float h, const std::string& name);
+    void clear_highlight();
+    void set_ruler_active(bool active);
+    bool is_ruler_active() const;
+    void clear_ruler();
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+private:
+    std::vector<QRectF> std_cells_;
+    std::vector<QRectF> tap_cells_;
+    std::vector<QRectF> macros_;
+    std::vector<std::string> macro_names_;
+    std::vector<QRectF> pins_;
+    std::vector<std::string> pin_names_;
+    std::vector<QRectF> power_;
+    std::vector<QLineF> signals_;
+    std::vector<QRectF> regions_;
+    std::vector<std::string> region_names_;
+    std::vector<QRectF> voltage_islands_;
+    std::vector<float> voltage_island_vals_;
+    std::vector<std::string> voltage_island_names_;
+    std::vector<QRectF> blockages_;
+    
+    QRectF core_rect_;
+    double zoom_factor_;
+    QPointF pan_offset_;
+    bool is_panning_;
+    QPointF last_mouse_pos_;
+    
+    QRectF highlight_rect_;
+    std::string highlight_name_;
+    
+    float lod_std_cells_ = 0.03f;
+    float lod_nets_ = 0.05f;
+    int heatmap_mode_ = 0;
+    int heatmap_grid_w_ = 160;
+    int heatmap_grid_h_ = 160;
+    QRectF heatmap_rect_;
+    std::vector<float> heatmap_data_;
+
+    bool hover_active_ = false;
+    QPointF hover_mouse_pos_;
+    QPointF hover_db_pos_;
+    int hover_gx_ = -1;
+    int hover_gy_ = -1;
+    float hover_val_ = 0.0f;
+
+    bool ruler_active_ = false;
+    bool ruler_has_start_ = false;
+    QPointF ruler_start_;
+    QPointF ruler_current_;
+};

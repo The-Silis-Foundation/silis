@@ -1,0 +1,20 @@
+---
+# DESCRIPTION: Github actions config
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+#
+name: Contributor Agreement
+on:
+  push:
+    branches-ignore:
+      - 'dependabot/**'  # Avoid duplicates: only run the PR, not the push
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  Test:
+    name: "'docs/CONTRIBUTORS' was signed"
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - run: test_regress/t/t_dist_contributors.py

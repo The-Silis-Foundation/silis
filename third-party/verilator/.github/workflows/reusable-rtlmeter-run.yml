@@ -1,0 +1,201 @@
+---
+# DESCRIPTION: Github actions config
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+name: reusable-rtlmeter-run
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Unique identifier for storing results"
+        type: string
+        required: true
+      runs-on:
+        description: "Runner to use, e.g.: ubuntu-##.04"
+        type: string
+        required: true
+      cc:
+        description: "Compiler to use: 'gcc' or 'clang'"
+        type: string
+        required: true
+      verilator-archive-new:
+        description: "Name of the installation archive artifact from reusable-build, new version"
+        type: string
+        required: true
+      verilator-archive-old:
+        description: "Name of the installation archive artifact from reusable-build, old version"
+        type: string
+        required: false
+        default: ""
+      # Note: The combination of 'cases' and 'run-name' must be unique for all
+      # invocations of this workflow within a run of the parent workflow.
+      # These two are used together to generate a unique results file name.
+      cases:
+        description: "RTLMeter cases to run"
+        type: string
+        required: true
+      run-name:
+        description: "Run name (identifier) to add to collated results"
+        type: string
+        required: true
+      compileArgs:
+        description: "Additional Verilator command line arguments"
+        type: string
+        default: ""
+      executeArgs:
+        description: "Additional simulator command line arguments"
+        type: string
+        default: ""
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # RTLMeter measures compile/execute times, so caching must stay off to keep
+  # timings representative; ccache is still on PATH but acts as a pass-through
+  CCACHE_DISABLE: 1
+
+jobs:
+  run:
+    runs-on: ${{ inputs.runs-on }}
+    name: Run
+    steps:
+      - name: Checkout Verilator CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          path: repo
+          sparse-checkout: |
+            .github/actions
+            ci
+
+      - name: Install dependencies
+        uses: ./repo/.github/actions/install-deps
+        with:
+          stage: rtlmeter-run
+
+      - name: Checkout RTLMeter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: "verilator/rtlmeter"
+          path: rtlmeter
+
+      - name: Setup RTLMeter venv
+        working-directory: rtlmeter
+        run: make venv
+
+      ########################################################################
+      # Run with new Verilator
+      ########################################################################
+
+      - name: Download Verilator installation archive - new
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          name: ${{ inputs.verilator-archive-new }}
+
+      - name: Unpack Verilator installation archive - new
+        run: |
+          tar --zstd -x -f ${{ inputs.verilator-archive-new }}
+          mv install verilator-new
+
+      - name: Compile cases - new
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-new/bin:$PATH"
+          ./rtlmeter run --timeout 60 --verbose --cases='${{inputs.cases}}' --compileArgs='${{inputs.compileArgs}}' --executeArgs='${{inputs.executeArgs}}' --nExecute=0
+          ccache -svv
+
+      - name: Execute cases - new
+        working-directory: rtlmeter
+        continue-on-error: true  # Do not fail on error, so we can at least save the successful results
+        run: |
+          export PATH="${{ github.workspace }}/verilator-new/bin:$PATH"
+          ./rtlmeter run --timeout 60 --verbose --cases='${{inputs.cases}}' --compileArgs='${{inputs.compileArgs}}' --executeArgs='${{inputs.executeArgs}}'
+
+      - name: Collate results - new
+        id: results
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-new/bin:$PATH"
+          # Use 'inputs.cases' and 'inputs.run-name' to generate a unique file name
+          hash=$(md5sum <<< '${{ inputs.cases }} ${{ inputs.run-name }}' | awk '{print $1}')
+          echo "hash=${hash}" >> $GITHUB_OUTPUT
+          ./rtlmeter collate --runName "${{ inputs.run-name }}"  > ../results-${hash}.json
+
+      - name: Report results - new
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-new/bin:$PATH"
+          ./rtlmeter report --steps '*' --metrics '*' ../results-${{ steps.results.outputs.hash }}.json
+
+      - name: Upload results - new
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          path: results-${{ steps.results.outputs.hash }}.json
+          name: rtlmeter-${{ inputs.tag }}-results-${{ steps.results.outputs.hash }}
+          overwrite: true
+          retention-days: 2
+
+      - name: Report status - new
+        working-directory: rtlmeter
+        run: |-  # This will fail the job if any of the runs failed
+          export PATH="${{ github.workspace }}/verilator-new/bin:$PATH"
+          ./rtlmeter run --verbose --cases='${{inputs.cases}}' --compileArgs='${{inputs.compileArgs}}' --executeArgs='${{inputs.executeArgs}}'
+          # Clean up for run with old version
+          rm -rf work
+          rm -rf ${{ github.workspace }}/verilator-new
+
+      ########################################################################
+      # Run with old Verilator **on same machine for consistency**
+      ########################################################################
+
+      - name: Download Verilator installation archive - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          name: ${{ inputs.verilator-archive-old }}
+
+      - name: Unpack Verilator installation archive - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        run: |
+          tar --zstd -x -f ${{ inputs.verilator-archive-old }}
+          mv install verilator-old
+
+      - name: Compile cases - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-old/bin:$PATH"
+          ./rtlmeter run --timeout 60 --verbose --cases='${{inputs.cases}}' --compileArgs='${{inputs.compileArgs}}' --executeArgs='${{inputs.executeArgs}}' --nExecute=0
+          ccache -svv
+
+      - name: Execute cases - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-old/bin:$PATH"
+          ./rtlmeter run --timeout 60 --verbose --cases='${{inputs.cases}}' --compileArgs='${{inputs.compileArgs}}' --executeArgs='${{inputs.executeArgs}}'
+
+      - name: Collate results - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-old/bin:$PATH"
+          ./rtlmeter collate --runName "${{ inputs.run-name }}"  > ../reference-${{ steps.results.outputs.hash }}.json
+
+      - name: Report results - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        working-directory: rtlmeter
+        run: |
+          export PATH="${{ github.workspace }}/verilator-old/bin:$PATH"
+          ./rtlmeter report --steps '*' --metrics '*' ../reference-${{ steps.results.outputs.hash }}.json
+
+      - name: Upload results - old
+        if: ${{ inputs.verilator-archive-old != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          path: reference-${{ steps.results.outputs.hash }}.json
+          name: rtlmeter-${{ inputs.tag }}-reference-${{ steps.results.outputs.hash }}
+          overwrite: true
+          retention-days: 2

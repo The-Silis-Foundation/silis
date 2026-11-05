@@ -1,0 +1,2267 @@
+// Schematic webview script: hosts digitaljs (current stock, JointJS/ELK) and bridges
+// to the extension. The simulation engine is constructed but NEVER started — wire
+// values are driven externally from VaporView data (Spike 2 recipe).
+import { Circuit, cells } from 'digitaljs';
+import ELK from 'elkjs/lib/elk.bundled.js';
+import { Vector3vl } from '3vl';
+// our overrides must come after digitaljs's own CSS (pulled in by the import above)
+import './style.css';
+import '@vscode/codicons/dist/codicon.css'; // VS Code's official icon font (bundled as a data-url)
+
+// Layout density tiers (user setting `schematicSpacing`). One table drives everything that
+// affects crowding: ELK block/edge spacing, the clearance reserved around each wire's
+// net-name label, and the box padding that decides whether port/signal names fit inside a
+// block. `compact` is the default (tightest, smallest canvas); roomier tiers trade size for
+// legibility. The active tier is chosen per load from the message; the prototype patches
+// below read `spacing` at render time, so changing the setting + reloading is enough.
+//   boxGap  — clearance between a block's left-side and right-side port labels (digitaljs
+//             hard-codes 25, which lets long names collide in the middle).
+//   ioPad   — horizontal padding inside a top-level IO box so its name doesn't touch the edge.
+//   netChannel — how much of each net-name label's width ELK reserves as a clear lane on the
+//             wire (0..1). The reserved lane plus the betweenLayers margins on both sides set
+//             the minimum wire length, so this is the main lever on how long/empty wires look.
+//             compact reserves little (short wires; a label may sit closer to a box); roomier
+//             tiers reserve the full label so names never touch a box.
+// VALUE ANNOTATION: values render UNDER the name, not beside it — so the reserved room grows
+// VERTICALLY, not horizontally. Reserve it here up front (never resize at runtime, which would
+// force a re-layout): bump `labelH` for a value line under each wire net-name; for child-instance
+// boxes, reserve a value line under EACH port name via `rowH` — the per-port row pitch (digitaljs's
+// Subcircuit hard-codes 16px/row in cells/subcircuit.js; we override it to rowH so the value line
+// fits). Widths stay name-driven; only heights change, so runtime value updates are pure text swaps.
+//   rowH — child-instance per-port row pitch; must clear a name line + a value line under it.
+//   valueH — extra channel height reserved under each wire net-name for its value line, so 2-line
+//            wire labels (name over value) don't crowd parallel labeled wires.
+const SPACING = {
+    compact:     { nodeNode: 24, betweenLayers: 36, edgeNode: 12, edgeEdge: 10, edgeLabel: 3, labelPad: 6,  labelH: 14, boxGap: 56, ioPad: 26, netChannel: 0.5,  rowH: 28, valueH: 9 },
+    comfortable: { nodeNode: 34, betweenLayers: 56, edgeNode: 22, edgeEdge: 16, edgeLabel: 4, labelPad: 14, labelH: 16, boxGap: 70, ioPad: 34, netChannel: 0.85, rowH: 30, valueH: 10 },
+    spacious:    { nodeNode: 44, betweenLayers: 80, edgeNode: 30, edgeEdge: 24, edgeLabel: 5, labelPad: 24, labelH: 18, boxGap: 84, ioPad: 42, netChannel: 1.0,  rowH: 32, valueH: 11 },
+};
+let spacing = SPACING.compact;
+
+// Make input ports non-interactive: digitaljs renders Input cells as clickable
+// buttons / typable fields whose handlers toggle or set the input's own value. That's
+// a *simulator* control, but this is a read-only viewer — the engine never runs, so a
+// hand-set input wouldn't propagate, and it would fight the VaporView value annotation
+// (two sources of truth on one wire). Neutralize the value-edit handlers; cross-nav
+// (paper 'cell:pointerclick') is a separate, paper-level event and is unaffected.
+// Button/NumEntry === Input and ButtonView/NumEntryView === InputView in digitaljs,
+// so patching InputView covers every interactive input variant, on the main paper and
+// every subcircuit popup paper (all papers share this cellViewNamespace).
+cells.InputView.prototype._onButton = function () { };
+cells.InputView.prototype._onNumEntry = function () { };
+
+// Render top-level IO ports as labeled boxes showing the net name — like the ports of a
+// subcircuit (the look the user asked for) — instead of interactive button / number-entry
+// / lamp widgets. We must NOT force the in-subcircuit "mode 0": that flag means "this IO
+// is a subcircuit boundary," and the circuit-level signal handler forwards a mode-0 IO's
+// value to its enclosing subcircuit (null at top level → crash during value annotation).
+// So keep digitaljs's natural mode (correct signal semantics) and change only RENDERING:
+//   - swap the markup to the box+ioname (net-name) markup, whatever the mode;
+//   - no-op the views' value-widget update (our markup has no button/lamp/number field);
+//   - size the box to the net name (the in-subcircuit width rule).
+const origIOCheckMode = cells.IO.prototype._checkMode;
+cells.IO.prototype._checkMode = function () {
+    const mode = origIOCheckMode.call(this); // keep correct mode + side effects
+    this.set('markup', this.markupInSubcircuit);
+    return mode;
+};
+cells.InputView.prototype._updateView = function () { };
+cells.OutputView.prototype._updateView = function () { };
+cells.IOView.prototype._calculateBoxWidth = function () {
+    // Estimate from the model net name (textWidth), not the DOM: at sizing time the paper is
+    // frozen so the text isn't laid out (getBBox ~0). estimate = name*charPx + tier padding.
+    const net = this.model.get('net') || '';
+    return net ? Math.ceil(boxTextWidth(net)) + spacing.ioPad : 20;
+};
+// Boxed IO ports (top-level ports, and a subcircuit's boundary IOs) show their value as a caption
+// UNDER the box — same value info as child-instance ports. Add a value text to the box markup and
+// update it from the SIGNAL flags digitaljs already raises on the IO cell (an Input drives
+// outputSignals.out, an Output reads inputSignals.in). Position is set absolutely from the box size
+// in the view: fractional refX/refY don't behave when applied at runtime, so we place it directly.
+cells.IO.prototype.markupInSubcircuit = cells.IO.prototype.markupInSubcircuit.concat([
+    { tagName: 'text', className: 'iovalue', selector: 'ioval' },
+    { tagName: 'text', className: 'portbidir', selector: 'iobidir' }, // ⇄ when the port is inout
+]);
+const _ioBaseConfirmUpdate = cells.IOView.prototype.confirmUpdate;
+cells.IOView.prototype.confirmUpdate = function (flags) {
+    const r = _ioBaseConfirmUpdate.apply(this, arguments);
+    this._updateIoValue(); // value (signal-driven) + the static bidirectional glyph; idempotent
+    // Dangling-net stub (showDanglingNets): a declared-but-unconnected net rendered as a labelled
+    // box. Mark it so CSS can dash it and hide the (meaningless) port magnet — it isn't a real port.
+    if (this.model.get('dangling')) { this.el.classList.add('sv-dangling'); }
+    return r;
+};
+cells.IOView.prototype._updateIoValue = function () {
+    const node = this.selectors && this.selectors.ioval;
+    if (!node) { return; }
+    const dir = this.model._portDirection; // 'out' for Input (drives net), 'in' for Output (reads)
+    const sigs = this.model.get(dir === 'out' ? 'outputSignals' : 'inputSignals');
+    const sig = sigs && sigs[dir];
+    const net = this.model.get('net');
+    const t = valueText(net, sig);
+    node.textContent = t;
+    node.style.display = t ? 'inline' : 'none';            // JointJS display:none-s empty text
+    node.style.fill = _valuePalette[colorCategory(net)];  // x/z-aware colour from the cursor value
+    // caption under the box, centred to it (box-local coords; origin at the box top-left)
+    const sz = this.model.size();
+    node.setAttribute('x', sz.width / 2);
+    node.setAttribute('y', sz.height + 11);
+    node.setAttribute('text-anchor', 'middle');
+    // bidirectional glyph above the box for an inout port (converter tagged the IO cell `bidir`)
+    const bnode = this.selectors && this.selectors.iobidir;
+    if (bnode) {
+        const bidir = !!this.model.get('bidir');
+        bnode.textContent = bidir ? '⇄' : '';
+        bnode.style.display = bidir ? 'inline' : 'none';
+        bnode.setAttribute('x', sz.width / 2);
+        bnode.setAttribute('y', -5);
+        bnode.setAttribute('text-anchor', 'middle');
+    }
+};
+
+// Size child-instance (and dff/fsm/memory) boxes to fit their port-name labels. digitaljs's
+// version (leftLabelMax + rightLabelMax + 25) measures labels with getBBox() during the
+// frozen initial render — the text isn't laid out then, so it reads ~0 and the box locks too
+// narrow, letting long left/right port names collide in the middle (the screenshot bug). We
+// estimate from the MODEL ports (label = port.portlabel ?? port.id) with textWidth instead —
+// no layout needed, so it's right while the paper is still frozen — and use a tier-scaled
+// middle gap (boxGap), with headroom for in-box values later.
+cells.BoxView.prototype._calculateBoxWidth = function () {
+    let lw = -5, rw = -5; // digitaljs's empty-side fixup
+    for (const p of this.model.getPorts()) {
+        if (!p.labelled) { continue; }
+        const w = boxTextWidth('portlabel' in p ? p.portlabel : p.id);
+        if (p.group === 'out') { rw = Math.max(rw, w); } else if (p.group === 'in') { lw = Math.max(lw, w); }
+    }
+    return Math.ceil(lw + rw) + spacing.boxGap;
+};
+
+// Per-port value annotation on child-instance (Subcircuit) boxes. digitaljs draws only the port
+// NAME (the `iolabel` text) and packs ports at 16px/row. To show each port's live VaporView value
+// UNDER its name we (a) add a second text element `iovalue` to the port markup, (b) re-pitch the
+// box to spacing.rowH/row so the value line has room WITHOUT a runtime resize (reserve up front —
+// a resize would force a full re-layout), and (c) drive the value text from the SAME reactive
+// signal path that already colors the port circles (the _updatePortSignals override below).
+// Scoped to Subcircuit so plain gates/dffs are untouched. Widths stay name-driven (hex values are
+// short); a value wider than its port name can encroach on the middle gap — acceptable for now.
+cells.Subcircuit.prototype.portMarkup = cells.Gate.prototype.portMarkup.concat([
+    { tagName: 'text', className: 'iovalue', selector: 'iovalue' },
+    { tagName: 'text', className: 'portbidir', selector: 'portbidir' }, // ⇄ on inout (bidirectional) ports
+]);
+const _origSubPreprocess = cells.Subcircuit.prototype._preprocessPorts;
+cells.Subcircuit.prototype._preprocessPorts = function (ports) {
+    _origSubPreprocess.call(this, ports); // sets each port's bits + iolabel (name) attrs
+    // inout ports: the converter tagged the inner module's matching Input/Output cell `bidir`, and a
+    // subcircuit port's id IS that inner IO's net. The graph is already set here (before Box.init),
+    // so detect bidir ports now (in the preprocess phase, where port attrs actually take effect).
+    const graph = this.get('graph');
+    const bidirNets = new Set();
+    if (graph && typeof graph.getCells === 'function') {
+        for (const c of graph.getCells()) {
+            const t = c.get && c.get('type');
+            if ((t === 'Input' || t === 'Output') && c.get('bidir')) { bidirNets.add(c.get('net')); }
+        }
+    }
+    for (const port of ports) {
+        const isOut = port.group === 'out';
+        // place the value directly under the name (iolabel sits at the port centre): same side
+        // anchor as the name, nudged down a line. Styling (size/colour) is in style.css (.iovalue).
+        (port.attrs = port.attrs || {})['iovalue'] = {
+            text: '', refX: isOut ? -5 : 5, refY: 13,
+            textAnchor: isOut ? 'end' : 'start', textVerticalAnchor: 'middle',
+        };
+        // ⇄ on the wire side of an inout port
+        if (bidirNets.has(port.id)) {
+            port.attrs['portbidir'] = {
+                text: '⇄', refX: isOut ? 13 : -13, refY: 0,
+                textAnchor: 'middle', textVerticalAnchor: 'middle',
+            };
+        }
+    }
+};
+const _origSubInitialize = cells.Subcircuit.prototype.initialize;
+cells.Subcircuit.prototype.initialize = function () {
+    _origSubInitialize.apply(this, arguments); // builds ports + sets the 16px/row size
+    // re-pitch to spacing.rowH/row so a value line fits under each port name (mirrors the
+    // vcount*16+8 rule in cells/subcircuit.js, but with our taller pitch). Width is left to
+    // BoxView._autoResizeBox / _calculateBoxWidth.
+    const items = (this.get('ports') || {}).items || [];
+    let ins = 0, outs = 0;
+    for (const p of items) { if (p.group === 'out') { outs++; } else { ins++; } }
+    const vcount = Math.max(ins, outs);
+    if (vcount > 0) {
+        const sz = this.size();
+        this.set('size', { width: sz.width, height: vcount * spacing.rowH + 8 });
+    }
+};
+// Feed per-port value text from the reactive signal path. digitaljs's Circuit binds
+// change:outputSignals -> fan-out wire signal -> target._setInput -> inputSignals at the MODEL
+// level (circuit.js, independent of the never-started engine), so our VaporView annotation
+// (setWireValue) already propagates a value onto every subcircuit port. GateView._updatePortSignals
+// recolours the port circle on each such change; we extend it to also write the formatted value
+// under the name. View-only (set textContent on the cached port node) — no model mutation, so no
+// re-entrancy and no extra layout, exactly like the existing wire-colour path.
+const _origUpdatePortSignals = cells.GateView.prototype._updatePortSignals;
+cells.SubcircuitView.prototype._updatePortSignals = function (dir) {
+    _origUpdatePortSignals.apply(this, arguments);
+    const m = this.model;
+    // map each port to the parent-scope net wired to it, so its value (and old→new transition) is
+    // looked up under the right name. Cached once per view — the graph is static after layout.
+    if (!this._portNetsCache) {
+        this._portNetsCache = {};
+        const g = m.graph;
+        if (g) {
+            for (const link of g.getConnectedLinks(m)) {
+                const s = link.get('source'), tt = link.get('target');
+                if (s && s.id === m.id && 'port' in s) { this._portNetsCache[s.port] = link.get('netname'); }
+                if (tt && tt.id === m.id && 'port' in tt) { this._portNetsCache[tt.port] = link.get('netname'); }
+            }
+        }
+    }
+    const sigs = dir === 'in' ? m.get('inputSignals')
+        : dir === 'out' ? m.get('outputSignals')
+        : Object.assign({}, m.get('inputSignals'), m.get('outputSignals'));
+    for (const port in sigs) {
+        const netname = this._portNetsCache[port];
+        const cat = colorCategory(netname); // x/z-aware colour from the connected net's cursor value
+        // recolour the port circle to match (digitaljs's own palette can't express x/z/calm-0)
+        this._applyPortAttrs(port, { port: { stroke: _valuePalette[cat] } });
+        const cache = this._portElementsCache[port];
+        const node = cache && cache.portSelectors && cache.portSelectors.iovalue;
+        if (!node) { continue; }
+        const t = valueText(netname, sigs[port]);
+        node.textContent = t;
+        // JointJS hides a text node whose `text` attr is empty (display:none); we set textContent
+        // directly, so force display back on when there's a value (and off when blank).
+        node.style.display = t ? 'inline' : 'none';
+        node.style.fill = _valuePalette[cat]; // value text matches the port/wire colour
+    }
+};
+
+// Drop the wire hover-tools (delete-wire ✕, monitor 🔍, endpoint reconnect, reshape) —
+// these are digitaljs editor/simulator affordances inappropriate for a read-only viewer
+// (the ✕ deletes a wire from the schematic; the 🔍 routes to digitaljs's own waveform
+// monitor, which we don't use — VaporView is the waveform).
+cells.WireView.prototype.addTools = function () { return this; };
+// Replace digitaljs's bus value tooltip (Hex/Dec/Oct/Bin, not theme-aware, bus-only) with our own
+// richer, theme-aware hover tooltip (see showTip), which covers every net/port/instance/gate.
+cells.WireView.prototype._addTooltip = function () { return this; };
+
+// Read-only viewer: don't open digitaljs's editable Memory / FSM content editors (the 🔍
+// on those cells). Subcircuit 🔍 navigation is a different handler and stays.
+cells.MemoryView.prototype._displayEditor = function () { };
+cells.FSMView.prototype._displayEditor = function () { };
+
+// ELK layout: roomier spacing + reserve a clear channel for each wire's net-name label.
+// digitaljs feeds ELK a tight, fixed option set (lib/elkjs.js) and never tells it about the
+// net-name labels it draws at every wire's midpoint — so on dense levels boxes pack
+// together and those labels collide with box edges and with one another. We can't reach
+// digitaljs's private to_elkjs(), but (a) every Wire carries its netname at construction and
+// (b) every layout runs through ELK.layout(elkGraph). So: record each wire's label size by
+// id, and just before ELK runs, widen the spacing and attach each edge's label so ELK
+// reserves room for it. digitaljs still draws the label itself (we ignore ELK's label
+// position); we only buy it space. This is the readability fix for crowding/label overlap.
+// Value annotation shows the value UNDER the net-name, so the channel also grows vertically by
+// `valueH` (a second line); width stays the name, so wires don't get longer.
+const _wireLabelDims = new Map(); // wire/link id -> { width, height, text }
+// Reserved size of the channel ELK keeps clear for a net-name label. width = estimated text
+// width (textWidth) + tier side padding; height drives how far ELK spreads parallel labeled
+// wires apart. Computed at Wire construction (no DOM yet), so it uses the textWidth estimate.
+// height = name line (labelH) + value line (valueH), reserved up front so live value updates are
+// pure text swaps that never trigger a re-layout.
+function netLabelDims(text) {
+    // Reserve only `netChannel` of the label width so compact tiers keep wires short; ELK
+    // still inserts a lane (≥ this) that the betweenLayers margins pad out from the boxes.
+    const w = textWidth(text) * spacing.netChannel + spacing.labelPad;
+    return { width: Math.max(1, Math.ceil(w)), height: spacing.labelH + spacing.valueH, text };
+}
+const _origWireInit = cells.Wire.prototype.initialize;
+cells.Wire.prototype.initialize = function () {
+    _origWireInit.apply(this, arguments);
+    const nm = this.get('netname');
+    if (!nm) { return; }
+    _wireLabelDims.set(this.id, netLabelDims(nm));
+    // digitaljs gave this wire a single-line netname label; replace it with a two-line label so
+    // the live value can sit UNDER the name (vertical growth, no extra wire length). Both lines sit
+    // on the SAME side — below the wire — name first, value under it; WireView._updateSignal fills
+    // the value text on each signal change (below). Blank value line when there's no waveform.
+    this.label(0, {
+        markup: [
+            { tagName: 'text', selector: 'label', className: 'label' },
+            { tagName: 'text', selector: 'labelvalue', className: 'wirevalue' },
+        ],
+        attrs: {
+            label: { text: nm, fontSize: '8pt', textAnchor: 'middle', textVerticalAnchor: 'middle', y: 6 },
+            labelvalue: { text: '', textAnchor: 'middle', textVerticalAnchor: 'middle', y: 16 },
+        },
+        position: { distance: 0.5 },
+    });
+};
+// Fill the per-wire value line from the reactive signal path. digitaljs's WireView recolors the
+// line on each change:signal (confirmUpdate -> _updateSignal); we extend it to also write the
+// formatted value under the net name. View-only (textContent on the label's value node) — no
+// model mutation, no layout — the same approach as the child-instance port values.
+const _origWireUpdateSignal = cells.WireView.prototype._updateSignal;
+cells.WireView.prototype._updateSignal = function () {
+    _origWireUpdateSignal.apply(this, arguments);
+    const sig = this.model.get('signal');
+    const netname = this.model.get('netname');
+    // Colour from the RAW cursor value (x/z-aware — digitaljs/3vl can't tell z from x, and digitaljs
+    // only treats an ALL-x net as undef). Override the line stroke with our category colour.
+    const cat = colorCategory(netname);
+    this._applyAttrs({ line: { stroke: _valuePalette[cat] } });
+    const node = this.el.querySelector('.wirevalue');
+    if (!node) { return; }
+    const t = valueText(netname, sig);
+    node.textContent = t;
+    // JointJS hides an empty-text node (display:none); force it back on when there's a value.
+    node.style.display = t ? 'inline' : 'none';
+    node.style.fill = _valuePalette[cat]; // value text matches the line colour
+};
+let _phase = null; // per-render timing + input sizes (see buildSchematic / finalizeTiming)
+const _origElkLayout = ELK.prototype.layout;
+ELK.prototype.layout = function (graph, opts) {
+    const isRoot = graph && graph.id === 'root' && graph.properties && Array.isArray(graph.edges);
+    // only touch digitaljs's schematic graphs (the 'root' graph with the props it sets)
+    if (isRoot) {
+        Object.assign(graph.properties, {
+            'elk.spacing.nodeNode': spacing.nodeNode,                       // siblings within a column (ELK default 20)
+            'elk.layered.spacing.nodeNodeBetweenLayers': spacing.betweenLayers, // column gap (digitaljs default 40)
+            'elk.spacing.edgeNode': spacing.edgeNode,                       // wire-to-box clearance
+            'elk.spacing.edgeEdge': spacing.edgeEdge,
+            'elk.layered.spacing.edgeNodeBetweenLayers': spacing.edgeNode,
+            'elk.layered.spacing.edgeEdgeBetweenLayers': spacing.edgeEdge,
+            'org.eclipse.elk.edgeLabels.inline': true,        // labels sit on the wire, as digitaljs draws them
+            'elk.spacing.edgeLabel': spacing.edgeLabel,
+        });
+        for (const e of graph.edges) {
+            if (e.labels) { continue; }
+            const d = _wireLabelDims.get(e.id);
+            if (d) { e.labels = [{ id: e.id + ':netlabel', text: d.text, width: d.width, height: d.height }]; }
+        }
+    }
+    // Time the FIRST ELK layout of the current render (the ELK phase) — NOT gated on `isRoot`: a flat
+    // module's main layout may not match the 'root'/props shape, and we don't want its time silently
+    // lumped into "reposition" (the csr_regfile "ELK 0ms" bug). Later layouts (popups; elkStart already
+    // set) are ignored. Capture on resolve AND reject so the time is recorded even if ELK errors out.
+    const mine = _phase && _phase.elkStart === null;
+    if (mine) {
+        _phase.elkStart = performance.now();
+        _phase.elkNodes = graph && graph.children ? graph.children.length : 0;
+        _phase.elkEdges = graph && Array.isArray(graph.edges) ? graph.edges.length : 0;
+    }
+    const ret = _origElkLayout.call(this, graph, opts);
+    if (mine && ret && typeof ret.then === 'function') {
+        const done = () => { _phase.elk = performance.now() - _phase.elkStart; _phase.elkDoneAt = performance.now(); };
+        ret.then(done, done);
+    }
+    return ret;
+};
+
+// Per-character advance used to size boxes/labels BEFORE layout. Boxes must be sized while
+// digitaljs lays the graph out, but that happens with the paper frozen — the label text
+// isn't laid out yet, so getBBox reads ~0 (the box-too-small bug). We can't measure then, so
+// we estimate width = textLength * charPx (labels render in a fixed-width font). This makes
+// digitaljs's single layout already account for the box size — no second pass, and it can't
+// break (if the estimate is off a box is just slightly tight/loose). charPx starts at the
+// 8pt-monospace advance (~0.6em) and self-calibrates to the user's actual editor font from
+// the first real labels (see calibrateCharPx), so popups and later renders track it exactly.
+let charPx = 6.6;
+const textWidth = (s) => (s ? String(s).length : 0) * charPx;
+// Boxes reserve more than the bare text so port/instance names sit inside with margin (and
+// to stay safe when the font is wider than the estimate). Applied to box sizing only — NOT to
+// the net-name channel, so wires don't get longer.
+const BOX_TEXT_FUDGE = 1.3;
+const boxTextWidth = (s) => textWidth(s) * BOX_TEXT_FUDGE;
+// After a paper unfreezes, real label geometry is valid — measure a few labels once to learn
+// this environment's per-char advance, so subsequent layouts (popups, reloads) size exactly.
+let _calibrated = false;
+function calibrateCharPx(paper) {
+    if (_calibrated) { return; }
+    let sumW = 0, sumN = 0;
+    for (const el of paper.el.querySelectorAll('text.iolabel, .joint-link text.label')) {
+        const n = (el.textContent || '').length;
+        if (n >= 3) { const w = el.getBBox().width; if (w > 0) { sumW += w; sumN += n; } }
+    }
+    if (sumN > 0) { charPx = sumW / sumN; _calibrated = true; }
+}
+
+// Open a child instance in a popup ("Expand"). At most one popup per instance: if one's
+// already open, raise it instead of duplicating. The key is the dialog title digitaljs uses
+// (celltype + ' ' + label); open/close is tracked in the windowCallback wrapper below.
+// Also stash a breadcrumb-style title (full hierarchical instance path + module name) so the
+// popup titlebar matches the main page, instead of digitaljs's raw "celltype label".
+const _openSubKeys = new Set();     // instance keys with an open popup
+const _openSubDialogs = new Map();  // key -> jquery-ui dialog div (to raise on re-click)
+const _subTitles = new Map();       // key -> "full.hier.path  (module)" for the titlebar
+const _subShort = new Map();        // key -> short instance label (for the taskbar tab)
+const _pendingExpand = new Map();   // shallow mode: key -> {model, paper} awaiting an expandResult
+const _expandedTemp = new Map();    // shallow mode: key -> temp Circuit holding the built child graph
+function openSubcircuit(model, paper) {
+    const key = model.get('celltype') + ' ' + model.get('label');
+    if (_openSubKeys.has(key)) { restorePopup(key); return; } // already open → restore + raise
+    // shallow mode: the child's internals weren't loaded (it was blackboxed at elaboration). Re-
+    // elaborate it (selected + 1) on demand, then open the returned circuit in a popup. Once built,
+    // the graph is cached on the box model so re-opening is instant (like full mode).
+    if (currentShallow && !_expandedTemp.has(key)) {
+        if (_pendingExpand.has(key)) { return; } // a request is already in flight
+        _pendingExpand.set(key, { model, paper });
+        // Re-elaboration (extension) + the popup build that follows can be slow → arm the overlay
+        // (delayed, so a fast expand doesn't flash it). It hides when the popup's layout settles.
+        scheduleRenderOverlay();
+        post({ type: 'expandRequest', key, celltype: model.get('celltype'), leafName: model.get('label'), path: graphPath(model) });
+        return;
+    }
+    // The child graph is in hand (full mode, or an already-expanded child). Opening it renders + lays
+    // out the popup SYNCHRONOUSLY; for a big child, show the overlay and defer so it paints first.
+    const g = model.get('graph');
+    if (g && typeof g.getCells === 'function' && g.getCells().length > RENDER_OVERLAY_MIN_CONNECTORS) {
+        showRenderOverlay();
+        setTimeout(() => doOpenPopup(model, paper, key), 30);
+    } else {
+        doOpenPopup(model, paper, key);
+    }
+}
+// Open the popup for `model` (its graph is already built) — title/taskbar bookkeeping + trigger.
+function doOpenPopup(model, paper, key) {
+    if (_openSubKeys.has(key)) { restorePopup(key); return; }
+    const hier = [currentScopePath, ...graphPath(model), model.get('label')].filter(Boolean).join('.');
+    _subTitles.set(key, `${hier}  (${cleanModuleName(model.get('celltype'))})`);
+    _subShort.set(key, model.get('label'));
+    _openSubKeys.add(key);                            // mark before trigger (guards fast double-clicks)
+    paper.trigger('open:subcircuit', model);
+}
+// shallow mode: the extension re-elaborated the child → build its graph, attach it to the box model
+// (digitaljs reads model.graph at open time), and open the popup. The temp Circuit is only a graph
+// factory — never displayed, engine never started; kept so it can be shut down on the next load.
+function onExpandResult(msg) {
+    const pending = _pendingExpand.get(msg.key);
+    _pendingExpand.delete(msg.key);
+    if (!pending) { hideRenderOverlay(); return; }
+    if (msg.error || !msg.circuit) { setStatus(`Expand failed: ${msg.error || 'no circuit'}`); hideRenderOverlay(); return; }
+    try {
+        sanitizeCircuit(msg.circuit); // same guard loadSchematic uses: drop connectors with a missing
+                                      // endpoint so digitaljs doesn't throw on `conn.from.id`
+        const t = new Circuit(msg.circuit, { layoutEngine: 'elkjs', windowCallback: () => {} });
+        pending.model.set('graph', t.getLabelIndex().graph);
+        _expandedTemp.set(msg.key, t);
+        doOpenPopup(pending.model, pending.paper, msg.key); // popup render:done (new:paper) hides the overlay
+    } catch (e) {
+        setStatus('Expand failed: ' + (e && e.message ? e.message : e));
+        hideRenderOverlay();
+    }
+}
+// digitaljs opens the popup from the subcircuit's zoom (🔍) icon; route it through our helper.
+cells.SubcircuitView.prototype.zoomInCircuit = function (evt) {
+    evt.stopPropagation();
+    openSubcircuit(this.model, this.paper);
+    return false;
+};
+
+// ---- popup taskbar + minimize ----
+// A row of tabs along the bottom (one per open popup) for quickly switching between many
+// child windows, plus a minimize button in each dialog titlebar. Tabs raise (and restore) the
+// popup; minimize hides it but keeps its tab. State is keyed by the same per-instance key.
+const _taskbarTabs = new Map();  // key -> tab element
+const _subMinimized = new Set(); // keys whose popup is currently minimized
+let _taskbarEl = null;
+let _mainTab = null;
+function taskbar() {
+    if (!_mainTab) {
+        _taskbarEl = document.getElementById('sv-taskbar'); // lives at the left of the status bar
+        // the main-page tab is always first and can't be minimized — a quick way to surface
+        // the main schematic (minimizes every open popup so nothing covers it).
+        _mainTab = document.createElement('div');
+        _mainTab.className = 'sv-tab sv-tab-main';
+        _mainTab.innerHTML = '<i class="codicon codicon-home"></i><span class="sv-tab-name"></span>';
+        _mainTab.querySelector('.sv-tab-name').textContent = currentMainName || 'main';
+        _mainTab.title = 'Show the main schematic (minimize all popups)';
+        _mainTab.addEventListener('click', focusMain);
+        _taskbarEl.appendChild(_mainTab);
+    }
+    return _taskbarEl;
+}
+function refreshTaskbar() { if (_taskbarEl) { _taskbarEl.style.display = _taskbarTabs.size ? 'flex' : 'none'; } }
+function dialogWidget(key) {
+    const div = _openSubDialogs.get(key);
+    try { return div ? div.dialog('widget') : null; } catch (e) { return null; }
+}
+// Key of the visible popup currently on top (highest jquery-ui z-index), or null.
+function topmostPopupKey() {
+    let top = null, topZ = -1;
+    for (const key of _openSubKeys) {
+        if (_subMinimized.has(key)) { continue; }
+        const w = dialogWidget(key);
+        if (!w) { continue; }
+        const z = parseInt(getComputedStyle(w.get(0)).zIndex, 10) || 0;
+        if (z >= topZ) { topZ = z; top = key; }
+    }
+    return top;
+}
+function restorePopup(key) {
+    if (_subMinimized.has(key)) {
+        _subMinimized.delete(key);
+        const w = dialogWidget(key); if (w) { w.show(); }
+        const tab = _taskbarTabs.get(key); if (tab) { tab.classList.remove('sv-min'); }
+    }
+    const div = _openSubDialogs.get(key);
+    if (div) { try { div.dialog('moveToTop'); } catch (e) { /* not ready */ } }
+}
+function minimizePopup(key) {
+    const w = dialogWidget(key); if (!w) { return; }
+    _subMinimized.add(key); w.hide();
+    const tab = _taskbarTabs.get(key); if (tab) { tab.classList.add('sv-min'); }
+}
+// Windows-style tab click: minimized → restore+raise; on top (active) → minimize; else raise.
+function onPopupTabClick(key) {
+    if (_subMinimized.has(key)) { restorePopup(key); }
+    else if (key === topmostPopupKey()) { minimizePopup(key); }
+    else { restorePopup(key); }
+}
+function focusMain() {
+    for (const key of _openSubKeys) { if (!_subMinimized.has(key)) { minimizePopup(key); } }
+}
+function addTaskbarTab(key) {
+    if (_taskbarTabs.has(key)) { return; }
+    const tab = document.createElement('div');
+    tab.className = 'sv-tab';
+    tab.textContent = _subShort.get(key) || cleanModuleName((key.split(' ')[0] || ''));
+    tab.title = _subTitles.get(key) || key;
+    tab.addEventListener('click', () => onPopupTabClick(key));
+    taskbar().appendChild(tab);
+    _taskbarTabs.set(key, tab);
+    refreshTaskbar();
+}
+function removeTaskbarTab(key) {
+    const tab = _taskbarTabs.get(key);
+    if (tab) { tab.remove(); _taskbarTabs.delete(key); }
+    _subMinimized.delete(key);
+    refreshTaskbar();
+}
+// Add a "minimize" button to the dialog titlebar, left of jquery-ui's close button — and
+// re-skin jquery-ui's close button with the matching codicon (drop its sprite icon + label).
+function addMinimizeButton(div, key) {
+    let titlebar;
+    try { titlebar = div.dialog('widget').find('.ui-dialog-titlebar').get(0); } catch (e) { return; }
+    if (!titlebar || titlebar.querySelector('.sv-min-btn')) { return; }
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'sv-min-btn'; btn.title = 'Minimize';
+    btn.innerHTML = '<i class="codicon codicon-chrome-minimize"></i>';
+    btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); minimizePopup(key); });
+    const close = titlebar.querySelector('.ui-dialog-titlebar-close');
+    if (close) { close.replaceChildren(); close.innerHTML = '<i class="codicon codicon-chrome-close"></i>'; titlebar.insertBefore(btn, close); } else { titlebar.appendChild(btn); }
+}
+// digitaljs's subcircuit zoom buttons (– / +): give them codicon icons + tooltips.
+function addZoomTooltips(div) {
+    const root = div && div.get ? div.get(0) : null;
+    if (!root) { return; }
+    for (const b of root.querySelectorAll('.btn-group .btn')) {
+        // Only digitaljs's native zoom buttons (text '+' / '–'). Skip our own find/export
+        // buttons (they carry a codicon, not +/- text) so we don't clobber their icons — and
+        // stay idempotent: an already-iconified zoom button has no +/- text, so it's skipped.
+        const txt = (b.textContent || '').trim();
+        if (txt !== '+' && txt !== '–' && txt !== '-') { continue; }
+        const zin = txt === '+';
+        b.title = zin ? 'Zoom in' : 'Zoom out';
+        b.innerHTML = `<i class="codicon codicon-zoom-${zin ? 'in' : 'out'}"></i>`;
+    }
+}
+// Add a Find (🔍) button to the popup toolbar that opens THIS popup's finder (content.__svFinder).
+function addPopupFindButton(content) {
+    const group = content && content.querySelector('.btn-group');
+    if (!group || !content.__svFinder || group.querySelector('.sv-popup-find')) { return; }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary sv-popup-find';
+    btn.title = 'Find in this view (Ctrl+F)';
+    btn.innerHTML = '<i class="codicon codicon-search"></i>';
+    btn.addEventListener('click', () => content.__svFinder.open());
+    group.insertBefore(btn, group.firstChild);
+}
+// Add an export (⤓) button to the popup's button group so this child view can be exported too.
+function addPopupExport(div) {
+    const root = div && div.get ? div.get(0) : null;
+    if (!root) { return; }
+    const group = root.querySelector('.btn-group');
+    const p = root.__svPaper;
+    if (!group || !p || group.querySelector('.sv-popup-export')) { return; }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary sv-popup-export';
+    btn.title = 'Export this view (SVG / PNG / JSON)';
+    btn.innerHTML = '<i class="codicon codicon-export"></i>';
+    btn.addEventListener('click', () => { _exportPaper = p; post({ type: 'export', name: paperHierName(p) }); });
+    group.appendChild(btn);
+}
+function clearTaskbar() {
+    for (const tab of _taskbarTabs.values()) { tab.remove(); }
+    _taskbarTabs.clear(); _subMinimized.clear(); _subShort.clear();
+    refreshTaskbar();
+}
+// Confine a popup to the canvas area (#paper-container, between the toolbar and the status
+// bar) so it can't be dragged or resized over the status bar — the status bar sits above the
+// dialogs (z-index) to keep its tabs clickable, so an overlapping popup gets clipped by it.
+function constrainDialog(div) {
+    const pc = document.getElementById('paper-container');
+    try {
+        const widget = div.dialog('widget');
+        try { widget.draggable('option', 'containment', pc); } catch (e) { /* not draggable */ }
+        try { widget.resizable('option', 'containment', pc); } catch (e) { /* not resizable */ }
+        div.dialog('option', { maxWidth: pc.clientWidth, maxHeight: pc.clientHeight });
+    } catch (e) { /* dialog not ready */ }
+}
+
+// Theme-aware wire value palette. digitaljs colors wires by signal value via the `line`
+// selector attrs (hard-coded greens/reds); replace them with VS Code theme colors so the
+// schematic harmonizes with the editor and VaporView. undef stays a muted neutral — most
+// wires are undef when no waveform is loaded, so it must NOT be an alarm color.
+function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+}
+// signal value -> color, shared by the wire LINE stroke AND the value TEXT fill (ports, wires, IO
+// boxes) so the annotated value reads in the same color as its wire. Seeded with the theme
+// defaults; applyWireValuePalette() refreshes from the live CSS vars on load.
+// Anomaly-forward: the states designers hunt for are the loud ones. x (unknown — uninitialised /
+// contention / X-prop, where bugs hide) = red; z (high-impedance / floating) = amber; 0 is calmed to
+// a neutral (NOT red); 1 = green; a defined bus = blue; no waveform value = recessive grey.
+let _valuePalette = { high: '#2fb344', low: '#bbbbbb', def: '#4a9cff', x: '#f14c4c', z: '#e5a000', undef: '#888888' };
+function applyWireValuePalette() {
+    _valuePalette = {
+        high:  cssVar('--vscode-charts-green', '#2fb344'),          // 1
+        low:   cssVar('--vscode-descriptionForeground', '#bbbbbb'), // 0 — calm/neutral
+        def:   cssVar('--vscode-charts-blue', '#4a9cff'),           // defined bus
+        x:     cssVar('--vscode-charts-red', '#f14c4c'),            // unknown — the bug indicator
+        z:     cssVar('--vscode-charts-yellow', '#e5a000'),         // high-impedance / floating
+        undef: cssVar('--vscode-disabledForeground', '#888888'),   // no waveform value
+    };
+    // digitaljs's own WireView palette (read by its _updateSignal); we re-colour over it via
+    // colorCategory, but keep low non-red here so an un-annotated low never flashes red.
+    cells.WireView.prototype.attrs.signal = {
+        high:  { line: { stroke: _valuePalette.high } },
+        low:   { line: { stroke: _valuePalette.low } },
+        def:   { line: { stroke: _valuePalette.def } },
+        undef: { line: { stroke: _valuePalette.undef } },
+    };
+}
+// Raw cursor value -> colour category. Derived from the RAW string (not the Vector3vl, which has no
+// z — it sanitises z->x). Any x bit ⇒ x (loudest); else any z ⇒ z; else all-1 high / all-0 low /
+// mixed def. Aligns with VaporView (any unknown/floating bit dominates the whole bus).
+function rawCategory(raw) {
+    const s = String(raw).toLowerCase().replace(/[^01xz]/g, 'x');
+    if (s.includes('x')) { return 'x'; }
+    if (s.includes('z')) { return 'z'; }
+    return s.includes('1') ? (s.includes('0') ? 'def' : 'high') : 'low';
+}
+// Per-net colour category (keyed by the leaf net name VaporView uses), set from the cursor value in
+// the setValues handler; a net with no entry is 'undef' (no waveform value -> recessive grey).
+const _valueCat = new Map();
+function colorCategory(netname) {
+    return (netname && _valueCat.get(netname)) || 'undef';
+}
+
+const vscode = acquireVsCodeApi();
+
+let circuit = null;
+let paper = null;
+let labelIndex = null;
+let autoFit = true;   // auto-fit after async ELK layout until the user zooms manually
+let fitTimer = null;
+let currentScopePath = ''; // breadcrumb root for this render; used to build popup hier titles
+let currentMainName = '';  // main module name (label for the always-present main taskbar tab)
+let currentBackend = '';   // resolved yosys backend name, for diagnosing a malformed-circuit failure
+let currentShallow = false; // shallow mode: child boxes have no loaded internals → expand re-elaborates
+
+// digitaljs builds wires from `connectors` and crashes on `conn.from.id` if an endpoint is
+// undefined ("Cannot read properties of undefined (reading 'id')"). A well-formed netlist never
+// produces that, so its presence means the netlist itself is malformed — typically when an
+// unexpected yosys (e.g. one another extension put on PATH) emitted JSON our converter didn't
+// expect. Drop those connectors per graph (top + each subcircuit) so the rest still renders, and
+// return the count so we can warn with the offending backend.
+function sanitizeCircuit(circ) {
+    if (!circ || typeof circ !== 'object') { return 0; }
+    let dropped = 0;
+    const cleanGraph = (g) => {
+        if (!g || !Array.isArray(g.connectors)) { return; }
+        const devs = g.devices || {};
+        const before = g.connectors.length;
+        // both endpoints must exist AND name a device in this graph — otherwise digitaljs throws
+        // either at Wire construction ("reading 'id'") or later ("LinkView: invalid source cell").
+        g.connectors = g.connectors.filter(c =>
+            c && c.from && c.to && c.from.id && c.to.id && devs[c.from.id] && devs[c.to.id]);
+        dropped += before - g.connectors.length;
+    };
+    cleanGraph(circ); // top module
+    if (circ.subcircuits && typeof circ.subcircuits === 'object') {
+        for (const g of Object.values(circ.subcircuits)) { cleanGraph(g); }
+    }
+    return dropped;
+}
+// Read-only interactivity: disable every editing action (drag a node, start a wire from a
+// port magnet, move/add/remove a wire's vertices or endpoints) while KEEPING pointer events,
+// so click-to-highlight and the right-click menu still work on wires, ports, and instances.
+const READONLY = {
+    elementMove: false, addLinkFromMagnet: false, arrowheadMove: false,
+    vertexAdd: false, vertexMove: false, vertexRemove: false,
+    linkMove: false, labelMove: false, useLinkTools: false,
+};
+
+const paperDiv = () => document.getElementById('paper');
+
+function post(msg) { vscode.postMessage(msg); }
+
+// ---- value handling (Spike 2 value_encoding.md) ----
+function toBinFor3vl(v, bits) {
+    // Vector3vl is 3-valued; unknown chars POISON fromBin -> sanitize first.
+    let s = String(v).toLowerCase().replace(/[^01x]/g, 'x');
+    if (s.length < bits) { s = s.padStart(bits, '0'); }
+    else if (s.length > bits) { s = s.slice(-bits); }
+    return s;
+}
+
+function setWireValue(name, rawValue) {
+    if (!labelIndex) { return false; }
+    const wire = labelIndex.wires[name];
+    if (!wire) { return false; } // renamed/aliased/hidden: non-annotatable by design
+    const bits = wire.get('bits');
+    const vec = Vector3vl.fromBin(toBinFor3vl(rawValue, bits), bits);
+    const src = wire.get('source');
+    const elem = wire.getSourceElement();
+    if (elem) {
+        // set on the source element: updates ALL fanout wires + port indicators
+        const sigs = Object.assign({}, elem.get('outputSignals'));
+        sigs[src.port] = vec;
+        elem.set('outputSignals', sigs);
+    } else {
+        wire.set('signal', vec);
+    }
+    return true;
+}
+
+function clearValues() {
+    if (!labelIndex || !circuit) { return; }
+    _valueText.clear();
+    _valueCat.clear();
+    for (const wire of Object.values(labelIndex.wires)) {
+        const bits = wire.get('bits');
+        const vec = Vector3vl.xes(bits);
+        const src = wire.get('source');
+        const elem = wire.getSourceElement();
+        if (elem) {
+            const sigs = Object.assign({}, elem.get('outputSignals'));
+            sigs[src.port] = vec;
+            elem.set('outputSignals', sigs);
+        } else {
+            wire.set('signal', vec);
+        }
+    }
+}
+
+// Net names that currently show on-wire value text (≈ last batch's _valueText keys) — the working set
+// for refreshValueText below.
+const _annotatedNets = new Set(); // reused (cleared+refilled) each refresh — no per-batch allocation
+// Per-render index: net name -> the value-bearing views for that net — its wire link(s) plus the
+// element endpoints that show the value (IO boxes, Subcircuit ports). Only NAMED nets carry waveform
+// values, so this lets refreshValueText touch just the annotated nets each marker move instead of
+// walking the whole graph (elements + links). Built once per render; rebuilt by buildNetIndex.
+let _netIndex = new Map();
+function buildNetIndex() {
+    _netIndex = new Map();
+    if (!labelIndex) { return; }
+    for (const l of labelIndex.graph.getLinks()) {
+        const n = l.get('netname');
+        if (!n) { continue; }
+        let e = _netIndex.get(n);
+        if (!e) { e = { links: [], els: new Set() }; _netIndex.set(n, e); }
+        e.links.push(l);
+        const s = l.getSourceElement && l.getSourceElement();
+        const t = l.getTargetElement && l.getTargetElement();
+        if (s) { e.els.add(s); }
+        if (t) { e.els.add(t); }
+    }
+}
+// Re-apply value text from _valueText. The reactive _updateSignal path only runs when a signal
+// actually CHANGES, so a net whose annotated value equals its current signal (e.g. an x value while
+// the load default is also x) would keep stale/blank text. Called once per setValues/clearValues
+// batch so every annotation reflects the current cursor. No-op before the paper has rendered
+// (load-time clear): findViewByModel returns nothing and the first render fills in.
+//
+// A net's on-wire text only depends on _valueText (the rest is the signal, which the reactive path
+// already tracks), so a LINK needs a forced refresh only when its _valueText membership changed this
+// batch — i.e. its net has text now OR had it last batch (the latter must be blanked). Everything else
+// is already correct, so restrict the link sweep (the dominant per-marker cost) to that set instead of
+// every link. Elements (IO / child-instance ports) aren't indexed by net here, so they keep the full
+// sweep — far fewer than links, and most are skipped by the method checks.
+function refreshValueText() {
+    if (!paper || !labelIndex) { return; }
+    // Only named nets carry waveform values, so a view needs the forced refresh only if its net has
+    // value text now (_valueText) or had it last batch (_annotatedNets — now stale, must be blanked).
+    // Touch just those nets' views via _netIndex — O(annotated), not O(whole graph) — instead of
+    // sweeping every element + link each marker move.
+    for (const n of _valueText.keys()) { _annotatedNets.add(n); } // union: nets to refresh now (current ∪ previous)
+    for (const n of _annotatedNets) {
+        const entry = _netIndex.get(n);
+        if (!entry) { continue; }
+        for (const l of entry.links) {
+            const v = paper.findViewByModel(l);
+            if (v && typeof v._updateSignal === 'function') { v._updateSignal(); }
+        }
+        for (const el of entry.els) {
+            const v = paper.findViewByModel(el);
+            if (!v) { continue; }
+            if (typeof v._updateIoValue === 'function') { v._updateIoValue(); }
+            else if (el.get('type') === 'Subcircuit' && typeof v._updatePortSignals === 'function') { v._updatePortSignals(); }
+        }
+    }
+    // Snapshot this batch's annotated nets for next batch's blank-pass — reuse the Set (no allocation).
+    _annotatedNets.clear();
+    for (const n of _valueText.keys()) { _annotatedNets.add(n); }
+}
+
+// Transient flash: briefly pulse the wires of nets that transition AT the current marker (value
+// chain length > 1). Uses the Web Animations API directly on the wire LINE — each call starts a
+// fresh, self-contained animation, so rapid/repeated setValues (debounced marker moves) can't cancel
+// it the way a CSS-class toggle on the next animation frame could. A thickness+brightness pulse,
+// deliberately a different effect from the accent drop-shadow glow used by hover/select.
+// When a LOT of nets transition at once it's a clock edge (≈every sequential net changes) — flashing
+// all of them is both visually useless (the whole sheet blinks) and the dominant per-marker cost
+// (one Web Animation per wire). Above this many changed nets we skip the flash entirely.
+const FLASH_MAX_NETS = 200;
+function flashChanged(nets) {
+    if (!paper || !labelIndex || !nets || nets.size === 0) { return; }
+    for (const l of labelIndex.graph.getLinks()) {
+        if (!nets.has(l.get('netname'))) { continue; }
+        const v = paper.findViewByModel(l);
+        const line = v && v.el.querySelector('.connection');
+        if (!line || typeof line.animate !== 'function') { continue; }
+        if (line.getAnimations) { line.getAnimations().forEach(a => a.cancel()); } // restart, don't stack
+        const cur = getComputedStyle(line).strokeWidth || '2px';
+        line.animate(
+            [{ strokeWidth: '7px', filter: 'brightness(2.2)' }, { strokeWidth: cur, filter: 'none' }],
+            { duration: 600, easing: 'ease-out' },
+        );
+    }
+}
+
+// Yosys uniquifies child module names: slang emits `mod$top.path.inst`, the native
+// frontend emits `$paramod\mod\PARAM=...`. Display (and report) the plain module name.
+// (Keep in sync with the copy in schematic_view.ts — separate bundles.)
+function cleanModuleName(celltype) {
+    if (!celltype) { return celltype; }
+    if (celltype.startsWith('$paramod\\')) {
+        const parts = celltype.split('\\');
+        return parts[1] || celltype;
+    }
+    const i = celltype.indexOf('$');
+    return i > 0 ? celltype.slice(0, i) : celltype;
+}
+
+// Caption a child-instance box as two centered lines ABOVE it:
+//     instance name          (digitaljs's `label`, normally at the bottom)
+//     (module name)          (digitaljs's `type` = celltype, normally the only top line)
+// digitaljs stacks module-on-top / instance-on-bottom; we want instance-on-top with the
+// module under it in parens (slightly smaller/dimmer). Reposition both via refY-from-top and
+// rewrite the module line to the cleaned name in parens. Recurses into subcircuit graphs.
+function cleanSubcircuitCaptions(index) {
+    for (const dev of Object.values(index.devices)) {
+        const celltype = dev.get('celltype');
+        if (!celltype) { continue; }
+        const clean = cleanModuleName(celltype);
+        dev.removeAttr('label/refDy');       // stop measuring the instance name from the bottom
+        dev.attr('label/refY', -24);         // instance name → top line (above the box)
+        dev.attr('type/text', `(${clean})`); // module name → second line, in parens
+        dev.attr('type/refY', -11);          // just below the instance name, still above the box
+        dev.attr('type/font-size', '7pt');
+        dev.attr('type/opacity', 0.7);
+    }
+    for (const sub of Object.values(index.subcircuits)) {
+        cleanSubcircuitCaptions(sub);
+    }
+}
+
+// ---- cross-nav click handlers (Spike 2 source_nav.md) ----
+
+// Hierarchical path of subcircuit instance labels enclosing a model's graph; [] for the
+// top paper. Lets clicks inside child popup windows resolve against the right instance.
+function graphPath(model) {
+    const path = [];
+    let graph = model.graph;
+    while (graph) {
+        const sc = graph.get('subcircuit');
+        if (!sc || sc === true || typeof sc.get !== 'function' || !sc.has('label')) { break; }
+        path.unshift(sc.get('label'));
+        graph = sc.graph;
+    }
+    return path;
+}
+
+// ---- persistent selection highlight ----
+// Left-click latches an accent outline on a wire/port/instance and keeps it until clicked
+// again; multiple stay lit at once, so you can light up a whole propagation path. Click a
+// blank area to clear. Distinct from the transient hover glow. (Cross-nav / actions moved to
+// the right-click menu.)
+const _selected = new Set(); // highlighted cell-view <g> elements
+function toggleSelect(cellView) {
+    const el = cellView.el;
+    if (_selected.has(el)) { el.classList.remove('sv-selected'); _selected.delete(el); }
+    else { el.classList.add('sv-selected'); _selected.add(el); }
+}
+function clearSelection() {
+    for (const el of _selected) { el.classList.remove('sv-selected'); }
+    _selected.clear();
+}
+
+// ---- "rendering…" overlay (heavy schematics) ----
+// Building the Circuit + rendering the initial paper is SYNCHRONOUS and blocks the UI thread, then the
+// layout is applied asynchronously. On a large netlist that's seconds of a frozen/half-laid-out canvas
+// with no feedback (elaboration already has its progress notification). Show an overlay until rendering
+// goes quiet. Gate on the displayed graph's connector count (≈ nets): below it a render is a frame or
+// two, so skip the overlay (and its flash) and build synchronously.
+const RENDER_OVERLAY_MIN_CONNECTORS = 1000;
+const RENDER_OVERLAY_SHOW_DELAY = 120; // wait this long after renderStart before showing — a fast render finishes first, no flash
+let _renderOverlay = null;
+let _overlayTimer = null;
+let _settleTimer = null;
+let _pendingShowTimer = null;
+// extension 'renderStart': a render is starting. Arm the overlay to appear after a short delay — this
+// covers the EXTENSION's elaboration/extraction AND the webview's deserialize of the (possibly huge)
+// loadSchematic, both of which precede loadSchematic's own logic. A render that finishes before the
+// delay (small scope) never shows it. Cancelled by loadSchematic (which takes over) or renderAbort.
+function scheduleRenderOverlay() {
+    clearTimeout(_pendingShowTimer);
+    _pendingShowTimer = setTimeout(showRenderOverlay, RENDER_OVERLAY_SHOW_DELAY);
+}
+function showRenderOverlay() {
+    if (!_renderOverlay) {
+        _renderOverlay = document.createElement('div');
+        _renderOverlay.id = 'sv-render-overlay';
+        _renderOverlay.innerHTML = '<div class="sv-ro-box"><div class="sv-ro-spinner"></div>'
+            + '<div class="sv-ro-text">Rendering schematic…</div>'
+            + '<div class="sv-ro-sub"></div></div>';
+    }
+    // Clear any size left from the PREVIOUS render — renderStart shows the overlay before this render's
+    // circuit (and its size) is known, so a stale number would otherwise flash until loadSchematic.
+    const sub = _renderOverlay.querySelector('.sv-ro-sub');
+    if (sub) { sub.textContent = ''; }
+    if (!_renderOverlay.isConnected) { (document.getElementById('paper-container') || document.body).appendChild(_renderOverlay); }
+    _renderOverlay.style.display = 'flex';
+    clearTimeout(_overlayTimer);
+    _overlayTimer = setTimeout(hideRenderOverlay, 30000); // safety: never leave it stuck
+}
+// Render workload = what ELK actually lays out: every device is a box, every connector a wire SEGMENT
+// (a fan-out net is several). This — not the deduped "distinct nets" of the final status — is what the
+// render time scales with, so it's what we show while the user waits. Different wording ("wires/boxes"
+// vs "nets/devices") keeps it from looking like it contradicts the final logical count.
+function rawSize(circuit) {
+    const boxes = circuit && circuit.devices ? Object.keys(circuit.devices).length : 0;
+    const wires = circuit && circuit.connectors ? circuit.connectors.length : 0;
+    return { boxes, wires };
+}
+function rawText(s) { return `${s.wires} wires · ${s.boxes} boxes`; }
+// Whole-hierarchy size: `new Circuit` eagerly builds the top graph AND every subcircuit graph, so the
+// build's real input is this, not the top-only rawSize (the displayed top can be tiny while the
+// hierarchy underneath is huge — that's why a 77-device top can take minutes to build).
+function totalSize(circuit) {
+    let boxes = 0, wires = 0, subs = 0;
+    const add = (g) => { if (!g) { return; } boxes += g.devices ? Object.keys(g.devices).length : 0; wires += g.connectors ? g.connectors.length : 0; };
+    add(circuit);
+    const sc = circuit && circuit.subcircuits;
+    if (sc) { for (const k in sc) { subs++; add(sc[k]); } }
+    return { boxes, wires, subs };
+}
+// Per-render timing: log build / render(displayOn) / ELK layout / reposition + total, with each
+// stage's input size, to the extension's "sv-pathfinder" output channel. Fired once the layout has
+// settled (debounced off render:done + position changes), so it captures the async ELK + reposition.
+function scheduleTimingFinalize() {
+    if (!_phase || _phase.logged) { return; }
+    clearTimeout(_phase.finalizeTimer);
+    _phase.finalizeTimer = setTimeout(finalizeTiming, 450);
+}
+function finalizeTiming() {
+    const p = _phase;
+    if (!p || p.logged) { return; }
+    p.logged = true;
+    const r = Math.round;
+    const now = performance.now();
+    const elkDone = p.elkDoneAt !== null ? p.elkDoneAt : p.afterDisplayOn;
+    const reposition = Math.max(0, now - (elkDone !== null ? elkDone : p.t0));
+    const total = now - p.t0;
+    const elkPart = p.cached ? 'ELK skipped (cached layout)'
+        : p.elk !== null ? `ELK layout ${r(p.elk)}ms (${p.elkNodes} nodes/${p.elkEdges} edges)`
+            : 'ELK layout 0ms';
+    const line = `${p.scope} [${p.shallow ? 'shallow' : 'full'}]: `
+        + `build ${r(p.build)}ms (${p.total.boxes} dev/${p.total.wires} conn across ${p.total.subs} subcircuits) · `
+        + `render ${r(p.render)}ms (${p.raw.boxes} boxes/${p.raw.wires} wires) · ${elkPart} · `
+        + `reposition ${r(reposition)}ms (${p.raw.boxes} boxes) · total ${r(total)}ms`;
+    post({ type: 'schematicLog', text: line });
+}
+function setRenderOverlaySize(size) {
+    const sub = _renderOverlay && _renderOverlay.querySelector('.sv-ro-sub');
+    if (sub) { sub.textContent = rawText(size); }
+}
+function hideRenderOverlay() {
+    clearTimeout(_overlayTimer);
+    clearTimeout(_settleTimer);
+    clearTimeout(_pendingShowTimer);
+    if (_renderOverlay) { _renderOverlay.style.display = 'none'; }
+}
+// Hide once the schematic has been QUIET (no render pass, no layout move) for a beat — robust whether
+// or not ELK runs and however many render passes the layout takes. No-op when no overlay is showing,
+// so it's free to call from the render/position hooks on every (incl. light) render.
+function scheduleOverlayHide() {
+    if (!_renderOverlay || _renderOverlay.style.display === 'none') { return; }
+    clearTimeout(_settleTimer);
+    _settleTimer = setTimeout(hideRenderOverlay, 350);
+}
+
+// ---- finished-layout cache ----
+// ELK layout is the slow part of a render and the extension already caches the elaboration, so the only
+// thing recomputed on back-and-forth navigation is the layout. Cache the finished positions per scope
+// (keyed by the extension's layoutKey + spacing) and reapply them on revisit: digitaljs skips ELK
+// entirely when devices carry a `position` (it sets graph 'laid_out'), so a revisit just re-renders.
+const LAYOUT_CACHE_MAX = 6;            // LRU bound — a laid-out scope is positions only, but cap memory
+const _layoutCache = new Map();        // layoutKey -> { positions: {id:{x,y}}, vertices: {connKey:[...] } }
+let _currentLayoutKey = null;          // key of the scope currently shown (capture target)
+let _captureTimer = null;
+const _connKey = (e) => `${e.id} ${e.port ?? ''}`;
+
+// Inject a cached layout onto the (sanitized) circuit so the build skips ELK. Only when EVERY current
+// device has a cached position — a partial match (content changed) would set 'laid_out' with some cells
+// stuck at the origin, so fall back to a fresh layout instead.
+function applyCachedLayout(circuit, cached) {
+    const devs = (circuit && circuit.devices) || {};
+    const ids = Object.keys(devs);
+    if (!ids.length || !ids.every(id => cached.positions[id])) { return false; }
+    for (const id of ids) { devs[id].position = { ...cached.positions[id] }; }
+    for (const conn of circuit.connectors || []) {
+        if (!conn.from || !conn.to) { continue; }
+        const v = cached.vertices[`${_connKey(conn.from)} ${_connKey(conn.to)}`];
+        if (v) { conn.vertices = v; }
+    }
+    return true;
+}
+// Snapshot the current (settled) top-graph layout under `key`. Positions + ELK-routed wire vertices.
+function captureLayout(key) {
+    if (!key || !labelIndex || !labelIndex.graph) { return; }
+    const positions = {};
+    for (const el of labelIndex.graph.getElements()) { const p = el.position(); positions[el.id] = { x: p.x, y: p.y }; }
+    const vertices = {};
+    for (const l of labelIndex.graph.getLinks()) {
+        const s = l.get('source'), t = l.get('target'), v = l.get('vertices');
+        if (s && t && v && v.length) { vertices[`${_connKey(s)} ${_connKey(t)}`] = v; }
+    }
+    _layoutCache.delete(key);                            // re-insert at the end (LRU touch)
+    _layoutCache.set(key, { positions, vertices });
+    while (_layoutCache.size > LAYOUT_CACHE_MAX) { _layoutCache.delete(_layoutCache.keys().next().value); }
+}
+// Capture once the layout has been quiet for a beat. Armed at build end and pushed back by ELK's
+// change:position, so it snapshots the FINAL positions. Skips if we've since navigated away.
+function scheduleLayoutCapture(key) {
+    if (!key) { return; }
+    clearTimeout(_captureTimer);
+    _captureTimer = setTimeout(() => { if (_currentLayoutKey === key) { captureLayout(key); } }, 450);
+}
+
+// ---- schematic load ----
+function loadSchematic(msg) {
+    clearTimeout(_pendingShowTimer); // the render arrived; renderStart's delayed-show decision is made here
+    // Heavy → keep the overlay up (already showing from renderStart, or this scope is big) and yield a
+    // frame so it paints BEFORE the blocking build; light → build synchronously (no overlay flash). The
+    // overlay then hides when rendering goes quiet.
+    // raw connector (segment) count gates the overlay — it tracks render cost (ELK lays out every
+    // segment), unlike the deduped net count shown to the user.
+    const conns = (msg.circuit && msg.circuit.connectors && msg.circuit.connectors.length) || 0;
+    const overlayUp = !!_renderOverlay && _renderOverlay.style.display !== 'none';
+    if (overlayUp || conns > RENDER_OVERLAY_MIN_CONNECTORS) {
+        showRenderOverlay();
+        setRenderOverlaySize(rawSize(msg.circuit)); // raw layout workload (what the render time scales with)
+        // Yield ~2 frames so the overlay paints BEFORE the blocking build. A timer (not rAF, which can
+        // stall on an idle page) reliably runs the build even when no paint is scheduled.
+        setTimeout(() => buildSchematic(msg), 30);
+    } else {
+        buildSchematic(msg);
+    }
+}
+function buildSchematic(msg) {
+    if (_phase) { clearTimeout(_phase.finalizeTimer); } // drop a previous render's pending timing log
+    _phase = { t0: performance.now(), raw: rawSize(msg.circuit), total: totalSize(msg.circuit), shallow: !!msg.shallow, scope: `${msg.scopePath} (${msg.moduleName})`, logged: false, elkStart: null, elk: null, elkDoneAt: null, afterDisplayOn: null };
+    if (circuit) {
+        try { circuit.shutdown(); } catch (e) { /* ignore */ } // closes any open popups
+        circuit = null;
+        paper = null;
+        labelIndex = null;
+    }
+    _openSubKeys.clear();      // popups from the previous schematic are gone
+    _openSubDialogs.clear();
+    _subTitles.clear();
+    _pendingExpand.clear();    // shallow-expand state belongs to the previous render
+    for (const t of _expandedTemp.values()) { try { t.shutdown(); } catch (e) { /* ignore */ } }
+    _expandedTemp.clear();
+    clearTaskbar();            // popup tabs from the previous render
+    clearSelection();          // highlights belong to the previous render
+    currentScopePath = msg.scopePath; // root for popup hierarchical titles
+    currentMainName = msg.moduleName;
+    currentBackend = msg.backend || '';
+    currentShallow = !!msg.shallow;
+    updateBackendBadge(!!msg.limited, currentBackend);
+    if (_mainTab) { _mainTab.querySelector('.sv-tab-name').textContent = currentMainName; }
+    spacing = SPACING[msg.spacing] || SPACING.compact; // density tier for this render (read by the patches below)
+    _wireLabelDims.clear();    // net-label sizes are re-recorded as this design's wires build (at current tier)
+    document.getElementById('breadcrumb').textContent = `${msg.scopePath}  (${msg.moduleName})`;
+    document.getElementById('go-parent').disabled = !msg.hasParent;
+    overviewMode = msg.overview === 'minimap' ? 'minimap' : 'scrollbars'; // main-paper overview
+    applyWireValuePalette(); // theme-aware value colors (re-read each load to track theme)
+    // During layout, show the raw workload (matches the overlay); the final status below switches to
+    // the logical "distinct nets" once the built graph is available.
+    setStatus('laying out schematic… ' + rawText(rawSize(msg.circuit)));
+    const container = document.getElementById('paper-container');
+    // Reset the paper (and any stale minimap/scrollbars) but KEEP a render overlay showRenderOverlay
+    // appended here — innerHTML='' would wipe it mid-render, leaving the heavy build with no feedback.
+    for (const c of [...container.children]) { if (c.id !== 'sv-render-overlay') { c.remove(); } }
+    const freshPaper = document.createElement('div');
+    freshPaper.id = 'paper';
+    container.prepend(freshPaper);
+
+    // Guard digitaljs against a malformed netlist (drop connectors with a missing endpoint) so one
+    // bad wire can't abort the whole render; warn — with the backend — when any are dropped, since
+    // it usually means the wrong yosys produced the JSON.
+    const droppedConns = sanitizeCircuit(msg.circuit);
+
+    // Reuse a cached finished layout for this scope (skips ELK). `freshLayout` (Refresh) re-elaborated,
+    // so its content may differ → don't reuse a stale layout; let it re-lay-out and re-capture below.
+    _currentLayoutKey = msg.layoutKey ? `${msg.layoutKey}|${msg.spacing || ''}` : null;
+    let usedCachedLayout = false;
+    if (_currentLayoutKey && !msg.freshLayout && _layoutCache.has(_currentLayoutKey)) {
+        const cached = _layoutCache.get(_currentLayoutKey);
+        if (applyCachedLayout(msg.circuit, cached)) {
+            _layoutCache.delete(_currentLayoutKey); _layoutCache.set(_currentLayoutKey, cached); // LRU touch
+            usedCachedLayout = true;
+        }
+    }
+    window.__layoutCacheHit = usedCachedLayout; // test/debug hook
+    _phase.cached = usedCachedLayout; // cached layout → ELK is skipped (reflected in the timing log)
+    if (droppedConns > 0) {
+        const be = currentBackend ? ` — backend: ${currentBackend}` : '';
+        console.warn(`sv-pathfinder schematic: dropped ${droppedConns} malformed connector(s)${be}`);
+    }
+
+    // default windowCallback uses jquery-ui dialogs (fine inside the webview); wrap it to give
+    // the popup a breadcrumb-style title (full hier path + module, set in openSubcircuit) and
+    // to blur the auto-focused zoom button so it doesn't open with a focus ring.
+    const _tBuild = performance.now();
+    circuit = new Circuit(msg.circuit, {
+        layoutEngine: 'elkjs',
+        windowCallback: function (type, div, closingCallback) {
+            // raw title (= celltype + ' ' + label) is the per-instance key
+            const key = div.attr('title') || '';
+            if (key) {
+                div.attr('title', _subTitles.get(key) || key.split(' ').map(cleanModuleName).join(' '));
+                _openSubDialogs.set(key, div);
+            }
+            const wrappedClose = () => {
+                _openSubKeys.delete(key);
+                _openSubDialogs.delete(key);
+                removeTaskbarTab(key);
+                closingCallback();
+            };
+            Circuit.prototype._defaultWindowCallback.call(this, type, div, wrappedClose);
+            constrainDialog(div); // keep it within the canvas, off the status bar
+            addZoomTooltips(div); // tooltips on the – / + zoom buttons
+            addPopupExport(div);  // per-popup export (⤓) button
+            // a taskbar tab (switch between many popups) + a titlebar minimize button
+            if (key) { addTaskbarTab(key); addMinimizeButton(div, key); }
+            // jquery-ui autofocuses the first button (the zoom "−"), showing a focus ring on
+            // open; drop it so the toolbar reads neutral until the user actually clicks.
+            setTimeout(() => { const a = document.activeElement; if (a && typeof a.blur === 'function') { a.blur(); } }, 0);
+        },
+    });
+    // 'new:paper' fires for the main paper AND each subcircuit popup paper — bind click,
+    // hover, and navigation (wheel zoom/pan + drag pan) on all of them so popup windows
+    // behave like the main canvas. (Registered before displayOn.)
+    circuit.on('new:paper', (p) => {
+        p.options.interactive = READONLY; // new views inherit it (see READONLY below)
+        p.on('cell:pointerclick', (cellView) => toggleSelect(cellView)); // latch highlight
+        p.on('cell:pointerdblclick', (cellView) => gotoSourceFor(cellView)); // dbl-click → go to source
+        p.on('blank:pointerclick', () => clearSelection());              // click empty → clear
+        bindHover(p);
+        bindContextMenu(p);
+        attachNav(p);
+        // After the paper unfreezes: lock all editing on every view, and learn this env's
+        // per-char width once (so later layouts size exactly). We deliberately do NOT use
+        // digitaljs's fixed() — that adds a `fixed` class whose `.joint-link{pointer-events:
+        // none}` would swallow our click-to-highlight and right-click on wires. Instead we
+        // turn off the editing interactions (move/link/vertex) but keep pointer events, and
+        // neutralize the move/crosshair cursors in CSS.
+        p.once('render:done', () => { p.setInteractivity(READONLY); calibrateCharPx(p); });
+        // ELK positions cells asynchronously; drop the cached content bbox while it changes
+        // so clamping/overviews recompute from the final layout, not a pre-layout box.
+        watchAreaInvalidation(p.model);
+        if (document.getElementById('paper-container').contains(p.el)) {
+            setupMainPaper(p);          // main: minimap or scrollbars per setting
+        } else {
+            setupPopupPaper(p);         // subcircuit popup: fixed window + scrollbars
+            // Expand puts up the "rendering" overlay; drop it once the popup's own layout settles.
+            p.on('render:done', scheduleOverlayHide);
+            p.model.on('change:position change:vertices', scheduleOverlayHide);
+        }
+    });
+    _phase.build = performance.now() - _tBuild;
+    const _tRender = performance.now();
+    paper = circuit.displayOn(paperDiv());
+    _phase.render = performance.now() - _tRender;
+    _phase.afterDisplayOn = performance.now(); // reposition (render B) is timed from here / ELK-done
+    labelIndex = circuit.getLabelIndex();
+    cleanSubcircuitCaptions(labelIndex);
+    buildNetIndex(); // net -> value-bearing views, for O(annotated) refreshValueText (used by clearValues below)
+    // Reset every net to x up front. digitaljs seeds single-bit nets to 0 (defined low), so
+    // without a waveform the schematic would otherwise show red "0" wires everywhere. Start from
+    // "unknown" instead: x => no value text + neutral wire, until VaporView pushes real values.
+    clearValues();
+    // never start the engine — external values only
+    // ELK runs asynchronously AFTER displayOn returns and applies all cell positions in
+    // one batch when done. Fit once after that batch settles, then DISARM — fitting on
+    // every render:done oscillates the viewport on mouse hover (hover artifacts trigger
+    // render passes, and the fit itself triggers another render: feedback loop).
+    autoFit = true;
+    paper.once('render:done', () => { if (autoFit) { fitToView(); } });
+    paper.on('render:done', () => { scheduleOverlayHide(); scheduleTimingFinalize(); }); // hide overlay + log timing once render passes go quiet
+    labelIndex.graph.on('change:position change:vertices', () => {
+        scheduleOverlayHide();                      // layout still moving (ELK) → keep the overlay up
+        scheduleTimingFinalize();                   // log per-phase timing once it settles
+        scheduleLayoutCapture(_currentLayoutKey);   // snapshot the FINAL positions once ELK settles
+        if (!autoFit) { return; }
+        clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => {
+            if (autoFit) {
+                fitToView();
+                autoFit = false;
+            }
+        }, 300);
+    });
+
+    // Total nets = distinct DRIVEN signals (named + unnamed internal nets). digitaljs links are
+    // point-to-point segments — a fan-out net is several links — so dedupe by driver endpoint (a net
+    // has exactly one driver) rather than counting links, keeping it comparable to the named-net count
+    // (a subset). One pass over the already-built top graph; negligible (we iterate links elsewhere too).
+    const drivenNets = new Set();
+    for (const link of labelIndex.graph.getLinks()) {
+        const src = link.get('source');
+        if (src && src.id) { drivenNets.add(src.id + ' ' + (src.port ?? '')); }
+    }
+    setStatus(`${drivenNets.size} distinct nets (${Object.keys(labelIndex.wires).length} named), ` +
+              `${Object.keys(labelIndex.devices).length} devices`);
+
+    // debug/test handle (also used by the headless webview test)
+    window.__schematic = { circuit, paper, labelIndex, fit: fitToView };
+
+    // The synchronous build + initial render is done here (the overlay covered it). Arm the hide; it
+    // fires after a quiet beat, and any async ELK reflow (render:done / change:position above) pushes it
+    // back until the layout settles. No-op when no overlay is up (light renders).
+    scheduleOverlayHide();
+    // Arm a layout capture (a guaranteed trigger even when ELK never fires change:position); the
+    // change:position hook pushes it back until ELK settles. Skip it when we reused a cached layout.
+    if (!usedCachedLayout) { scheduleLayoutCapture(_currentLayoutKey); }
+}
+
+let baseStatus = ''; // persistent status (load / value count); hover overlays it transiently
+function setStatus(text) {
+    baseStatus = text;
+    document.getElementById('status-text').textContent = text;
+}
+
+// Persistent "limited engine" badge in the status bar when the schematic was produced by the limited
+// (yowasp) fallback — so an incomplete render is recognizably the fallback's doing, not a bug.
+function updateBackendBadge(limited, backendName) {
+    let badge = document.getElementById('sv-backend-badge');
+    if (!limited) { if (badge) { badge.remove(); } return; }
+    if (!badge) {
+        badge = document.createElement('span');
+        badge.id = 'sv-backend-badge';
+        badge.className = 'sv-backend-badge';
+        const status = document.getElementById('status');
+        status.insertBefore(badge, document.getElementById('status-text'));
+    }
+    badge.innerHTML = '<i class="codicon codicon-warning"></i> limited engine';
+    badge.title = `Schematic rendered with ${backendName || 'yowasp-yosys'} — a limited fallback with `
+        + 'major SystemVerilog gaps. Install OSS CAD Suite and set sv-pathfinder.ossCadSuitePath for full support.';
+}
+
+// One-line identity of a hovered model, shown in the status bar.
+function describe(model) {
+    if (typeof model.isLink === 'function' && model.isLink()) {
+        const name = model.get('netname');
+        const bits = model.get('bits') || 1;
+        return name ? `net: ${name} [${bits} bit${bits > 1 ? 's' : ''}]` : `net [${bits} bit${bits > 1 ? 's' : ''}]`;
+    }
+    const celltype = model.get('celltype');
+    if (celltype) { return `instance: ${model.get('label')} (${cleanModuleName(celltype)})`; }
+    const type = model.get('type');
+    if (type === 'Input' || type === 'Output') { return `port: ${model.get('net')} (${type.toLowerCase()})`; }
+    return `${type}: ${model.get('label') || ''}`.trim();
+}
+
+// A Constant device's value is intrinsic — the sim engine is off (external values only), so it's
+// never propagated onto wires. digitaljs holds the raw bits in 'constant' and caches a Vector3vl in
+// 'constantCache'. These let hover surface a constant's value (and a net a constant drives).
+function constantSig(model) {
+    return model && model.get('type') === 'Constant' ? model.get('constantCache') : undefined;
+}
+// The Constant device driving a wire (its source endpoint), if any.
+function wireConstantSig(link) {
+    const src = link.graph && link.get('source');
+    return src ? constantSig(link.graph.getCell(src.id)) : undefined;
+}
+
+// ---- rich hover tooltip (theme-aware; replaces digitaljs's bus-only Hex/Dec/Oct/Bin box) ----
+// Rows describing the hovered model: a bold header (the name/identity) + key/value detail lines.
+// Covers every net/bus/port/instance/gate so a user on a zoomed-out schematic can read name + type
+// + value without zooming in.
+function tipRows(model) {
+    const rows = [];
+    if (typeof model.isLink === 'function' && model.isLink()) {       // a wire / bus
+        const name = model.get('netname');
+        const bits = model.get('bits') || 1;
+        rows.push({ v: name || '(unnamed net)', header: true });
+        rows.push({ k: 'type', v: bits > 1 ? `bus [${bits - 1}:0]` : 'net (1 bit)' });
+        valueRows(model, name, bits).forEach(r => rows.push(r));
+        return rows;
+    }
+    const celltype = model.get('celltype');
+    const type = model.get('type');
+    if (celltype) {                                                   // a child-instance box
+        rows.push({ v: model.get('label') || '(instance)', header: true });
+        rows.push({ k: 'module', v: cleanModuleName(celltype) });
+    } else if (type === 'Input' || type === 'Output') {              // a boundary IO port
+        const net = model.get('net'), bits = model.get('bits') || 1;
+        rows.push({ v: net || '(port)', header: true });
+        rows.push({ k: 'type', v: model.get('bidir') ? 'inout' : type.toLowerCase() });
+        if (bits > 1) { rows.push({ k: 'width', v: `[${bits - 1}:0]` }); }
+        valueRows(model, net, bits).forEach(r => rows.push(r));
+    } else if (type === 'Constant') {                                 // a literal / tie-off constant
+        rows.push({ v: 'constant', header: true });
+        constValueRows(model).forEach(r => rows.push(r));
+    } else {                                                          // a gate / primitive
+        rows.push({ v: type || 'cell', header: true });
+        const label = model.get('label');
+        if (label && !String(label).startsWith('$')) { rows.push({ k: 'name', v: label }); }
+    }
+    return rows;
+}
+// Value rows for a Constant device — intrinsic, so no waveform needed. Canonical Vector3vl bits:
+// binary (0b) when narrow, hex (0x) when wide, plus a decimal row; fall back to the raw bits when
+// they include x/z (e.g. a 'z' tie-off), which formatSig would otherwise blank out.
+function constValueRows(model) {
+    const sig = model.get('constantCache');
+    const bin = (sig && typeof sig.toBin === 'function') ? sig.toBin() : String(model.get('constant') || '');
+    if (!bin) { return []; }
+    const defined = /^[01]+$/.test(bin), wide = bin.length > 4;
+    const rows = [{ k: 'value', v: !defined ? bin : (wide ? '0x' + BigInt('0b' + bin).toString(16) : '0b' + bin) }];
+    if (defined && bin.length > 1) { rows.push({ k: 'dec', v: BigInt('0b' + bin).toString() }); }
+    if (defined && wide) { rows.push({ k: 'bin', v: '0b' + bin }); }
+    return rows;
+}
+// Value detail rows: the cursor value (x/z-aware display), plus dec/bin for a fully-defined bus.
+function valueRows(model, name, bits) {
+    let sig = model.get('signal');
+    if (!sig) { const outs = model.get('outputSignals'); if (outs) { sig = Object.values(outs)[0]; } }
+    let disp = name ? valueText(name, sig) : (currentValue(model) ?? '');
+    // No live value (all-x ⇒ no waveform — clearValues seeds every net to x) but a Constant DRIVES this
+    // wire: show its static value (the sim engine is off, so the constant is never propagated onto it).
+    if (!disp && typeof model.isLink === 'function' && model.isLink()) { disp = formatSig(wireConstantSig(model)); }
+    if (!disp) { return [{ k: 'value', v: '— (no waveform)' }]; }
+    const rows = [{ k: 'value', v: disp }];
+    const m = /^0x([0-9a-f]+)$/i.exec(disp); // a single, fully-defined bus value → add radices
+    if (bits > 1 && m) {
+        const n = BigInt('0x' + m[1]);
+        rows.push({ k: 'dec', v: n.toString() });
+        rows.push({ k: 'bin', v: '0b' + n.toString(2).padStart(bits, '0') });
+    }
+    return rows;
+}
+let _tip = null;
+function hideTip() { if (_tip) { _tip.style.display = 'none'; } }
+function showTip(model, clientX, clientY) {
+    const rows = tipRows(model);
+    if (!rows.length) { hideTip(); return; }
+    if (!_tip) { _tip = document.createElement('div'); _tip.id = 'sv-tooltip'; document.body.appendChild(_tip); }
+    _tip.innerHTML = '';
+    for (const r of rows) {
+        const el = document.createElement('div');
+        if (r.header) { el.className = 'sv-tip-header'; el.textContent = r.v; }
+        else {
+            el.className = 'sv-tip-row';
+            const k = document.createElement('span'); k.className = 'sv-tip-k'; k.textContent = r.k;
+            const v = document.createElement('span'); v.className = 'sv-tip-v'; v.textContent = r.v;
+            el.append(k, v);
+        }
+        _tip.appendChild(el);
+    }
+    _tip.style.display = 'block';
+    const tw = _tip.offsetWidth, th = _tip.offsetHeight;
+    let px = clientX + 14, py = clientY + 14;
+    if (px + tw > window.innerWidth) { px = clientX - tw - 14; }
+    if (py + th > window.innerHeight) { py = clientY - th - 14; }
+    _tip.style.left = Math.max(4, px) + 'px';
+    _tip.style.top = Math.max(4, py) + 'px';
+}
+
+// Hover: glow the element/wire in the accent color (CSS drop-shadow on the cell's <g>), name it in
+// the status bar, and show the rich tooltip. A class toggle avoids fighting the wire value colors
+// and any duplicate-JointJS-instance issues with the highlighter API. Bound per paper (main +
+// popups). Child instances get the tooltip but no accent glow (the user drills in via right-click).
+let hovered = null;
+function bindHover(p) {
+    p.on('cell:mouseenter', (cv, evt) => {
+        if (!cv.model.get('celltype')) {
+            if (hovered) { hovered.classList.remove('sv-hover'); }
+            hovered = cv.el;
+            hovered.classList.add('sv-hover');
+        }
+        document.getElementById('status-text').textContent = describe(cv.model);
+        showTip(cv.model, evt ? evt.clientX : 0, evt ? evt.clientY : 0);
+    });
+    p.on('cell:mouseleave', (cv) => {
+        cv.el.classList.remove('sv-hover');
+        if (hovered === cv.el) { hovered = null; }
+        document.getElementById('status-text').textContent = baseStatus;
+        hideTip();
+    });
+    p.on('blank:pointerdown cell:pointerdown', () => hideTip()); // don't linger during pan/click
+}
+
+// ---- right-click context menu ----
+// One floating menu (appended to <body> so it works over the main paper AND popup dialogs).
+// Items are filtered to what applies to the clicked element. "Expand" opens the child popup
+// in-webview; every other action posts a contextAction to the extension (which reuses the
+// existing tree commands). Left-click stays separate (cross-nav / highlight).
+function elementInfo(model) {
+    const isLink = typeof model.isLink === 'function' && model.isLink();
+    const celltype = model.get('celltype');
+    const type = model.get('type');
+    return {
+        model, isLink, celltype,
+        isSub: !!celltype,
+        isIO: type === 'Input' || type === 'Output',
+        kind: isLink ? 'wire' : (celltype ? 'subcircuit' : 'device'),
+        leafName: isLink ? model.get('netname') : (model.get('label') || model.get('net')),
+        sourcePositions: model.get('source_positions') || [],
+    };
+}
+// A "real" (user) RTL name resolves in the design tree; Yosys names synthesized/internal
+// objects with a leading '$' ($procmux…, $driver…, $0\…) — those have no RTL source, so a
+// leaf-name lookup can't resolve them.
+function realName(i) { return !!i.leafName && !String(i.leafName).startsWith('$'); }
+// A net = a wire or a boundary IO port. For these, "go to source" and "go to definition" resolve to
+// the same declaration, so we offer only "go to definition" (whose tree reveal works).
+function isNet(i) { return i.kind === 'wire' || i.isIO; }
+// "Go to source" can resolve a location iff: the element carries precise Yosys source
+// positions, OR it's a child instance (→ its module's source), OR it has a real name (→ the
+// design tree). Otherwise navigation would silently do nothing, so don't offer it.
+function sourceNavigable(i) { return (i.sourcePositions && i.sourcePositions.length > 0) || i.isSub || realName(i); }
+// Format a Vector3vl signal for display: '' when there's no real value (no waveform → all-x),
+// else binary for narrow nets and 0x-hex for wider ones. Shared by the per-port value
+// annotation (iovalue text) and the context-menu "Copy value".
+function formatSig(sig) {
+    if (!sig || typeof sig.toBin !== 'function') { return ''; }
+    const bin = sig.toBin();
+    if (/^x+$/i.test(bin)) { return ''; } // unannotated / released-to-x
+    return (typeof sig.toHex === 'function' && bin.length > 4) ? '0x' + sig.toHex() : bin;
+}
+// One element of a value chain, formatted HONESTLY and x/z-aware (Vector3vl can't represent z, so we
+// format the RAW string per nibble). Narrow nets show the raw bits ('x', 'z', '10x'); wide nets show
+// hex with a nibble containing any x as 'x' and any z as 'z' ('xx'/'ax', 'zz'/'az') — and only a
+// fully-defined wide value gets the 0x prefix, so an x/z-bearing value reads visibly different from a
+// real hex. (formatSig still blanks all-x for the no-waveform fallback.)
+function fmtToken(raw, bits) {
+    let s = String(raw).toLowerCase().replace(/[^01xz]/g, 'x');
+    if (s.length < bits) { s = s.padStart(bits, '0'); } else if (s.length > bits) { s = s.slice(-bits); }
+    if (s.length <= 4) { return s; }
+    const padded = s.padStart(Math.ceil(s.length / 4) * 4, '0');
+    let out = '', defined = true;
+    for (let i = 0; i < padded.length; i += 4) {
+        const nib = padded.slice(i, i + 4);
+        if (nib.includes('x')) { out += 'x'; defined = false; }
+        else if (nib.includes('z')) { out += 'z'; defined = false; }
+        else { out += parseInt(nib, 2).toString(16); }
+    }
+    return defined ? '0x' + out : out;
+}
+// Display string for a net's value array AT the cursor: one value, `old→new` on a transition, or
+// the whole `v0→…→final` chain for a glitch (every element kept). Built only for ANNOTATED nets, so
+// an x value here is shown honestly — the "no waveform" blank comes from the valueText fallback.
+function chainDisplay(values, bits) {
+    if (!values || values.length === 0) { return ''; }
+    return values.map(v => fmtToken(v, bits)).join('→');
+}
+// Display string per net, built once from its value array in the setValues handler (keyed by the
+// leaf net name VaporView uses). The reactive views read this. A net WITH a value (even x) shows it;
+// a net with no entry (no waveform / not traced) falls back to formatSig → blank — that's the
+// difference between "value is x" and "no value loaded".
+const _valueText = new Map();
+function valueText(netname, sig) {
+    if (netname && _valueText.has(netname)) { return _valueText.get(netname); }
+    return formatSig(sig);
+}
+// Current annotated value as a copyable string, or undefined when there's no real value
+// (no waveform loaded → all-x). Wires carry the signal; an IO/gate's value is on its output.
+function currentValue(model) {
+    let sig = model.get('signal');
+    if (!sig) { const outs = model.get('outputSignals'); if (outs) { sig = Object.values(outs)[0]; } }
+    let s = formatSig(sig);
+    if (!s) { s = formatSig(constantSig(model)); } // Constant device: intrinsic value (engine off → output reads x)
+    return s === '' ? undefined : s;
+}
+const CTX_ITEMS = [
+    { label: 'Step into', applies: (i) => i.isSub, action: 'stepInto' }, // navigate the MAIN page into the child
+    { label: 'Expand', applies: (i) => i.isSub, expand: true },          // open the child in a popup
+    // For a NET (wire/IO) with a resolvable definition, "go to source" duplicates "go to definition"
+    // — keep only the latter. Still offer source nav for a net that has ONLY source positions (e.g. a
+    // $-named net), and for gates/instances where the two genuinely differ.
+    { label: 'Go to source', applies: (i) => sourceNavigable(i) && !(isNet(i) && realName(i)), action: 'gotoSource' },
+    { label: 'Go to definition', applies: (i) => i.isSub || realName(i), action: 'gotoDefinition' },
+    { sep: true },
+    { label: 'Copy name', applies: (i) => !!i.leafName, action: 'copyName' },
+    { label: 'Copy value', applies: (i) => currentValue(i.model) !== undefined, action: 'copyValue' },
+    { label: 'Show in waveform', applies: (i) => i.isSub || realName(i), action: 'addToWaveform' },
+];
+// The primary "go to source" navigation for an item, shared by the context menu and double-click:
+// prefer the explicit source position ("Go to source" — instances → their instantiation, gates,
+// $-named nets) and fall back to "Go to definition" for named nets/ports (where the two coincide,
+// so only the latter is offered).
+const NAV_ACTIONS = new Set(['gotoSource', 'gotoDefinition']);
+function primaryNavItem(info) {
+    return CTX_ITEMS.find((it) => it.action && NAV_ACTIONS.has(it.action) && it.applies(info));
+}
+// Double-click a net/port/instance/gate → jump to its source (same payload the context menu sends).
+function gotoSourceFor(cellView) {
+    const info = elementInfo(cellView.model);
+    const item = primaryNavItem(info);
+    if (!item) { return; }
+    hideContextMenu();
+    post({
+        type: 'contextAction', action: item.action, kind: info.kind,
+        leafName: info.leafName, celltype: info.celltype, path: graphPath(info.model),
+        sourcePositions: info.model.get('source_positions') || [],
+    });
+}
+let _ctxMenu = null;
+function hideContextMenu() { if (_ctxMenu) { _ctxMenu.style.display = 'none'; } }
+function showContextMenu(cellView, clientX, clientY) {
+    if (!_ctxMenu) { _ctxMenu = document.createElement('div'); _ctxMenu.id = 'sv-ctxmenu'; document.body.appendChild(_ctxMenu); }
+    const info = elementInfo(cellView.model);
+    _ctxMenu.innerHTML = '';
+    for (const item of CTX_ITEMS) {
+        if (item.sep) {
+            if (!_ctxMenu.lastChild || _ctxMenu.lastChild.className === 'sv-ctxsep') { continue; } // no leading/double sep
+            const s = document.createElement('div'); s.className = 'sv-ctxsep'; _ctxMenu.appendChild(s); continue;
+        }
+        if (!item.applies(info)) { continue; }
+        const row = document.createElement('div');
+        row.className = 'sv-ctxitem';
+        row.textContent = item.label;
+        row.addEventListener('click', () => {
+            hideContextMenu();
+            if (item.expand) { openSubcircuit(info.model, cellView.paper); return; }
+            post({
+                type: 'contextAction', action: item.action, kind: info.kind,
+                leafName: info.leafName, celltype: info.celltype, path: graphPath(info.model),
+                sourcePositions: info.model.get('source_positions') || [],
+                value: item.action === 'copyValue' ? currentValue(info.model) : undefined,
+            });
+        });
+        _ctxMenu.appendChild(row);
+    }
+    while (_ctxMenu.lastChild && _ctxMenu.lastChild.className === 'sv-ctxsep') { _ctxMenu.removeChild(_ctxMenu.lastChild); }
+    if (!_ctxMenu.querySelector('.sv-ctxitem')) { hideContextMenu(); return; } // nothing applies → no menu
+    _ctxMenu.style.display = 'block';
+    const mw = _ctxMenu.offsetWidth, mh = _ctxMenu.offsetHeight;
+    _ctxMenu.style.left = Math.max(2, Math.min(clientX, window.innerWidth - mw - 4)) + 'px';
+    _ctxMenu.style.top = Math.max(2, Math.min(clientY, window.innerHeight - mh - 4)) + 'px';
+}
+// dismiss on any outside interaction
+document.addEventListener('pointerdown', (e) => { if (_ctxMenu && _ctxMenu.style.display !== 'none' && !_ctxMenu.contains(e.target)) { hideContextMenu(); } }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideContextMenu(); } });
+window.addEventListener('blur', hideContextMenu);
+
+// ---- find (Ctrl+F): jump to a signal/instance/port by name. A reusable per-PAPER component, so each
+// subcircuit popup gets its OWN find (scoped to that popup), independent of the main page's. ----
+function rankKey(key, q) { return key === q ? 0 : key.startsWith(q) ? 1 : 2; }
+// Center a cell view in its paper's viewport (works for elements AND wires): shift the current
+// translate by the gap between the viewport centre and the view's on-screen centre, then clamp.
+function centerOnView(p, view) {
+    const bb = view.getBBox();                           // paper coords (post-transform)
+    const sz = p.getComputedSize(), t = p.translate();
+    panTo(p, t.tx + sz.width / 2 - (bb.x + bb.width / 2), t.ty + sz.height / 2 - (bb.y + bb.height / 2));
+}
+// A find controller bound to ONE paper. getPaper/getGraph are functions: the main finder reads the
+// current (post-re-render) globals; a popup finder stays bound to its window. container() is where the
+// box lives. onGoto runs before centring (the main paper uses it to stop auto-fit).
+function makeFinder({ getPaper, getGraph, container, onGoto }) {
+    let box = null, input = null, countEl = null, items = [], matches = [], idx = -1, hi = null;
+    const soft = new Set();
+    function buildIndex() {
+        const g = getGraph(), out = [];
+        if (!g) { return out; }
+        // every named wire SEGMENT (a fan-out net is findable at each segment, browser-style)
+        for (const l of g.getLinks()) { const n = l.get('netname'); if (n) { out.push({ key: String(n).toLowerCase(), model: l }); } }
+        for (const el of g.getElements()) {
+            const celltype = el.get('celltype'), type = el.get('type');
+            let label = null;
+            if (celltype) { label = el.get('label'); }                                  // child instance
+            else if (type === 'Input' || type === 'Output') { label = el.get('net'); }   // IO port
+            else { const l = el.get('label'); if (l && !String(l).startsWith('$')) { label = l; } } // named gate
+            if (label) { out.push({ key: String(label).toLowerCase(), model: el }); }
+        }
+        return out;
+    }
+    const clearSoft = () => { for (const e of soft) { e.classList.remove('sv-find-match'); } soft.clear(); };
+    function applySoft() {
+        clearSoft(); const p = getPaper(); if (!p) { return; }
+        for (const it of matches) { const v = p.findViewByModel(it.model); if (v) { v.el.classList.add('sv-find-match'); soft.add(v.el); } }
+    }
+    const clearHi = () => { if (hi) { hi.classList.remove('sv-find-current'); hi = null; } };
+    const updateCount = () => { if (countEl) { countEl.textContent = matches.length ? `${idx + 1}/${matches.length}` : '0/0'; } };
+    function go(i) {
+        const p = getPaper(); if (!matches.length || !p) { return; }
+        idx = ((i % matches.length) + matches.length) % matches.length;
+        const view = p.findViewByModel(matches[idx].model);
+        clearHi();
+        if (view) {
+            hi = view.el; hi.classList.add('sv-find-current');
+            if (onGoto) { onGoto(); }
+            // Don't change zoom on reveal — just pan to center the match. Re-evaluating zoom per match
+            // would ratchet it in as you hit Enter through results; the soft/current highlights keep
+            // the match visible at any zoom, and the user stays in control of zoom level.
+            centerOnView(p, view);
+        }
+        updateCount();
+    }
+    function run(raw) {
+        const q = raw.trim().toLowerCase();
+        if (!q) { matches = []; idx = -1; clearHi(); clearSoft(); updateCount(); return; }
+        matches = items.filter(it => it.key.includes(q)).sort((a, b) => rankKey(a.key, q) - rankKey(b.key, q));
+        applySoft();                                     // soft-highlight EVERY match...
+        if (matches.length) { go(0); } else { idx = -1; clearHi(); updateCount(); } // ...focus the first
+    }
+    function build() {
+        box = document.createElement('div'); box.className = 'sv-find';
+        box.innerHTML = '<input class="sv-find-input" type="text" placeholder="Find signal / instance…" spellcheck="false">'
+            + '<span class="sv-find-count">0/0</span>'
+            + '<button class="sv-find-nav codicon codicon-arrow-up" data-d="-1" title="Previous (Shift+Enter)"></button>'
+            + '<button class="sv-find-nav codicon codicon-arrow-down" data-d="1" title="Next (Enter)"></button>'
+            + '<button class="sv-find-close codicon codicon-close" title="Close (Esc)"></button>';
+        container().appendChild(box);
+        input = box.querySelector('.sv-find-input'); countEl = box.querySelector('.sv-find-count');
+        input.addEventListener('input', () => run(input.value));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); go(idx + (e.shiftKey ? -1 : 1)); }
+            else if (e.key === 'Escape') { e.preventDefault(); close(); }
+        });
+        for (const b of box.querySelectorAll('.sv-find-nav')) { b.addEventListener('click', () => go(idx + Number(b.dataset.d))); }
+        box.querySelector('.sv-find-close').addEventListener('click', close);
+    }
+    function open() {
+        if (!box) { build(); }
+        else if (!box.isConnected) { container().appendChild(box); } // a re-render detaches the box → re-attach
+        items = buildIndex();
+        box.style.display = 'flex';
+        // In a popup the container's top-right row is digitaljs's toolbar (.btn-group: zoom/find/
+        // export). The box is right-anchored, so push it BELOW that bar to avoid covering the
+        // buttons. The main page has no toolbar inside #paper-container → bar is null → CSS top.
+        const bar = container().querySelector('.btn-group');
+        box.style.top = bar ? (bar.offsetTop + bar.offsetHeight + 6) + 'px' : '';
+        input.focus(); input.select();
+        run(input.value);
+    }
+    function close() { if (box) { box.style.display = 'none'; } clearHi(); clearSoft(); }
+    function next(back) { if (box && box.style.display !== 'none') { go(idx + (back ? -1 : 1)); } }
+    return { open, close, next };
+}
+// Main-page finder: tracks the current globals (so it survives a re-render) and stops the main paper's
+// auto-fit while you navigate.
+const mainFinder = makeFinder({
+    getPaper: () => paper, getGraph: () => labelIndex && labelIndex.graph,
+    container: () => document.getElementById('paper-container'), onGoto: () => { autoFit = false; },
+});
+// Ctrl+F / F3 act on the FOCUSED window — a subcircuit popup if focus is inside one (its finder is
+// stashed on the dialog content as __svFinder), else the main page.
+function activeFinder() {
+    const c = document.activeElement && document.activeElement.closest && document.activeElement.closest('.ui-dialog-content');
+    return (c && c.__svFinder) || mainFinder;
+}
+document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); activeFinder().open(); }
+    else if (e.key === 'F3') { e.preventDefault(); activeFinder().next(e.shiftKey); }
+});
+
+// suppress the native (VS Code) context menu inside the schematic webview
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+function bindContextMenu(p) {
+    p.on('cell:contextmenu', (cellView, evt) => { showContextMenu(cellView, evt.clientX, evt.clientY); });
+    p.on('blank:contextmenu', () => hideContextMenu());
+}
+
+// ---- pan / zoom (fully transform-based) ----
+// The view is driven entirely by the paper's transform (scale + translate). We do NOT use
+// digitaljs's content-sizing (it resizes the SVG to the content on every render, which
+// breaks transform pan/zoom and wheel-scroll range). Instead the main paper is sized to
+// the container, and all navigation moves the transform. Works identically on the main
+// paper and on subcircuit popup papers.
+
+let mainResizeObs = null;
+let overviewMode = 'scrollbars'; // 'scrollbars' | 'minimap' (main); from the setting per load
+
+// Content bounding box (graph-local), cached per GRAPH. It's a property of the cell
+// positions, not the paper, so re-opened popup papers that share a subgraph reuse the
+// correct cache. getContentArea is O(N); caching keeps pan-clamping O(1) per frame. The
+// cache is INVALIDATED on layout changes — ELK lays the graph out asynchronously, so the
+// first reads happen before cells are positioned; without this a stale (tiny, top-left)
+// box gets cached and the clamp locks the view to the wrong region.
+const _area = new WeakMap();          // graph -> content area
+const _areaListened = new WeakSet();  // graphs that already have the invalidation listener
+function contentAreaOf(p) {
+    const g = p.model;
+    let a = _area.get(g);
+    if (!a) {
+        a = p.getContentArea({ useModelGeometry: true });
+        if (a && a.width && a.height) { _area.set(g, a); }
+    }
+    return a;
+}
+// Invalidate a graph's cached bbox when its layout changes — once per graph, so reopening
+// the same subcircuit popup doesn't stack duplicate listeners (which would also retain the
+// disposed popup papers). WeakSet/WeakMap drop the graph entry when the graph is GC'd.
+function watchAreaInvalidation(g) {
+    if (_areaListened.has(g)) { return; }
+    _areaListened.add(g);
+    g.on('change:position change:size add remove', () => _area.delete(g));
+}
+
+// Clamp a translate so the viewport can't pan off the content into infinite emptiness.
+// Zoomed in (content larger than the viewport) you can pan across all of it, with at most
+// `margin` px of empty space past an edge. Zoomed out (content fits) it center-locks ±margin.
+function clampTranslate(p, tx, ty) {
+    const a = contentAreaOf(p);
+    if (!a) { return [tx, ty]; }
+    const s = p.scale().sx;
+    const sz = p.getComputedSize();
+    const W = sz.width, H = sz.height;
+    const mX = Math.min(W * 0.5, 250), mY = Math.min(H * 0.5, 250);
+    const cL = a.x * s, cR = (a.x + a.width) * s, cT = a.y * s, cB = (a.y + a.height) * s;
+    // For one axis: content spans [c0, cEnd] in screen px at translate 0; viewport is [0, view].
+    const axis = (c0, cEnd, view, m) => {
+        if (cEnd - c0 <= view) {                 // content fits this axis: center it, ±m wiggle
+            const mid = (view - (cEnd - c0)) / 2 - c0;
+            return [mid - m, mid + m];
+        }
+        return [view - cEnd - m, -c0 + m];       // larger than viewport: pan across, ≤ m past an edge
+    };
+    const [txLo, txHi] = axis(cL, cR, W, mX);
+    const [tyLo, tyHi] = axis(cT, cB, H, mY);
+    return [Math.min(Math.max(tx, txLo), txHi), Math.min(Math.max(ty, tyLo), tyHi)];
+}
+
+// Translate a paper with clamping (all pan paths funnel through here).
+function panTo(p, tx, ty) {
+    const [cx, cy] = clampTranslate(p, tx, ty);
+    p.translate(cx, cy);
+}
+
+// Stop digitaljs from resizing a paper's SVG to its content on every render (that
+// content-sizing fights transform-based pan/zoom). The paper then keeps whatever
+// dimensions we set; the view is driven purely by the transform.
+function neutralizeAutoResize(p) {
+    p.fitToContent = function () { return this; };
+}
+
+// Fit a paper's content into a pixel size, centered, transform-only.
+function fitPaper(p, w, h) {
+    p.setDimensions(w, h);
+    try {
+        p.transformToFitContent({
+            padding: 24, minScale: 0.001, maxScale: 1, useModelGeometry: true,
+            verticalAlign: 'middle', horizontalAlign: 'middle',
+        });
+    } catch (e) {
+        p.scale(1);
+        p.translate(24, 24);
+    }
+}
+
+// Main paper: fill the container, keep synced on resize, attach the chosen overview.
+function setupMainPaper(p) {
+    neutralizeAutoResize(p);
+    const c = document.getElementById('paper-container');
+    p.setDimensions(c.clientWidth, c.clientHeight);
+    if (mainResizeObs) { mainResizeObs.disconnect(); }
+    mainResizeObs = new ResizeObserver(() => {
+        p.setDimensions(c.clientWidth, c.clientHeight);
+        if (autoFit) { fitToView(); }
+    });
+    mainResizeObs.observe(c);
+    if (overviewMode === 'scrollbars') { attachScrollbars(p, c); } else { attachMinimap(p, c); }
+}
+
+// Subcircuit popup paper: opens at a fraction of the viewport, then FOLLOWS the jquery-ui
+// dialog as the user resizes it (the canvas was previously frozen at its initial size, so a
+// resized popup left dead space). Transform-based like the main paper, with overlay scrollbars.
+//
+// Available paper size = the dialog content area minus the zoom toolbar. Before jquery-ui has
+// wrapped the content (it does so on render:done, after this runs), or when detached, fall
+// back to the initial w×h.
+function popupAvailSize(content, w, h) {
+    if (content && content.isConnected && content.classList.contains('ui-dialog-content')) {
+        // Use the content-box inner size: clientWidth/Height INCLUDE padding, and sizing the
+        // paper to that would make the auto-width dialog grow by the padding on each observer
+        // tick (inflating to maxWidth). Subtract padding (and the zoom toolbar) → stable.
+        const cs = getComputedStyle(content);
+        const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+        const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const btn = content.querySelector('.btn-group');
+        const aw = content.clientWidth - padX;
+        const ah = content.clientHeight - padY - (btn ? btn.offsetHeight : 0);
+        if (aw > 50 && ah > 50) { return { w: Math.round(aw), h: Math.round(ah) }; }
+    }
+    return { w, h };
+}
+function setupPopupPaper(p) {
+    neutralizeAutoResize(p);
+    const w = Math.min(900, Math.round(window.innerWidth * 0.7));
+    const h = Math.min(600, Math.round(window.innerHeight * 0.7));
+    p.setDimensions(w, h);
+    // p.el = the .joint-paper container div; its parent is the jquery-ui dialog content
+    // (gets class `ui-dialog-content` once the dialog is created on render:done).
+    const content = p.el.parentElement;
+    if (content) {
+        content.__svPaper = p; // so the popup's export button can target this paper
+        // Each popup gets its OWN find, scoped to this popup's paper/graph (Ctrl+F routes here when
+        // focus is inside this dialog; see activeFinder). The box lives in the popup content.
+        content.__svFinder = makeFinder({ getPaper: () => p, getGraph: () => p.model, container: () => content });
+        p.once('render:done', () => addPopupFindButton(content));
+    }
+    // initial fit (centered) once the dialog + child layout exist
+    const fit = () => { const s = popupAvailSize(content, w, h); fitPaper(p, s.w, s.h); };
+    p.once('render:done', fit);
+    setTimeout(fit, 200); // catch async ELK layout of the child
+    attachScrollbars(p, p.el);
+    // Follow the dialog as it's resized WITHOUT re-fitting: grow/shrink the viewport to the
+    // new content area and keep the user's zoom, only re-clamping the pan so content stays in
+    // view. setDimensions fires the paper 'resize' event, so the overlay scrollbars recompute.
+    // Self-disconnects when the popup closes (content detached).
+    if (content && typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+            if (!content.isConnected) { ro.disconnect(); return; }
+            const s = popupAvailSize(content, w, h);
+            p.setDimensions(s.w, s.h);
+            const t = p.translate();
+            panTo(p, t.tx, t.ty); // re-clamp to the new viewport
+        });
+        ro.observe(content);
+    }
+}
+
+// Visible region of a paper in graph-local coordinates (from transform + viewport size).
+function visibleRegion(p, viewW, viewH) {
+    const s = p.scale().sx, t = p.translate();
+    return { x: -t.tx / s, y: -t.ty / s, w: viewW / s, h: viewH / s, s };
+}
+
+// ---- overlay scrollbars (popups; and main when the setting selects them) ----
+// Thin bars over `host` that reflect and drive the paper transform. O(1) per frame; the
+// content bbox is cached (recomputed lazily / after layout), so no per-pan O(N) cost.
+function attachScrollbars(p, host) {
+    if (getComputedStyle(host).position === 'static') { host.style.position = 'relative'; }
+    const make = (cls) => {
+        const bar = document.createElement('div');
+        bar.className = 'sv-scrollbar ' + cls;
+        const thumb = document.createElement('div');
+        thumb.className = 'sv-scrollthumb';
+        bar.appendChild(thumb);
+        host.appendChild(bar);
+        return { bar, thumb, tot: { off: 0, len: 1 } };
+    };
+    const hb = make('sv-h'), vb = make('sv-v');
+
+    function update() {
+        const a = contentAreaOf(p);
+        if (!a) { return; }
+        const v = visibleRegion(p, host.clientWidth, host.clientHeight);
+        const totL = Math.min(a.x, v.x), totR = Math.max(a.x + a.width, v.x + v.w);
+        const totT = Math.min(a.y, v.y), totB = Math.max(a.y + a.height, v.y + v.h);
+        const totW = totR - totL, totH = totB - totT;
+        hb.tot = { off: totL, len: totW };
+        vb.tot = { off: totT, len: totH };
+        if (v.w >= totW - 1) { hb.bar.style.display = 'none'; } else {
+            hb.bar.style.display = '';
+            hb.thumb.style.left = ((v.x - totL) / totW * 100) + '%';
+            hb.thumb.style.width = (v.w / totW * 100) + '%';
+        }
+        if (v.h >= totH - 1) { vb.bar.style.display = 'none'; } else {
+            vb.bar.style.display = '';
+            vb.thumb.style.top = ((v.y - totT) / totH * 100) + '%';
+            vb.thumb.style.height = (v.h / totH * 100) + '%';
+        }
+    }
+
+    const drag = (obj, axis) => obj.thumb.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const start = axis === 'x' ? e.clientX : e.clientY;
+        const s = p.scale().sx, t0 = p.translate();
+        const track = axis === 'x' ? obj.bar.clientWidth : obj.bar.clientHeight;
+        const tot = obj.tot.len;
+        const move = (ev) => {
+            autoFit = false;
+            const dLocal = ((axis === 'x' ? ev.clientX : ev.clientY) - start) / track * tot;
+            if (axis === 'x') { panTo(p, t0.tx - dLocal * s, t0.ty); }
+            else { panTo(p, t0.tx, t0.ty - dLocal * s); }
+        };
+        const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+    });
+    drag(hb, 'x'); drag(vb, 'y');
+
+    p.on('transform', update);
+    p.on('resize', update);
+    setTimeout(update, 300); // after async layout settles (content area is cached centrally)
+    update();
+}
+
+// ---- minimap (main paper only) ----
+// A small canvas overview in the corner. The structural overview (one rect per cell) is
+// drawn ONCE to an offscreen canvas; per pan/zoom only the viewport rectangle redraws, so
+// it stays cheap on large designs and value scrubbing never touches it.
+function attachMinimap(p, host) {
+    const MW = 200, MH = 150;
+    const canvas = document.createElement('canvas');
+    canvas.id = 'sv-minimap';
+    canvas.width = MW; canvas.height = MH;
+    host.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    let overview = null, area = null, mscale = 1, offX = 0, offY = 0;
+
+    function build() {
+        area = contentAreaOf(p);
+        if (!area || !area.width) { return false; }
+        const pad = 6;
+        mscale = Math.min((MW - 2 * pad) / area.width, (MH - 2 * pad) / area.height);
+        offX = pad - area.x * mscale + (MW - 2 * pad - area.width * mscale) / 2;
+        offY = pad - area.y * mscale + (MH - 2 * pad - area.height * mscale) / 2;
+        overview = document.createElement('canvas'); overview.width = MW; overview.height = MH;
+        const o = overview.getContext('2d');
+        const accent = cssVar('--sv-accent', '#4a9cff');
+        const neutral = cssVar('--vscode-editorWidget-border', '#888888');
+        for (const el of p.model.getElements()) {
+            const b = el.getBBox();
+            o.fillStyle = el.get('type') === 'Subcircuit' ? accent : neutral;
+            o.globalAlpha = el.get('type') === 'Subcircuit' ? 0.55 : 0.3;
+            o.fillRect(b.x * mscale + offX, b.y * mscale + offY,
+                Math.max(1, b.width * mscale), Math.max(1, b.height * mscale));
+        }
+        o.globalAlpha = 1;
+        return true;
+    }
+    function draw() {
+        if (!overview && !build()) { return; }
+        ctx.fillStyle = cssVar('--vscode-editorWidget-background', '#252526');
+        ctx.fillRect(0, 0, MW, MH);
+        ctx.drawImage(overview, 0, 0);
+        // viewport rectangle (outline only — a fill washes the whole minimap when zoomed
+        // out on a large design). Dim the area OUTSIDE the viewport instead, so the visible
+        // region reads as the bright part.
+        const v = visibleRegion(p, host.clientWidth, host.clientHeight);
+        const rx = Math.max(0, v.x * mscale + offX), ry = Math.max(0, v.y * mscale + offY);
+        const rw = Math.min(MW, v.x * mscale + offX + v.w * mscale) - rx;
+        const rh = Math.min(MH, v.y * mscale + offY + v.h * mscale) - ry;
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, 0, MW, ry);                       // above
+        ctx.fillRect(0, ry + rh, MW, MH - (ry + rh));     // below
+        ctx.fillRect(0, ry, rx, rh);                      // left
+        ctx.fillRect(rx + rw, ry, MW - (rx + rw), rh);    // right
+        ctx.strokeStyle = cssVar('--sv-accent', '#4a9cff');
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(rx, ry, rw, rh);
+    }
+    function recenter(ev) {
+        const r = canvas.getBoundingClientRect();
+        const lx = (ev.clientX - r.left - offX) / mscale;
+        const ly = (ev.clientY - r.top - offY) / mscale;
+        const s = p.scale().sx;
+        autoFit = false;
+        panTo(p, host.clientWidth / 2 - lx * s, host.clientHeight / 2 - ly * s);
+    }
+    canvas.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); recenter(e);
+        const move = (ev) => recenter(ev);
+        const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+    });
+    p.on('transform', draw);
+    setTimeout(() => { overview = null; draw(); }, 300); // rebuild after async layout
+    draw();
+}
+
+// Scale a paper around a client point, keeping that point fixed under the cursor.
+function zoomAround(p, factor, clientX, clientY) {
+    autoFit = false;
+    const s0 = p.scale().sx;
+    const s1 = Math.min(Math.max(s0 * factor, 0.001), 10);
+    if (s1 === s0) { return; }
+    const rect = p.el.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const t = p.translate();
+    const lx = (px - t.tx) / s0; // graph-local point under the cursor
+    const ly = (py - t.ty) / s0;
+    // Don't clamp zoom: zooming around the cursor keeps that point fixed, so it can't push
+    // content off into emptiness. Only pan is clamped (below). This preserves cursor-fixed
+    // zoom even when the content is smaller than the viewport.
+    p.scale(s1);
+    p.translate(px - lx * s1, py - ly * s1);
+}
+
+// Wheel + drag navigation, attached to every paper (main + popups):
+//   ctrl+wheel  -> zoom around the cursor
+//   plain wheel -> pan (scroll up/down; shift = left/right; trackpads use deltaX directly)
+//   drag blank  -> pan (cell drags still move the cell)
+function attachNav(p) {
+    p.el.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        if (e.ctrlKey) {
+            // Zoom multiplicatively by the scroll amount (exp). Trackpads fire many small-deltaY pinch
+            // events while mice fire a few large notches, so use a larger per-unit zoom for small
+            // (trackpad) deltas — responsive pinch — and a calibrated one for big (mouse) notches
+            // (~1.12/notch). Clamp each event to [0.5, 2] so nothing jumps wildly.
+            const perUnit = Math.abs(e.deltaY) < 40 ? 0.008 : 0.0011;
+            const factor = Math.min(Math.max(Math.exp(-e.deltaY * perUnit), 0.5), 2);
+            zoomAround(p, factor, e.clientX, e.clientY);
+        } else {
+            autoFit = false;
+            let dx = e.deltaX, dy = e.deltaY;
+            if (e.shiftKey && dx === 0) { dx = dy; dy = 0; }
+            const t = p.translate();
+            panTo(p, t.tx - dx, t.ty - dy);
+        }
+    }, { passive: false });
+
+    let panning = false, startX = 0, startY = 0, startT = null;
+    p.on('blank:pointerdown', (evt) => {
+        panning = true;
+        autoFit = false;
+        startX = evt.clientX;
+        startY = evt.clientY;
+        startT = p.translate();
+        p.el.style.cursor = 'grabbing';
+    });
+    document.addEventListener('pointermove', (evt) => {
+        if (!panning) { return; }
+        panTo(p, startT.tx + (evt.clientX - startX), startT.ty + (evt.clientY - startY));
+    });
+    document.addEventListener('pointerup', () => {
+        if (!panning) { return; }
+        panning = false;
+        p.el.style.cursor = '';
+    });
+}
+
+// Fit content into the (container-sized) main paper by adjusting the transform only.
+function fitToView() {
+    if (!paper) { return; }
+    const c = document.getElementById('paper-container');
+    fitPaper(paper, c.clientWidth, c.clientHeight);
+}
+
+// Toolbar zoom buttons: zoom the main paper around the viewport center.
+function zoomBy(factor) {
+    if (!paper) { return; }
+    const r = document.getElementById('paper-container').getBoundingClientRect();
+    zoomAround(paper, factor, r.left + r.width / 2, r.top + r.height / 2);
+}
+
+// ---- export ----
+// Serialize the main paper as a standalone SVG. The on-file SVG has none of our CSS or the VS
+// Code theme vars, so we (1) frame the FULL content via a viewBox on the content bounds (drop
+// the live pan/zoom so current zoom doesn't matter), (2) bake the computed presentation styles
+// (fill/stroke/font/…) inline so it looks identical, (3) drop foreignObjects (hidden widgets),
+// (4) paint the theme background behind it (white would hide the light-on-dark schematic).
+const SVG_STYLE_PROPS = [
+    'fill', 'fill-opacity', 'stroke', 'stroke-opacity', 'stroke-width', 'stroke-dasharray',
+    'stroke-linecap', 'stroke-linejoin', 'opacity', 'color', 'display', 'visibility',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor',
+    'dominant-baseline', 'text-decoration',
+];
+function inlineComputedStyles(live, clone) {
+    if (live.nodeType === 1 && clone.nodeType === 1) {
+        const cs = getComputedStyle(live);
+        let style = clone.getAttribute('style') || '';
+        for (const p of SVG_STYLE_PROPS) { const v = cs.getPropertyValue(p); if (v) { style += `${p}:${v};`; } }
+        clone.setAttribute('style', style);
+    }
+    const lk = live.children, ck = clone.children;
+    for (let i = 0; i < lk.length && i < ck.length; i++) { inlineComputedStyles(lk[i], ck[i]); }
+}
+// Which paper an export targets: a popup's paper if its export button was clicked, else main.
+let _exportPaper = null;
+function exportTarget() { return _exportPaper || paper; }
+// Hierarchical name of the paper's scope (a popup → its subcircuit instance path; main → scope).
+function paperHierName(p) {
+    const sub = p.model.get('subcircuit');
+    if (sub && sub !== true && typeof sub.get === 'function') {
+        return [currentScopePath, ...graphPath(sub), sub.get('label')].filter(Boolean).join('.');
+    }
+    return currentScopePath;
+}
+function buildSvgExport() {
+    const tp = exportTarget();
+    const live = tp.el.querySelector('svg');
+    if (!live) { return ''; }
+    const clone = live.cloneNode(true);
+    const a = tp.getContentArea({ useModelGeometry: true });
+    const pad = 20;
+    const x = Math.round(a.x - pad), y = Math.round(a.y - pad);
+    const w = Math.round(a.width + 2 * pad), h = Math.round(a.height + 2 * pad);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    clone.setAttribute('width', w);
+    clone.setAttribute('height', h);
+    clone.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+    // drop the pan/zoom transform so the content sits at its model coordinates (= the viewBox)
+    const layers = clone.querySelector('.joint-layers') || clone.querySelector('g');
+    if (layers) { layers.removeAttribute('transform'); }
+    inlineComputedStyles(live, clone);
+    clone.querySelectorAll('foreignObject').forEach((n) => n.remove());
+    const bg = getComputedStyle(document.body).backgroundColor || '#1e1e1e';
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('fill', bg);
+    clone.insertBefore(rect, clone.firstChild);
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
+}
+// digitaljs circuit JSON (with the current ELK layout baked in) — re-loadable into a Circuit.
+function buildJsonExport() {
+    return JSON.stringify(circuit.toJSON(), null, 2);
+}
+// Rasterize the export SVG to a PNG (base64). The SVG already has foreignObjects stripped and
+// styles inlined, so the canvas isn't tainted. Render at ~2× for crispness, capped so very
+// large schematics don't produce an enormous bitmap.
+function buildPngExport() {
+    const a = exportTarget().getContentArea({ useModelGeometry: true });
+    const pad = 20;
+    const w = Math.max(1, Math.round(a.width + 2 * pad)), h = Math.max(1, Math.round(a.height + 2 * pad));
+    const scale = Math.min(2, 6000 / Math.max(w, h));
+    const svg = buildSvgExport();
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(w * scale));
+                canvas.height = Math.max(1, Math.round(h * scale));
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/png').split(',')[1]);
+            } catch (e) { reject(e); }
+        };
+        img.onerror = () => reject(new Error('SVG failed to rasterize for PNG export'));
+        img.src = url;
+    });
+}
+
+document.getElementById('zoom-in').addEventListener('click', () => zoomBy(1.25));
+document.getElementById('zoom-out').addEventListener('click', () => zoomBy(0.8));
+document.getElementById('zoom-fit').addEventListener('click', fitToView);
+document.getElementById('sv-find-btn')?.addEventListener('click', () => mainFinder.open());
+document.getElementById('refresh').addEventListener('click', () => post({ type: 'refresh' }));
+document.getElementById('go-parent').addEventListener('click', () => post({ type: 'goToParent' }));
+document.getElementById('export').addEventListener('click', () => { _exportPaper = null; post({ type: 'export' }); });
+// RTL / Gate-Level slider toggle: left = RTL (unchecked), right = Gate-Level (checked).
+const presetSwitch = document.getElementById('preset-switch');
+const presetLabels = document.querySelectorAll('#preset-toggle .sv-seg-label');
+function setPreset(gls) {
+    presetSwitch.checked = gls;
+    presetLabels.forEach((l) => l.classList.toggle('active', (l.dataset.side === 'gls') === gls));
+    post({ type: 'setPreset', preset: gls ? 'gls' : 'rtl' });
+}
+presetSwitch.addEventListener('change', () => setPreset(presetSwitch.checked));
+presetLabels.forEach((l) => l.addEventListener('click', () => setPreset(l.dataset.side === 'gls')));
+
+// ---- messages from the extension ----
+window.addEventListener('message', (event) => {
+    const msg = event.data;
+    switch (msg.type) {
+        case 'loadSchematic':
+            try {
+                loadSchematic(msg);
+            } catch (e) {
+                const detail = e && e.message ? e.message : e;
+                const be = msg.backend ? ` [backend: ${msg.backend}]` : '';
+                // a malformed netlist usually means an unexpected yosys produced it — point at the fix
+                const hint = /reading 'id'|undefined/.test(String(detail))
+                    ? ' — the netlist looks malformed; if the backend above is not your intended yosys, set "sv-pathfinder.ossCadSuitePath".'
+                    : '';
+                setStatus(`Failed to render schematic${be}: ${detail}${hint}`);
+                console.error('sv-pathfinder schematic render failed; backend:', msg.backend, e);
+                hideRenderOverlay(); // a failed load won't reach scheduleOverlayHide
+            }
+            break;
+        case 'renderStart':
+            scheduleRenderOverlay(); // overlay BEFORE the heavy loadSchematic (covers its deserialize/build)
+            break;
+        case 'renderAbort':
+            hideRenderOverlay();     // the render failed; no loadSchematic is coming
+            break;
+        case 'expandResult':
+            onExpandResult(msg);
+            break;
+        case 'setValues': {
+            if (!circuit) { break; }
+            // Build each net's display chain FIRST so the cascade from setWireValue (which
+            // re-renders value text) can read it while it runs. This batch is the full set, so a
+            // clear+repopulate keeps no stale chains from the previous cursor position.
+            _valueText.clear();
+            _valueCat.clear();
+            const changedNets = new Set();
+            for (const u of msg.updates) {
+                if (!u.values || u.values.length === 0) { continue; }
+                const w = labelIndex && labelIndex.wires[u.name];
+                const bits = (w && w.get('bits')) || String(u.values[0]).length || 1;
+                _valueText.set(u.name, chainDisplay(u.values, bits));
+                _valueCat.set(u.name, rawCategory(u.values[u.values.length - 1])); // colour from cursor value
+                if (u.values.length > 1) { changedNets.add(u.name); } // transition AT the marker -> flash
+            }
+            let applied = 0;
+            for (const u of msg.updates) {
+                if (!u.values || u.values.length === 0) { continue; }
+                if (setWireValue(u.name, u.values[u.values.length - 1])) { applied++; }
+            }
+            refreshValueText(); // catch nets whose value didn't change the signal (e.g. x while already x)
+            // pulse the wires that transition at this cursor — but skip a mass change (clock edge),
+            // where flashing every net is noise and the per-marker bottleneck.
+            if (changedNets.size <= FLASH_MAX_NETS) { flashChanged(changedNets); }
+            setStatus(`values @ cursor: ${applied}/${msg.updates.length} nets annotated`);
+            break;
+        }
+        case 'clearValues':
+            clearValues();
+            refreshValueText(); // blank nets whose signal was already x (no change event fired)
+            setStatus('values cleared');
+            break;
+        case 'buildExport':
+            (async () => {
+                try {
+                    if (msg.format === 'svg') { post({ type: 'exportContent', format: 'svg', text: buildSvgExport() }); }
+                    else if (msg.format === 'json') { post({ type: 'exportContent', format: 'json', text: buildJsonExport() }); }
+                    else if (msg.format === 'png') { post({ type: 'exportContent', format: 'png', base64: await buildPngExport() }); }
+                } catch (e) {
+                    setStatus('Export failed: ' + (e && e.message ? e.message : e));
+                    console.error(e);
+                }
+            })();
+            break;
+    }
+});
+
+post({ type: 'ready' });

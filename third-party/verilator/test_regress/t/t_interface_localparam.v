@@ -1,0 +1,56 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Justin Thiel
+// SPDX-License-Identifier: CC0-1.0
+
+interface SimpleIntf #(
+    parameter int VAL = 28
+) ();
+
+  // This value is calculated incorrectly for other instances of
+  // this interface when it is accessed via the HDL for any other
+  // instance of this interface
+  localparam int valDiv2 = VAL / 2;
+  localparam int valDiv4 = valDiv2 / 2;
+
+  localparam bit mismatch2 = (VAL != (2 * valDiv2));
+  localparam bit mismatch4 = (VAL != (4 * valDiv4));
+
+  initial begin
+    $write("%m: VAL %0d, valDiv2 %0d, mismatch2 %0d\n", VAL, valDiv2, mismatch2);
+    $write("%m: VAL %0d, valDiv4 %0d, mismatch4 %0d\n", VAL, valDiv4, mismatch2);
+    if (mismatch2) $stop;
+    if (mismatch4) $stop;
+  end
+
+endinterface
+
+module Core (
+    SimpleIntf intf
+);
+
+  // this will constify and valDiv2 will have the default value
+  localparam valDiv4Upper = intf.valDiv2;
+
+  SimpleIntf #(.VAL(68)) core_intf ();
+
+  initial begin
+    if (intf.valDiv2 != valDiv4Upper) begin
+      $display("%%Error: param = %0d", intf.valDiv2);
+    end
+  end
+endmodule
+
+module t;
+
+  SimpleIntf intf ();
+
+  Core theCore (.intf);
+
+  initial begin
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

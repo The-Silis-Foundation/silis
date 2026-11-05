@@ -1,0 +1,10 @@
+out
+dist
+node_modules
+.vscode-test/
+*.vsix
+*.vcd
+*.fsdb
+build/
+test/webview/local-env.json
+docs/

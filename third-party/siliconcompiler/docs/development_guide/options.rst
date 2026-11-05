@@ -1,0 +1,335 @@
+.. _user_settings:
+
+User Settings
+=============
+
+SiliconCompiler provides a robust system for managing persistent user configuration across different sessions and tools.
+This system allows you to define default behaviors—such as your preferred scheduler, remote processing credentials, or compilation flags—once, and have them automatically applied to every new :class:`.Project`.
+
+The settings are managed by a centralized :class:`.SettingsManager` which ensures thread-safe and process-safe access to the configuration file using file locking.
+This is particularly important in environments where multiple SiliconCompiler processes (e.g., parallel build steps) might attempt to read or write settings simultaneously.
+The user is not expected to directly interact with the :class:`.SettingsManager`: the ``sc-config settings`` app changes settings from the command line, and the associated classes change them from Python.
+
+Storage Format
+--------------
+
+Settings are stored in a JSON file (typically located at ``~/.sc/settings.json``).
+The file is organized into **categories**, allowing different tools and subsystems within SiliconCompiler to maintain their own isolated configuration spaces.
+
+The JSON structure generally looks like this:
+
+.. code-block:: json
+
+    {
+        "schema-options": {
+            "scheduler,name": "slurm",
+            "scheduler,queue": "hw_queue",
+            "remote": true,
+            "optmode": 2
+        },
+        "other-category": {
+            "setting_name": "value"
+        }
+    }
+
+.. note::
+   The settings manager uses a "last-write-wins" policy per key and protects file integrity with strict error handling.
+   If the settings file becomes malformed, the manager will log an error and start with an empty configuration to prevent crashes.
+
+Changing Settings
+-----------------
+
+The :ref:`sc-config settings <app-sc-config-settings>` app lists, reads and changes settings, so ``settings.json`` need not be edited by hand:
+
+.. code-block:: bash
+
+    # Every setting and its value, defaults included
+    sc-config settings list
+
+    # Change a setting, or put it back to its default
+    sc-config settings set cache cleanupdays 30
+    sc-config settings unset cache cleanupdays
+
+    # Add entries to a list, or remove them
+    sc-config settings add scheduler-slurm sharedpaths /nfs/tools
+    sc-config settings remove scheduler-slurm sharedpaths /nfs/tools
+
+    # Make an option the default for every project
+    sc-config settings set schema-options scheduler,name slurm
+
+A value is checked before it is written: a key the app does not know, or a value of the wrong type, is refused rather than saved.
+``set`` replaces a whole list; ``add`` and ``remove`` change one in place, starting from the list in effect, a system default included.
+``-raw`` writes any category and key, reading the value as JSON.
+A setting the system file fixes (see below) cannot be changed, and the app says so.
+
+Declaring a Setting
+-------------------
+
+A module that reads a setting declares it once, as a :class:`.Setting`, and reads it through :meth:`.Setting.get`, so its default is written in one place:
+
+.. code-block:: python
+
+    from siliconcompiler.utils.settings import Setting, SettingsCategory
+
+    REGION = Setting("record", "region", "str", "local",
+                     "the region recorded in every run's manifest")
+    RECORD_SETTINGS = SettingsCategory("record", REGION)
+
+    region = REGION.get()
+
+Declaring a setting reads nothing.
+``sc-config`` lists and changes the categories its ``settings`` command imports, in ``siliconcompiler/utils/settings.py``, so a new category is added there too.
+A category whose keys the user names, such as a file extension, is a :class:`.KeyedSettingsCategory`.
+
+System-Wide Defaults
+--------------------
+
+In addition to the per-user file, SiliconCompiler can read a **system-wide settings file** managed by an administrator.
+This is useful on shared machines—such as an HPC login node—where an administrator wants to provide sensible defaults (for example, cluster-wide Slurm ``sharedpaths``) to every user without asking each of them to configure their own ``~/.sc/settings.json``.
+
+The system-wide file uses the same JSON structure as the per-user file. Its location is resolved in the following order:
+
+1. The ``SC_SYSTEM_SETTINGS`` environment variable, if set, is used verbatim as the path to the file.
+   This is the recommended override for non-root installs, virtual environments, containers, and continuous integration.
+2. Otherwise, a platform-specific default location is used:
+
+   * Linux/macOS: ``/etc/siliconcompiler/settings.json``
+   * Windows: ``%PROGRAMDATA%\siliconcompiler\settings.json`` (typically ``C:\ProgramData\siliconcompiler\settings.json``)
+
+.. note::
+   The default system location (``/etc``) requires administrator privileges to write, which is intentional: only an administrator should be able to change machine-wide defaults.
+   Users who need their own machine-wide file without root access should point ``SC_SYSTEM_SETTINGS`` at a writable location.
+
+Precedence and System Priority
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default, system-wide values act as **defaults** that a user may override in their own ``~/.sc/settings.json``. When resolving a setting, SiliconCompiler applies the following precedence:
+
+1. If the setting has **system priority**, the system value is used and the user value is ignored.
+2. Otherwise, the user value is used if present.
+3. Otherwise, the (plain) system default is used if present.
+4. Otherwise, the built-in default is used.
+
+An administrator can promote any default to a **system-priority** (non-overridable) value by co-locating a flag with the value.
+Instead of writing a bare value, write an object with a ``"system_priority"`` flag (and, optionally, a ``"value"``):
+
+.. code-block:: json
+
+    {
+        "record": {
+            "region": {"value": "us-east-1", "system_priority": true}
+        },
+        "scheduler-slurm": {
+            "sharedpaths": ["/nfs/tools"]
+        }
+    }
+
+In this example every user is pinned to ``region = us-east-1`` (it cannot be overridden), while ``sharedpaths`` is a plain default that users may override.
+Attempts to change or delete a system-priority setting are ignored with a warning.
+A priority wrapper may also omit ``"value"`` (e.g. ``{"system_priority": true}``) to force a setting to stay unset, so callers fall back to their built-in default.
+
+.. note::
+   Priority flags are only honored in the **system** file. A value written in this ``{"value": ..., "system_priority": ...}`` shape inside a user's ``settings.json`` is treated as an ordinary dictionary value, so existing user files are unaffected by this feature. User files are never modified to include system defaults; saving only ever writes the user's own values.
+
+Concurrency & Safety
+--------------------
+
+The underlying :class:`.SettingsManager` utilizes a file lock (``.lock``) alongside the JSON file. This ensures that:
+
+1.  **Atomic Writes**: A save writes the settings to a temporary file beside ``settings.json`` and renames it into place, so a crash or an error part way through leaves the previous file whole. A symlinked ``settings.json`` is followed and its target replaced.
+2.  **Process Safety**: A change that another run may also be making goes through :meth:`.SettingsManager.transaction`, which re-reads the file under the lock before changing it, so neither run puts back a stale copy over the other's write. :meth:`.OptionSchema.write_defaults` works this way. The lock also keeps out the other threads of the same process.
+3.  **Error Recovery**: Waiting for the lock is bounded by a timeout (default 1.0s), so your build pipeline doesn't hang indefinitely.
+    If the file cannot be loaded when SiliconCompiler starts, an error is logged and SiliconCompiler continues with empty settings.
+    Where the lock was not had in time or the file could not be read, a later plain save then refuses rather than write that empty copy over the file.
+    A transaction, or a save, that cannot get the lock raises :class:`TimeoutError` and writes nothing.
+    A malformed ``settings.json`` is never replaced by a transaction: fix or delete it. A plain save does replace one, with the settings in memory.
+4.  **Filesystems Without Locking**: Where ``~/.sc`` is on a filesystem that cannot lock files, such as an NFS home directory mounted without lock support, a held lock is marked instead by a ``settings.json.sc_lock`` file, deleted on release.
+    A process killed while holding it leaves that file behind, and every later save waits out its timeout and names it: delete it once no SiliconCompiler process is running.
+
+Schema Defaults (The 'schema-options' Category)
+-----------------------------------------------
+
+The most common use case for user settings is defining default values for the SiliconCompiler :class:`.OptionSchema`.
+When a new :class:`.Project` is initialized, it automatically queries the settings manager for the ``schema-options`` category.
+
+Key Mapping
+~~~~~~~~~~~
+
+Because the Schema is hierarchical (e.g., :keypath:`option,scheduler,name`), the keys in the JSON settings file are flattened using comma separation.
+
+* Schema path: :keypath:`option,scheduler,name` :math:`\rightarrow` JSON key: ``"scheduler,name"``
+* Schema path: :keypath:`option,remote` :math:`\rightarrow` JSON key: ``"remote"``
+
+Workflow: Schema Defaults
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+1. **Loading Defaults**:
+   When you instantiate a project, SiliconCompiler automatically loads values from the settings file. These values act as the baseline defaults.
+
+   .. code-block:: python
+
+       # If settings.json contains "scheduler,name": "slurm"
+       project = siliconcompiler.Project()
+
+       # The project starts with slurm enabled
+       print(project.option.scheduler.get_name())
+       # Output: slurm
+
+2. **Saving Defaults**:
+   You can programmatically save your current configuration as the new user default using :meth:`.OptionSchema.write_defaults`.
+   This method compares your current configuration against the built-in defaults and saves only the modified parameters to the ``schema-options`` category in the settings file.
+
+   .. code-block:: python
+
+       import siliconcompiler
+
+       project = siliconcompiler.Project()
+
+       # Configure your preferred environment
+       project.option.scheduler.set_name("slurm")
+       project.option.scheduler.set_queue("priority_queue")
+       project.option.set_quiet(True)
+
+       # Persist these settings to disk
+       project.option.write_defaults()
+
+       # Now, any future script you run will default to using Slurm on the 'priority_queue'
+       # with quiet logging enabled.
+
+   Only the ``schema-options`` category is replaced; the rest of the file is kept.
+   With every option back at its default, :meth:`.OptionSchema.write_defaults` removes the category, which resets your defaults.
+
+   From the command line, ``sc-config settings set schema-options <keypath> <value>`` saves one default at a time and leaves the others alone.
+   Options that describe one run, such as :keypath:`option,flow` and :keypath:`option,fileset`, are not saved by either.
+
+Slurm Scheduler Settings (The 'scheduler-slurm' Category)
+---------------------------------------------------------
+
+In addition to the standard schema options, specific schedulers may require their own configuration settings.
+For example, the Slurm scheduler uses the ``scheduler-slurm`` category to manage cluster-specific behaviors.
+
+**Shared Paths**
+
+One key setting for Slurm is ``sharedpaths``.
+This defines a list of directory prefixes that are available on all nodes in the cluster (e.g., via NFS or GPFS).
+When SiliconCompiler runs on a compute node, it checks if input files are located within these shared paths.
+If they are, the files are used directly; otherwise, they are copied to the build directory to ensure accessibility.
+This optimization significantly reduces network traffic and disk usage for large designs.
+
+.. code-block:: json
+
+    {
+        "scheduler-slurm": {
+            "sharedpaths": ["/nfs/tools", "/work/project"]
+        }
+    }
+
+Workflow: Slurm Settings
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Unlike standard schema options, scheduler-specific settings (like ``sharedpaths``) are stored in their own category.
+
+.. code-block:: bash
+
+    # These paths must be visible on all compute nodes.
+    sc-config settings set scheduler-slurm sharedpaths /nfs/tools /work/project
+
+Show Task Preferences (The 'showtask' Category)
+-----------------------------------------------
+
+SiliconCompiler allows you to define preferred viewers for specific file extensions.
+This is useful when multiple tools are capable of opening a specific file type (e.g., both KLayout and OpenROAD can view ``.def`` files) and you want to enforce a specific default.
+
+This configuration is stored in the ``showtask`` category of your ``settings.json`` file. The key is the file extension (without the dot), and the value is the name of the tool (and optionally the task).
+
+**Example Configuration**
+
+.. code-block:: json
+
+    {
+        "showtask": {
+            "gds": "klayout",
+            "def": "openroad/show",
+            "vcd": "gtkwave"
+        }
+    }
+
+In this example:
+
+* ``.gds`` files will always open with KLayout.
+* ``.def`` files will always open with OpenROAD, specifically using the ``show`` task.
+* ``.vcd`` files will always open with GTKWave.
+
+If the preferred tool is not found or not registered, SiliconCompiler will fall back to its default discovery mechanism.
+
+``sc-config settings set showtask gds klayout`` sets one, and refuses a tool that cannot open that extension.
+The ``opentask`` category works the same way for the interactive tool a file is opened in.
+
+Cache Cleanup Settings (The 'cache' Category)
+---------------------------------------------
+
+The data source cache in ``~/.sc/cache/dataroot`` grows every time a project asks
+for a version of a PDK, library, or design that is not already there, and nothing
+in a normal run removes what an older project needed.
+At the start of every run SiliconCompiler sweeps that area and deletes entries
+that have gone unused, along with the lock files of entries that are already
+gone. The cache's other area, ``tools/``, is left alone: a tool that keeps a
+cache between runs caps it itself, so there is nothing here to tune for it.
+
+The sweep is deliberately conservative, because nothing asked for it: it runs at
+most once a week per cache directory and only collects entries that have not been
+resolved in 90 days. Orphaned lock files are collected whatever their age -- an
+empty file guarding a directory that no longer exists is residue, and a lock
+costs nothing to recreate -- except one taken in the last hour, which may belong
+to a download that has yet to create its directory.
+Deleting a cache entry costs a download, not data -- it is fetched again the next
+time something resolves it.
+The ``cache`` category tunes both numbers:
+
+.. code-block:: json
+
+    {
+        "cache": {
+            "cleanupdays": 30,
+            "cleanupinterval": 1
+        }
+    }
+
+* ``cleanupdays`` -- days an entry must go unused before it is collected
+  (default 90); orphaned lock files ignore it. Set it to ``0`` to turn the
+  automatic sweep off entirely.
+* ``cleanupinterval`` -- minimum days between two sweeps of the same cache
+  directory (default 7).
+
+Each cache directory records when it was last swept in a ``.sc_cleanup`` file,
+which is how the interval is enforced across independent runs.
+An entry's last-use time is the modification time of its ``.lock`` file, which
+every resolve stamps -- including one that hits the cache and downloads nothing.
+
+To sweep on demand, or with a different threshold, use
+:ref:`sc-config cache <app-sc-config-cache>`, which also shows the cache's size
+and when it was last swept:
+
+.. code-block:: bash
+
+    sc-config cache clean -days 30 -dryrun
+    sc-config cache show
+
+Record Settings (The 'record' Category)
+---------------------------------------
+
+The ``record`` category allows you to define metadata about the execution environment, which is useful for tracking and aggregating results across different cloud regions or clusters.
+
+**Example Configuration**
+
+.. code-block:: json
+
+    {
+        "record": {
+            "region": "us-east-1"
+        }
+    }
+
+In this example, the ``region`` key specifies the cloud region.
+This information is retrieved by the schema support tools to tag records with the appropriate environment details.
+If omitted, the region defaults to ``local``.

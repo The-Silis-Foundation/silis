@@ -1,0 +1,464 @@
+.. _dev_tools:
+
+A complete set of supported tools can be found in :ref:`tools <builtin_tools>`.
+
+Integrating a New Tool
+======================
+
+.. seealso::
+   Contributing this back to the project? :ref:`Where your module belongs
+   <module_placement>` covers the choice and `CONTRIBUTING.md
+   <https://github.com/siliconcompiler/siliconcompiler/blob/main/CONTRIBUTING.md>`_
+   covers the process: branches, tests, the four lint gates, and the docs build.
+
+To add support for a new EDA tool, you need to create a Python-based "driver" that teaches SiliconCompiler how to interact with it. Think of a driver as a universal adapter: it translates SiliconCompiler's standardized hardware compilation flow into the specific commands, scripts, and file formats that a particular tool understands.
+
+A complete driver consists of:
+
+* **One or more Task classes**: Defines a specific :term:`task` that the :term:`tool` can perform, such as :term:`synthesis` (syn) or :term:`place-and-route` (place). Each task specifies its inputs, outputs, and how to generate the command-line arguments.
+
+A complete list of built-in tools can be found in the :ref:`Tools <builtin_tools>` reference.
+
+The Structure of a Tool Driver
+------------------------------
+
+A tool driver is a Python module that typically defines at least one :class:`.Task` class.
+
+.. code-block:: python
+
+  from siliconcompiler import Task
+
+  class MyTask(Task):
+      """A task for running the tool in a specific way."""
+      # Task-level implementation goes here.
+
+      def setup(self):
+          # This is the main configuration method.
+          pass
+
+      # Other required methods (runtime_options, post_process, etc.)
+
+The setup() Method: Core Configuration
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The :meth:`.Task.setup()` method is the heart of the driver. It's called for each :term:`step` in the flow and is responsible for configuring all aspects of the tool and task.
+Inside this method, you have access to the project object to define your settings.
+
+Step 1: Basic Tool Configuration
+""""""""""""""""""""""""""""""""
+
+First, you tell SiliconCompiler about the tool's executable and how to check its version.
+
+.. code-block:: python
+
+  def setup(self):
+      # 1. Point to the executable.
+      self.set_exe('my_tool_binary')
+
+      # 2. Define how to check the version.
+      #    'vswitch' is the command-line flag to print the version.
+      #    'version' is a list of known-good version specifiers.
+      self.add_vswitch('--version')
+      self.add_version('>=2.1')
+
+Step 2: Task-Specific Configuration
+"""""""""""""""""""""""""""""""""""
+
+Next, you define what the specific task needs to run and what it will produce.
+
+.. code-block:: python
+
+  def setup(self):
+      # ... (tool setup from above)
+
+      # 3. Define required inputs.
+      #    This tells SC to expect a Verilog file from the 'input' node.
+      self.add_input_file('verilog.v')
+
+      # 4. Define expected outputs.
+      #    This tells SC that this task will produce a new Verilog netlist.
+      self.add_output_file('verilog.vg')
+
+      # 5. Define required schema parameters.
+      #    This ensures the flow will fail early if a critical setting is missing.
+      self.add_required_key('asic', 'pdk')
+      self.add_required_key('asic', 'asiclib')
+
+      # 6. For script-based tools (like TCL), define the entry script.
+      self.set_script('run_my_tool.tcl')
+
+.. important::
+
+   **Require every file the task reads, not only the settings it cannot do
+   without.** The required keys are also what a node's rerun check compares
+   and what ``sc-issue`` packages: a file the task reads without requiring it
+   -- a view reached through ``asic,asiclib`` and a fileset, say -- can change
+   without the node running again, and is missing from an issue built to
+   reproduce it. Where the task reads a library's files, require those
+   filesets' files, as the OpenROAD and Yosys tasks do.
+
+.. important::
+
+   ``setup()`` **SHOULD NOT call** ``find_files`` **(or anything else that
+   resolves a path)**. ``setup()`` runs for every node in the flow, before the
+   rerun check decides which of them will run -- nodes outside ``-from``/``-to``
+   and nodes whose previous result is reused included -- and resolving a path
+   there fetches a remote PDK just to answer it for a node that does nothing. It
+   also runs to build the task's page in the reference manual, against a
+   placeholder design with nothing to find. Declare keys in ``setup()``; resolve
+   the files they name in :meth:`.Task.runtime_options` or later, where the task
+   actually runs.
+
+Execution Lifecycle Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Beyond the initial setup, a :class:`.Task` class implements several methods that are called at different points during the :meth:`.Task.run()` process.
+
+runtime_options()
+"""""""""""""""""
+
+This method generates the command-line options for the tool. It is called at execution time, which is critical for distributed systems where absolute file paths are only known on the execution machine.
+
+**Why is this separate from setup()?** :meth:`.Task.setup()` is run early to validate the entire flow, while :meth:`.Task.runtime_options()` runs just-in-time to build the command, ensuring all paths are resolved correctly.
+
+.. code-block:: python
+
+  def runtime_options(self):
+      '''
+      Generates the command-line arguments for the tool.
+      '''
+      cmdlist = []
+
+      # Each option token is its own list item — never "-flag value" as a
+      # single string.
+      cmdlist.append("verilog.v")
+
+      # Add the output file path.
+      cmdlist.extend(['-o', 'verilog.vg'])
+
+      # Add the top module name.
+      cmdlist.extend(['-top', self.design_topmodule])
+
+      return cmdlist
+
+post_process()
+""""""""""""""
+
+This method is called after the tool executable has finished. Its primary purpose is to parse log files and report metrics back to the SiliconCompiler database. It can also be used to modify or reformat output files.
+
+.. code-block:: python
+
+  def post_process(self):
+      '''
+      Parses tool output and reports metrics.
+      '''
+      # Get the path to the log file for this step.
+      log_file = self.get_logpath("exe")
+
+      # Example: Parse the log file for the final cell area.
+      with open(log_file, 'r') as f:
+          for line in f:
+              if line.startswith('Final Area:'):
+                  area = float(line.split()[-1])
+                  # Record the metric in the SC database.
+                  self.record_metric('cellarea', area, 'um^2')
+
+pre_process() and run()
+"""""""""""""""""""""""
+
+* :meth:`.Task.pre_process()`: A hook that runs immediately before the tool executable is launched. Useful for last-minute adjustments based on results from prior steps.
+* :meth:`.Task.run()`: For pure-Python tools. If this method is defined, SiliconCompiler will execute this Python function instead of an external command-line executable. It should return 0 on success.
+
+Version Handling
+^^^^^^^^^^^^^^^^
+
+To ensure reproducible builds, SiliconCompiler has a robust version-checking system. You may need to implement these helper methods in your Tool class.
+
+* :meth:`.Task.parse_version()`: The output of exe --version can be messy. This function parses the raw stdout string and returns a clean version number (e.g., "2.1.3").
+* :meth:`.Task.normalize_version()`: SC's version checker uses the Python PEP-440 standard. If your tool uses a non-standard versioning scheme (e.g., 2.1+a4b8c1), this function should convert it to a compatible format (e.g., 2.1.post0.dev-a4b8c1).
+* :meth:`.Task.get_exe_version()`: A pure-Python tool has no executable to ask, so override this to return the version of the package it runs (e.g., ``pyslang``). The version is recorded with the run and checked against :meth:`.Task.add_version()` like any other.
+
+Interface for TCL-Based Tools
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For tools that are driven by TCL scripts, SiliconCompiler simplifies configuration by writing a :term:`manifest` file (`sc_manifest.tcl`) in the work directory.
+Your TCL script should source this file. It provides a nested TCL dictionary called sc_cfg containing the entire project configuration.
+
+Your TCL script is responsible for reading from this dictionary and applying the settings.
+
+.. code-block:: tcl
+
+  # In your run_my_tool.tcl script:
+
+  # Source the manifest to load the configuration
+  source sc_manifest.tcl
+
+  # Helper function to get the top-level module name
+  set sc_design [sc_top]
+
+  # Extract values from the configuration dictionary
+  set sc_asiclibs [sc_cfg_get asic asiclib]
+  set sc_pdk      [sc_cfg_get asic pdk]
+
+  # These variables hold library *names*. Use the sc_cfg_get_fileset helper to
+  # resolve a library + fileset into actual files before passing them to tool
+  # commands such as read_liberty or read_lef.
+  ...
+
+.. _dev_tools_asic_timing:
+
+Reading ASIC standard-cell timing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+An :term:`ASIC` tool that needs standard-cell timing — :term:`synthesis`,
+:term:`static timing analysis <STA>`, place-and-route — reads the library's
+timing files for the active :term:`delay model` and timing
+:term:`corners <corner>`. A :term:`standard cell` :term:`library`
+groups those files into *libcorner* :term:`filesets <fileset>`, keyed by
+``(corner, delaymodel)`` via
+:meth:`.StdCellLibrary.add_asic_libcornerfileset` (see
+:ref:`Timing models and the delay model <lib_delaymodel>` for the library side).
+
+A driver looks the timing fileset up by name, keyed on ``(corner, delaymodel)``.
+Every built-in ASIC driver (OpenROAD, OpenSTA) does this the same way. In Python,
+inside :meth:`.Task.setup()`, read ``asic,delaymodel``, walk the timing scenarios
+and their library corners, and declare the matching filesets' files as required
+inputs:
+
+.. code-block:: python
+
+  def setup(self):
+      super().setup()
+      # ... exe / script setup ...
+      delaymodel = self.project.get("asic", "delaymodel")
+      for libname in self.project.get("asic", "asiclib"):
+          lib = self.project.get_library(libname)
+          for scenario in self.project.constraint.timing.get_scenario().values():
+              for corner in scenario.get_libcorner(self.step, self.index):
+                  if not lib.valid("asic", "libcornerfileset", corner, delaymodel):
+                      continue
+                  for fileset in lib.get("asic", "libcornerfileset", corner, delaymodel):
+                      self.add_required_key(lib, "fileset", fileset, "file", "liberty")
+
+The reference script performs the identical lookup against the manifest with the
+``sc_cfg_*`` helpers, then reads each file:
+
+.. code-block:: tcl
+
+  set sc_delaymodel [sc_cfg_get asic delaymodel]
+  foreach corner $sc_scenarios {
+      foreach lib $sc_asiclibs {
+          set lib_filesets []
+          foreach libcorner [sc_cfg_get constraint timing scenario $corner libcorner] {
+              if { [sc_cfg_exists library $lib asic libcornerfileset $libcorner $sc_delaymodel] } {
+                  lappend lib_filesets {*}[sc_cfg_get library $lib asic libcornerfileset $libcorner $sc_delaymodel]
+              }
+          }
+          foreach lib_file [sc_cfg_get_fileset $lib $lib_filesets liberty] {
+              read_liberty -corner $corner $lib_file
+          }
+      }
+  }
+
+A library may also provide a compiled, binary timing model (here ``.bin``) that a
+tool loads faster than parsing Liberty. It is shipped under a ``<model>-bin``
+variant (``nldm-bin``, ``ccs-bin``); the target selects it with
+``set_asic_delaymodel("nldm-bin")``, and the driver performs the same
+``(corner, delaymodel)`` lookup but loads the compiled files with the tool's own
+reader in place of ``read_liberty``.
+
+If a tool always prefers the compiled model, the driver can select it *itself*
+instead of relying on the target — append ``-bin`` to the active delay model and
+use it whenever that fileset exists:
+
+.. code-block:: python
+
+  delaymodel = self.project.get("asic", "delaymodel")
+  if not delaymodel.endswith("-bin") and \
+          lib.valid("asic", "libcornerfileset", corner, f"{delaymodel}-bin"):
+      delaymodel = f"{delaymodel}-bin"   # prefer the compiled model when available
+
+That way a target can leave ``delaymodel`` as ``nldm`` and the driver still picks
+up ``nldm-bin`` automatically when the library ships it.
+
+.. _dev_tools_remote_placement:
+
+Declaring what a task needs remotely
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A remote run can place each node in its own environment, such as a container
+image that holds the node's tool. Two properties of :class:`.Task` tell it what a
+node needs. The leading underscore does not make them internal: they are the
+supported interface for any driver, including one outside this repository.
+
+* :attr:`.Task._remote_toolname` names the tool that must be installed. It
+  defaults to :meth:`.Task.tool`, so most drivers never override it. That
+  includes a task with no executable that drives its tool's Python package, as
+  the slang tasks do. Return another tool's name when the task runs that tool.
+  Return ``None`` when it needs nothing beyond SiliconCompiler, as the builtin
+  tasks do.
+* :attr:`.Task._remote_inherits_env` returns ``True`` when the node should run
+  wherever its input node ran. ``exec_input`` does this to run what an earlier
+  node built. It defaults to ``False``.
+
+Both are read from a task that has not been set up and has no project, so
+return a constant:
+
+.. code-block:: python
+
+  from typing import Optional
+
+  from siliconcompiler import Task
+
+  class RunBuiltBinary(Task):
+      def tool(self):
+          return "mytool"
+
+      def task(self):
+          return "run"
+
+      @property
+      def _remote_toolname(self) -> Optional[str]:
+          # Nothing to install: the program comes from the input node.
+          return None
+
+      @property
+      def _remote_inherits_env(self) -> bool:
+          # Run where the node that built the program ran.
+          return True
+
+API Quick Reference
+-------------------
+
+The :class:`.Task` class provides a rich API for defining and controlling how a tool operates. The methods are grouped below by their primary function.
+
+.. currentmodule:: siliconcompiler.Task
+
+Task __init__ methods
+^^^^^^^^^^^^^^^^^^^^^
+
+.. autosummary::
+    :nosignatures:
+
+    add_parameter
+
+Core Implementation Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+These are the main methods you will implement in your :class:`.Task` subclass to define its behavior.
+
+.. autosummary::
+    :nosignatures:
+
+    tool
+    task
+    parse_version
+    normalize_version
+    setup
+    pre_process
+    runtime_options
+    run
+    post_process
+
+Remote Placement Properties
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Override these to declare what a node needs on a remote server. See
+:ref:`dev_tools_remote_placement`.
+
+.. autosummary::
+    :nosignatures:
+
+    _remote_toolname
+    _remote_inherits_env
+
+Configuration Methods
+^^^^^^^^^^^^^^^^^^^^^
+
+These methods are called within your :meth:`.Task.setup()` implementation to configure the task's properties.
+
+Tools settings
+""""""""""""""
+
+.. autosummary::
+    :nosignatures:
+
+    set_exe
+    set_path
+    add_version
+    add_vswitch
+    add_licenseserver
+    add_sbom
+
+Task settings
+"""""""""""""
+
+.. autosummary::
+    :nosignatures:
+
+    add_commandline_option
+    add_input_file
+    add_output_file
+    add_parameter
+    add_postscript
+    add_prescript
+    add_regex
+    add_required_key
+    add_warningoff
+    set_environmentalvariable
+    set_logdestination
+    set_refdir
+    set_script
+    set_threads
+
+Runtime Accessor Methods
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+These methods are used to get information about the current state of the flow during execution (e.g., inside :meth:`.Task.runtime_options()` or :meth:`.Task.post_process()`).
+
+.. autosummary::
+    :nosignatures:
+
+    compute_input_file_node_name
+    design_name
+    design_topmodule
+    get_commandline_options
+    get_files_from_input_nodes
+    get_fileset_file_keys
+    get_logpath
+    get_output_files
+    get_threads
+    has_breakpoint
+    has_postscript
+    has_prescript
+    index
+    nodeworkdir
+    record_metric
+    step
+    task
+    tool
+
+Tool post process methods
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autosummary::
+    :nosignatures:
+
+    record_metric
+
+Documentation methods
+^^^^^^^^^^^^^^^^^^^^^
+
+These methods are used for auto-generating documentation for your tool.
+
+.. autosummary::
+    :nosignatures:
+
+    make_docs
+
+Class Reference
+---------------
+
+.. scclassautosummary::
+    :class: siliconcompiler/Task
+    :noschema:

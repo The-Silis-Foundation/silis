@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('vlt_all')
+test.sim_time = 2000000
+test.top_filename = "t/t_dfg_peephole.v"
+
+if not os.path.exists(test.root + "/.git"):
+    test.skip("Not in a git repository")
+
+# Read optimizations
+optimizations = []
+
+hdrFile = "../src/V3DfgPeepholePatterns.h"
+with open(hdrFile, 'r', encoding="utf8") as hdrFh:
+    prevOpt = ""
+    lineno = 0
+    for line in hdrFh:
+        lineno += 1
+        m = re.search(r'^\s*_FOR_EACH_DFG_PEEPHOLE_OPTIMIZATION_APPLY\(macro, (\w+)\)', line)
+        if not m:
+            continue
+        opt = m.group(1)
+        if prevOpt > opt:
+            test.error(hdrFile + ":" + str(lineno) + ": '" + opt + "; is not in sorted order")
+        prevOpt = opt
+        # Trivial, but also hard to trigger on purpose as it depends on rewrite order
+        if opt == "REPLACE_WITH_EQUIVALENT":
+            continue
+        optimizations.append(opt)
+
+if len(optimizations) < 1:
+    test.error("no optimizations defined in " + hdrFile)
+
+# Generate the equivalence checks and declaration boilerplate
+rdFile = test.top_filename
+plistFile = test.obj_dir + "/portlist.vh"
+pdeclFile = test.obj_dir + "/portdecl.vh"
+checkFile = test.obj_dir + "/checks.h"
+with open(rdFile, 'r', encoding="utf8") as rdFh, \
+     open(plistFile, 'w', encoding="utf8") as plistFh, \
+     open(pdeclFile, 'w', encoding="utf8") as pdeclFh, \
+     open(checkFile, 'w', encoding="utf8") as checkFh:
+    for line in rdFh:
+        m = re.search(r'^\s*.*`signal\((\w+),', line)
+        if not m:
+            continue
+        sig = m.group(1)
+        plistFh.write(sig + ",\n")
+        pdeclFh.write("output " + sig + ";\n")
+        checkFh.write("if (ref." + sig + " != opt." + sig + ") {\n")
+        checkFh.write("    std::cout << \"Mismatched " + sig + "\" << std::endl;\n")
+        checkFh.write("    std::cout << \"Ref: \" << VL_TO_STRING(ref." + sig +
+                      ") << std::endl;\n")
+        checkFh.write("    std::cout << \"Opt: \" << VL_TO_STRING(opt." + sig +
+                      ") << std::endl;\n")
+        checkFh.write("    std::exit(1);\n")
+        checkFh.write("}\n")
+
+# Compile un-optimized
+test.compile(verilator_flags2=[
+    "--stats",
+    "-fno-decompose",
+    "--build",
+    "-fno-dfg",
+    "+incdir+" + test.obj_dir,
+    "-Mdir", test.obj_dir + "/obj_ref",
+    "--prefix", "Vref"
+])  # yapf:disable
+
+# Compile optimized - also builds executable
+
+extraArgs = []
+if test.name == "t_dfg_peephole_off_all":
+    extraArgs.append("-fno-dfg-peephole")
+if test.name == "t_dfg_peephole_off_each":
+    for opt in optimizations:
+        opt = opt.lower()
+        opt = re.sub(r"_", "-", opt)
+        extraArgs.append("-fno-dfg-peephole-" + opt)
+
+test.compile(verilator_flags2=[
+    "--stats",
+    "-fno-decompose",
+    "--build",
+    "--exe",
+    "+incdir+" + test.obj_dir,
+    "-Mdir", test.obj_dir + "/obj_opt",
+    "--prefix", "Vopt",
+    "-fno-const-before-dfg",  # Otherwise V3Const makes testing painful
+    "-fdfg-synthesize-all",
+    "--dump-dfg",  # To fill code coverage
+    "-CFLAGS \"-I .. -I ../obj_ref\"",
+    "../obj_ref/Vref__ALL.a",
+    "../../t/t_dfg_peephole.cpp"
+] + extraArgs)  # yapf:disable
+
+
+def check(name, enabled):
+    name = name.lower()
+    name = re.sub(r'_', ' ', name)
+    pattern = r'DFG, Peephole, ' + name + r'\s+([1-9]\d*)\s*$'
+    if enabled:
+        test.file_grep(test.obj_dir + "/obj_opt/Vopt__stats.txt", pattern)
+    else:
+        test.file_grep_not(test.obj_dir + "/obj_opt/Vopt__stats.txt", pattern)
+
+
+# Check all optimizations defined in
+for opt in optimizations:
+    check(opt, test.name == "t_dfg_peephole")
+
+test.file_grep_not(test.obj_dir + "/obj_opt/Vopt__stats.txt",
+                   r'DFG.*non-representable.*\s[1-9]\d*$')
+
+# Execute test to check equivalence
+test.execute(executable=test.obj_dir + "/obj_opt/Vopt")
+
+test.passes()

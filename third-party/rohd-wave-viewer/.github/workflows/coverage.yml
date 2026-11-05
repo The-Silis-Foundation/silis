@@ -1,0 +1,90 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Code Coverage
+    permissions:
+      contents: write
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          cache: true
+
+      - name: Verify Flutter and Dart on PATH
+        run: bash scripts/verify_flutter_version.sh
+
+      - name: Install native build and coverage tools
+        run: |
+          tool/gh_actions/install_build_tools.sh
+          sudo apt-get update
+          sudo apt-get install --yes lcov librsvg2-bin
+
+      - name: Install Rust toolchain
+        run: tool/gh_actions/install_rust_1_92.sh
+
+      - name: Install project dependencies
+        run: tool/gh_actions/install_dependencies.sh
+
+      - name: Generate coverage report and badge
+        run: |
+          bash scripts/generate_coverage.sh --generate-svg
+          rsvg-convert --format=png --output=/tmp/coverage-badge.png /tmp/coverage-badge.svg
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: error
+
+      - name: Commit coverage badge
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Keep generated build changes out of the badge checkout.
+          badge_dir="$(mktemp -d "${RUNNER_TEMP}/coverage-badges.XXXXXXXX")"
+          badge_ref="$(git ls-remote --heads origin refs/heads/badges)"
+          if [[ -n "$badge_ref" ]]; then
+            git fetch origin refs/heads/badges
+            git worktree add --detach "$badge_dir" FETCH_HEAD
+          else
+            git worktree add --detach "$badge_dir" HEAD
+            git -C "$badge_dir" checkout --orphan coverage-badges
+          fi
+          trap 'git worktree remove --force "$badge_dir"' EXIT
+
+          cd "$badge_dir"
+          git ls-files -z | xargs -0 --no-run-if-empty git rm -f --
+          mkdir -p coverage
+          cp /tmp/coverage-badge.svg "coverage/${BRANCH_NAME}.svg"
+          cp /tmp/coverage-badge.png "coverage/${BRANCH_NAME}.png"
+
+          git add "coverage/${BRANCH_NAME}.svg" "coverage/${BRANCH_NAME}.png"
+          if ! git diff --staged --quiet; then
+            git commit -m "Update coverage badge for ${BRANCH_NAME} [skip ci]"
+          fi
+          git push origin HEAD:refs/heads/badges

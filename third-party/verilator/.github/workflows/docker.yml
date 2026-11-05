@@ -1,0 +1,89 @@
+---
+# Build and push verilator docker image when tags are pushed to the repository.
+# The following variable(s) must be configured in the github repository:
+# DOCKER_HUB_NAMESPACE: docker hub namespace.
+# The following secrets must be configured in the github repository:
+# DOCKER_HUB_USER: user name for logging into docker hub
+# DOCKER_HUB_ACCESS_TOKEN: docker hub access token.
+name: Build Verilator Container
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      manual_tag:
+        description: 'Git tag to use for image build'
+        required: true
+        type: string
+      add_latest_tag:
+        description: 'Tag workflow_dispatch docker image as "latest"'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-24.04
+
+    strategy:
+      matrix:
+        contexts:
+          - "ci/docker/run:verilator"
+          # - "ci/docker/buildenv:verilator-buildenv"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Extract context variables
+        run: |
+          echo "${{ matrix.contexts }}" | sed -r 's/(.*):.*/build_context=\1/' >> "$GITHUB_ENV"
+          echo "${{ matrix.contexts }}" | sed -r 's/.*:(.*)/image_name=\1/' >> "$GITHUB_ENV"
+          echo "git_tag=${GITHUB_REF#refs/*/}" >> "$GITHUB_ENV"
+
+      - name: Use manual tag
+        if: ${{ inputs.manual_tag }}
+        run: |
+          echo "git_tag=${{ inputs.manual_tag }}" >> "$GITHUB_ENV"
+
+      - name: Docker meta
+        id: docker_meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
+        with:
+          images: |
+            ${{ vars.DOCKER_HUB_NAMESPACE }}/${{ env.image_name }}
+          tags: |
+            type=match,pattern=(v.*),group=1,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ inputs.manual_tag }},enable=${{ inputs.manual_tag != '' }}
+            type=raw,value=latest,enable=${{ inputs.add_latest_tag == true }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4
+        with:
+          buildkitd-flags: --debug
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Build and Push to Docker
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        with:
+          context: ${{ env.build_context }}
+          build-args: SOURCE_COMMIT=${{ env.git_tag }}
+          platforms: linux/arm64,linux/amd64
+          push: ${{ !env.ACT && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}

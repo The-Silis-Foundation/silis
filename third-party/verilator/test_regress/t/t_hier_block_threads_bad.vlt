@@ -1,0 +1,9 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2025 Antmicro
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+hier_workers -module "Core" -workers `WORKERS
+hier_workers -module "SubCore" -workers `WORKERS

@@ -1,0 +1,22 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2025 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  logic [7:0] smaller;
+  logic [15:0] bigger;
+  typedef logic [15:0] bigger_t;
+
+  initial begin
+    smaller = 8'hfa;
+    bigger = bigger_t'(signed'(smaller));
+    if (bigger != 16'hfffa) $stop;
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

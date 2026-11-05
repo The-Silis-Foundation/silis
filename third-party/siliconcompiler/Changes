@@ -1,0 +1,2333 @@
+.. for github, vim: syntax=reStructuredText
+
+=================================
+Revision History and Change Log
+=================================
+
+The changes in each SiliconCompiler release version are described below. Commit
+version shown in (). Where applicable, the contributors that suggested a given
+feature are shown in [].
+
+SiliconCompiler 0.38.11 (2026-10-15)
+=========================================
+
+**Major:**
+
+ * Removed the `sc-dashboard` and `sc-server` commands in favor of `python3 -m siliconcompiler.apps.utils.dashboard` and `python3 -m siliconcompiler.remote.server`, and the `cleanup` support app in favor of `sc-config cache clean`.
+
+**Minor:**
+
+ * Added `sc-config`, which lists and changes settings, sets up and tests job status email, shows and sweeps the cache, and prints where SiliconCompiler keeps its files.
+ * Added `--gui`, `--web` and `--shell` to a node's `replay.sh`, where the tool supports them, to rerun the step in its GUI, web viewer or interactive prompt and leave it open; an `sc-issue` testcase's `run.sh` passes them through.
+ * Added `RunListener`, registered with `Scheduler.add_listener`, to hear a run start, each node start and finish, and the run end, and deprecated `TaskScheduler.register_callback` in its favor.
+ * Added opensta to the `asic`, `asic-hls` and `asic-soda` groups of `sc-install`.
+
+ * Tools:
+
+  * openroad: added `pdn_dont_add_pins` to `power_grid`, and made `init_floorplan` read a bump map produced by an earlier step.
+
+SiliconCompiler 0.38.10 (2026-10-06)
+=========================================
+
+**Major:**
+
+ * Removed the public server as the default for remote runs, so a remote run now fails unless a server has been configured with `sc-remote`.
+
+**Minor:**
+
+ * Added `gitlab://` and `s3://` dataroots, the latter through a new `s3` extra, along with a `+private` form of every scheme and `python://` paths to a directory inside a package.
+ * Masked dataroot credentials in logs, in the manifests a run writes for its tools, and in `sc-issue` testcases, which also leave out environment variables that look like secrets.
+ * Reworked file collection for remote runs and `sc-issue` so collected files keep their names, each file is stored once, and links inside a collected directory are kept.
+ * Changed `sc-show` without a file to open the richest view a build has, an odb ahead of the def beside it, and made `sc-show -list` print the order it searches in.
+ * Added nested `-f` and `-F` file lists, `-I` include directories and `-v` library files to `Design.read_fileset`.
+ * Added a `toolscripts` entry point so a package can add tools to `sc-install` or override SiliconCompiler's version pins, along with reusable workflows that keep those pins current and build their docker images.
+
+ * Tools:
+
+  * klayout: changed the screenshot `margin` to a percentage of the design's size, defaulting to 1%, rather than a distance in microns.
+  * openroad: fixed a def opened with `sc-show` losing its contents when a hierarchical netlist sat beside it, and detailed routing ignoring `[asic,minlayer]` and `[asic,maxlayer]`.
+  * yosys: added cross-boundary optimization of a design that is not flattened, on by default with yosys 0.58 or newer, and SAT-based flip-flop merging through `opt_dff_sat`.
+
+SiliconCompiler 0.38.9 (2026-09-21)
+=========================================
+
+**Minor:**
+
+ * Reworked how a run reuses an existing build directory: an upstream excluded by `[option,from]`, `[option,to]` or `[option,prune]` that cannot supply what depends on it is now rebuilt, rather than the run failing on an input nothing in it can produce.
+ * Added a task's declared `input` and `output` to what decides whether a node has to rerun.
+ * Fixed a previous run's `SKIPPED` status being carried into the next run, which stopped a re-enabled step from running.
+ * Added token authentication for gitlab and bitbucket dataroots, and fixed tokens being sent under the wrong username, written into the logged clone URL, and prompted for on a machine that cannot answer.
+ * Moved `pandas` into the `dashboard` extra and added a `server` extra for running `sc-server`, so a default install carries only what a local flow needs.
+ * Sped up the initial load by deferring imports that only part of a run needs.
+
+ * Tools:
+
+  * openroad: added support for rectilinear floorplans, and required an explicit die and core area when a padring is used.
+
+SiliconCompiler 0.38.8 (2026-09-14)
+=========================================
+
+**Minor:**
+
+ * Split the cache directory into `dataroot` for downloaded data sources and `tools` for the caches tools keep between runs, and added `Task.cachedir` so a tool cache lands where `[option,cachedir]` covers it.
+ * Added an automatic sweep of the data source cache at the start of a run, throttled to once a week and to entries unused for 90 days, both tunable through `cleanupdays` and `cleanupinterval`.
+ * Added `Task.get_digest`, a hash of everything that configures a task, for naming a cache directory after a configuration rather than after a tool.
+ * Reworked `[option,continue]`, which is set on the node that may fail: nodes downstream of an excused failure now run on the inputs that did arrive instead of being skipped.
+ * Added run cancellation to the scheduler, which keeps queued nodes from starting and ends the ones already running along with their descendants.
+ * Fixed environment variables that are declared without a value being handed to the tool as `None`.
+ * Added docker as a cluster type for `sc-server`, moved its job directories under a build root, and pointed compute nodes at a cluster-wide cache rather than the home directory of whoever runs them.
+ * Added a `docker compose` deployment of a server and a slurm cluster under `setup/server`.
+
+ * Tools:
+
+  * bambu: write the compiler cache ccache keeps into the tool cache rather than the home directory.
+  * chisel: keep coursier's jar cache in the tool cache.
+  * keplerformal: added `reset_port` and `reset_cycles` to the `sec` task, and treat a difference the tool finds as a verdict rather than as a failure to run.
+  * openroad: added the `scan_clock_mixing`, `scan_max_length` and `scan_max_chains` scan chain controls to global placement, and made logic depth reporting ask for a single path per group so it no longer exhausts memory.
+  * opensta: made logic depth reporting ask for a single path per group so it no longer exhausts memory.
+  * verilator: write the compiler cache ccache keeps into the tool cache rather than the home directory.
+
+SiliconCompiler 0.38.7 (2026-09-03)
+=========================================
+
+**Minor:**
+
+ * Shrank the tool container images: symbols are now stripped from every installed tool, packages a tool only needed to build itself are removed, link-time-only static archives are dropped, and a tool image is no longer copied into `sc_tools` when a dependent image already carries it. Added `sc_remove_prereqs` and `sc_strip_prefix` to the tool install helpers.
+
+ * Tools:
+
+  * chisel: install a JRE of its own rather than relying on the one surelog pulls in for its build, and skip the `sbtn` launchers built for other platforms.
+  * mlir: install only the components the flow and soda-opt need instead of the whole LLVM install tree.
+  * openroad: keep tie cells in the netlist written out for logical equivalence checking.
+
+SiliconCompiler 0.38.6 (2026-09-02)
+=========================================
+
+**Minor:**
+
+ * Added `LECFlow`, a logical equivalence check flow, with combinational, sequential and k-induction checks. [jyrj]
+ * Added a SODA Synthesizer front end, which takes a machine learning model in MLIR through soda-opt and Bambu into the normal ASIC flow, along with `SODAASICFlow` and a tutorial and example. The elaboration, synthesis and ASIC flows now take a `frontend` flowgraph instead of a `language`, so a front end can live beside the tool driver it belongs to.
+ * Split tool output onto its own `LOG` and `LOGERROR` log levels so it can be told apart from SiliconCompiler's own messages, and made `quiet` apply to a task's own logging without hiding why a run stopped.
+ * Reworked SDC clock extraction to handle line continuations, variables and the SDC files of timing modes, and added `get_clock_port`.
+ * Added job cancellation to the remote server and the slurm scheduler, along with job ownership checks, an upload size limit, and a client that works before a server has been configured.
+ * Fixed `sc-show` to honor the tool it was given, and to find the open, show and screenshot tasks that are not hard-coded.
+ * Moved the tool container builds to Ubuntu 24.
+
+ * Tools:
+
+  * bambu: added RTL simulation, cell area and cycle count reporting, and parameters for the constraints and technology files, memory allocation policy, front-end compiler and testbench filesets.
+  * mlir: added a tool driver for the MLIR tools.
+  * openroad: added support for the `ccs` delay model and logic depth histogram reports.
+  * opensta: added support for the `ccs` delay model and an interactive `open` task.
+  * soda: added a soda-opt tool driver.
+  * yosys: added an interactive `open` task.
+
+SiliconCompiler 0.38.5 (2026-08-18)
+=========================================
+
+**Minor:**
+
+ * Added the `gt2n_demo` and `icsprout55_demo` targets.
+ * Added `set_dieoutline` and `set_coreoutline`, which take the width and height in the same order as `get_diesize` and `get_coresize` return them. These deprecate `set_diearea_rectangle` and `set_corearea_rectangle`, which took the height first.
+ * Allowed the tool install scripts to run without sudo access when the prerequisite packages are already present, which makes an unprivileged install into the default `~/.local` prefix possible.
+
+ * Tools:
+
+  * openroad/opensta: brought the setup and hold timing reports to parity, filled in the reports that were missing, and moved the per-corner reports into a per-scenario directory.
+
+SiliconCompiler 0.38.4 (2026-08-13)
+=========================================
+
+**Minor:**
+
+ * Added `PNRFlow`, a place-and-route only flow, which `ASICFlow` is now assembled from.
+ * Added computation of the core or die area from `coremargin` when only one of the two is provided.
+ * Added support for xz and Zstandard compressed tarballs to package downloads, and switched archive format detection to the contents of the download rather than its name.
+ * Ensured the remote configuration file, which can hold a plaintext password or API key, is only readable by the user.
+ * Sped up manifest writing for manifests containing non-ASCII characters.
+ * Reorganized the documentation landing page, and added a padring tutorial and example, simulation and OpenROAD how-tos, and an external libraries page.
+
+ * Tools:
+
+  * openroad: aligned the place-and-route flow with ORFS and LibreLane, adding an opt-in timing repair on the global routing parasitics (`rsz_enable`) and a new antenna repair node after detailed routing, added an opt-in setup timing repair on the synthesized netlist (`repair_synth_timing`), which is an alternative to removing the synthesis buffers rather than additive.
+
+
+SiliconCompiler 0.38.3 (2026-08-10)
+=========================================
+
+**Major:**
+
+ * Removed the `Schematic` schema, since it was unused.
+
+**Minor:**
+
+ * Added flowgraph callbacks, allowing flows to be modified after being inserted into a project.
+ * Added a beta version of hierarchy handling to elaboration to support parameterized modules.
+ * Added `csv` as an accepted task manifest format.
+ * Fixed unsupported schedulers being silently accepted.
+ * Fixed remote package re-download and ensured cached packages are only extracted once.
+ * Expanded the documentation with new tutorials, examples, FAQs, and how-tos, along with link checking.
+ * Added Ubuntu 26 and RHEL 9 tool build fixes with build selection and a weekly build schedule.
+
+ * Tools:
+
+  * openroad: added a PEX correlation methodology, along with the `openroad_pex` flow and calibration APIs, which replaces `generate_openroad_rcx`.
+  * openroad/opensta: reorganized the generated reports to make them easier to follow.
+  * verilator: added support for `--trace-structs` and `--trace-depth`. [HU90m]
+  * sby: switched the default engine from boolector to bitwuzla.
+
+
+SiliconCompiler 0.38.2 (2026-07-15)
+=========================================
+
+**Minor:**
+
+ * Added a cached schema class to speed up loading, with support for frozen schemas.
+ * Added system-wide settings, letting an administrator provide machine-wide defaults.
+ * Added tool-install checks to avoid rebuilding already-installed tools.
+
+ * Tools:
+
+  * opensta: added support for reading VCD files for switching-activity-driven timing analysis.
+  * yosys: removed the standalone yosys-slang plugin now that it ships with yosys 0.67.
+
+
+SiliconCompiler 0.38.1 (2026-07-09)
+=========================================
+
+**Minor:**
+
+ * Added a formal property check flow (`PropertyCheckFlow`) for BMC, cover, and prove modes.
+
+ * Tools:
+
+  * sby: added a SymbiYosys formal verification tool with install scripts for Ubuntu 22/24/26.
+  * yosys: refactored synthesis scripts and shared TCL procs, and added tests for slang usage.
+
+
+SiliconCompiler 0.38.0 (2026-07-08)
+=========================================
+
+**Major:**
+
+ * Removed support for Python 3.9.
+ * Changed the global-value key from `global` to `*` to avoid name conflicts, with legacy read support for older manifests.
+ * Added `rename_node` to allow flowgraph nodes to be renamed.
+ * Added value ranges and limits to schema types using Ada-style notation, e.g. `int<0..100>`, `float<..1.0>`, and enums like `str<a,b,c>`.
+ * Moved the dashboard to an optional dependency.
+
+**Minor:**
+
+ * Added language detection to targets.
+ * Added a warning when installed pip package versions are out of sync.
+ * Made `get_cores` aware of the scheduler's processor affinity.
+ * Allowed partial matches when setting and getting flows.
+ * Made filelist generation depth first.
+ * Added Ubuntu 26 tool install scripts.
+ * Fixed warnings about leaked resources and mishandled `atexit` cleanup.
+
+ * Tools:
+
+  * openroad: added a parasitic extraction (PEX) interface to the PDK with a warning when no corner is found, and added a dedicated cleanup task that moves logic cleanup out of floorplanning.
+  * montage: added a `convert` tool, automatic montage handling, and host-scaled ImageMagick resource limits via a private `policy.xml`.
+  * icarus/verilator: added a parameter to set the timescale for compilation.
+
+
+SiliconCompiler 0.37.12 (2026-06-09)
+=========================================
+
+**Minor:**
+
+ * Added breakpoint handling in the scheduler to avoid multiple breakpoints from running at the same time.
+
+ * Tools:
+
+  * img2stream: added LEF output.
+  * pyslang: updated to version 11.
+  * openroad: fixed write_views on missing OpenRCX files.
+  * verilator: added support for verilog only testbenches.
+
+
+SiliconCompiler 0.37.11 (2026-05-20)
+=========================================
+
+**Minor:**
+
+ * Fixed error message in `smake` when no file is provided.
+ * Improved path/dir/file type checking in schema types.
+ * Fixed issue where flows would be marked as failed when using `option,from`.
+ * Added preferred indicator to `sc-show -list`.
+
+
+SiliconCompiler 0.37.10 (2026-05-11)
+=========================================
+
+**Minor:**
+
+ * Fixed flowgraph handling of builtin tasks, like min and max, to correctly handle the input/output file checks.
+ * Fixed the time reporting on the dashboard to avoid double counting parallel tasks.
+
+ * Tools:
+
+  * openroad: added checks for pin placement outside die area and added support for glob skip reports.
+
+
+SiliconCompiler 0.37.9 (2026-05-08)
+=========================================
+
+**Minor:**
+
+ * Made the breakpoint interface more robust and fixed issues with text getting garbled.
+ * Fixed issue when setting `option,from` where flowgraph would ignore it if the step appeared in a leg with parallel paths.
+
+ * Tools:
+
+  * openroad: added better handling of pin placement.
+
+
+SiliconCompiler 0.37.8 (2026-05-04)
+=========================================
+
+**Major:**
+
+ * Added `OpenTask` as parent class to `ShowTask` and `ScreenshotTask`, which enable opening in the commandline.
+
+**Minor:**
+
+ * Added `.write_depgraph` to Project to enable displaying the dependency graph of a project.
+ * Fixed calls to `sc-issue` to remove the requirement to add `-cfg`.
+ * Fixed file collection to avoid collecting a file twice.
+ * Updated log reading handling to better handle tools that emit partial lines.
+ * Fixed git file resolver when LFS is used.
+
+ * Tools:
+
+  * openroad: added support for `OpenTask` and reordered the creation of placement blockages.
+
+
+SiliconCompiler 0.37.7 (2026-04-21)
+=========================================
+
+**Minor:**
+
+ * Added dataroot resolver to allow for nesting dataroots.
+ * Fixed log files accumulating in the build directory and updated log naming to make it easier to identify runs.
+ * Added job termination when system memory exceeds 99% utilization.
+
+ * Tools:
+
+  * openroad: added support for placement and routing blockages in init floorplan.
+
+
+SiliconCompiler 0.37.6 (2026-04-15)
+=========================================
+
+**Minor:**
+
+ * Switched to marking cached downloads as readonly to avoid accidental overwrites.
+ * Added utility app to cleanup caches with `python3 -m siliconcompiler.apps.utils.cleanup`.
+ * Updated targets to map regfiles from lambdalib.
+ * Added `scp` based file path resolver to allow files to be copied between machines.
+
+ * Tools:
+
+  * openroad: Added option to check that all pins are placed and remove blockages created during macro placement.
+
+
+SiliconCompiler 0.37.5 (2026-04-08)
+=========================================
+
+**Minor:**
+
+ * Added `-tool` option to `sc-show` to allow for tool filtering.
+ * Ensure the flow restarts when the topmodule name changes.
+
+ * Tools:
+
+  * openroad: Added support for handling 3D pin placement, reordered macro placement to occur before padring generation, and added 3D blox viewing support.
+
+
+SiliconCompiler 0.37.4 (2026-03-25)
+=========================================
+
+**Minor:**
+
+ * Tools:
+
+  * cocotb: Added plusargs task to allow for easier access to plusargs in simulations.
+
+
+SiliconCompiler 0.37.3 (2026-03-22)
+=========================================
+
+**Minor:**
+
+ * Updated layout handling of the dashboard to better handle future modifications.
+ * Added help screen to dashboard and basic controls for what is displayed.
+ * Added check for adding dependencies to projects without a name.
+ * Added support for `?submodules=<True/False>` for git dataroots to control pulling submodules.
+
+ * Tools:
+
+  * klayout: added task to convert images to GDS.
+  * vcd2fst: added to support converting VCD files to FST.
+
+
+SiliconCompiler 0.37.2 (2026-03-09)
+=========================================
+
+**Minor:**
+
+ * Fixed recursive call on `.write_fileset` to avoid excessive recursion.
+ * Fixed file log installation to ensure the log contains errors from tool setup.
+ * Added additional error checks when adding aliases to check for no-op aliases.
+ * Added basic handling of type hinting to `smake`.
+
+ * Tools:
+
+  * openroad: update scripts to provide initial handling of multi-mode timing.
+  * opensta: update scripts to provide initial handling of multi-mode timing.
+
+
+SiliconCompiler 0.37.1 (2026-02-26)
+=========================================
+
+**Minor:**
+
+ * Fixed handling of tokens during github+private dataroot resolution.
+ * Fixed `from_dict` handling to correctly restore a schema from file.
+ * Ensure the checks in `.run()` gracefully handle missing files.
+
+ * Tools:
+
+  * klayout: default to writing gzipped files.
+  * openroad: default to writing gzipped odb and def files.
+
+
+SiliconCompiler 0.37.0 (2026-02-24)
+=========================================
+
+**Major:**
+
+ * Changed schema to make design object base class for all libraries.
+
+**Minor:**
+
+ * Fixed resizing of dashboard to ensure logs are visible after resize.
+ * Fixed dashboard use when breakpoints are present.
+ * Fixed `sc-show` to correctly handle `-cfg`.
+ * Fixed flowgraph handling when using `option,from`.
+ * Updated time format in dashboard to make it easier to read.
+ * Added `get_flow` to Project class to allow access to the loaded flowgraphs.
+
+ * Tools:
+
+  * klayout: added stream2lef task to generate a lef from a GDS or OAS file.
+  * openroad: fixed version parsing.
+  * opensta: added write_sdf and write_liberty support to timing task.
+  * vpr: updated pin constraint handling.
+
+
+SiliconCompiler 0.36.5 (2026-02-02)
+=========================================
+
+**Minor:**
+
+ * Fixed dashboard line wrapping to correctly account for the width of the terminal.
+ * Reworked error handling to ensure backtrace is available when running with the dashboard.
+
+
+SiliconCompiler 0.36.4 (2026-01-31)
+=========================================
+
+**Minor:**
+
+ * Fixed commandline handling of `sc-issue` when `-cfg` is missing.
+ * Added support for `-jobs` to `sc-install` to control number of build jobs.
+ * Updated detection of editable python installs.
+ * Fixed json serialization bug when journal is active.
+
+ * Tools:
+
+  * yosys: removed default use of kogge-stone techmap pass.
+  * openroad: correctly include lefs in floorplanning required keys.
+  * icarus, verilator: added support for cocotb plugins.
+
+
+SiliconCompiler 0.36.3 (2026-01-21)
+=========================================
+
+**Minor:**
+
+ * Tools:
+
+  * builtin: added wait task to better handle stalling flow progress
+  * klayout: added merge task to provide a simple interface for merging multiple GDSs
+  * pyslang: updated to v10.0.0
+
+
+SiliconCompiler 0.36.2 (2026-01-16)
+=========================================
+
+**Minor:**
+
+ * Corrected auto dataroot behavior when setting abs paths.
+ * Corrected logging during check_filepaths on design objects to ensure errors are printed.
+ * Added `.get_library` to Project to allow access to imported libraries.
+
+ * Tools:
+
+  * openroad: added option to bypass SDC loading.
+
+
+SiliconCompiler 0.36.1 (2026-01-10)
+=========================================
+
+**Minor:**
+
+ * Expanded parameter setters for tasks.
+
+ * Tools:
+
+  * openroad: fixed pin constraints handling, added support for editing halos.
+
+
+SiliconCompiler 0.36.0 (2026-01-06)
+=========================================
+
+**Major:**
+
+ * Changed schema to better handle timing constraints, by splitting out mode specific information from the scenarios.
+
+**Minor:**
+
+ * Reimplemented flowgraph rendering with file IO information.
+ * Fixed tool version checking to support threaded runs.
+ * Reworked use of pipes during execution to avoid creating more pipes than needed.
+ * Fixed flowgraph IO checks to only check required files.
+
+ * Tools:
+
+  * klayout: fixed handling of GDS generation when foreign is specified in lef.
+  * openroad: added support for halo constraints.
+  * kelper-formal: added initial support for LEC with kepler-formal.
+
+
+SiliconCompiler 0.35.4 (2025-12-08)
+=========================================
+
+**Major:**
+
+ * Added support for `settings.json` to allow users to set defaults and persistent options and controls for slurm nodes.
+
+**Minor:**
+
+ * Added limit to the number of warnings/errors that will be printed to the terminal.
+ * Added `copy_*` methods to timing constraints to better support building multiple modes.
+ * Added support for flow to run collection if the specific node requires it.
+ * Added check for conflicting flow tasks and generate an error if one is found.
+ * Added Python 3.14 to testing matrix.
+ * Improved logging to help identify specific log files.
+ * Ensured data is cleaned up when a failure occurs while downloading remote data.
+ * Corrected missing history when failures occur in the flow.
+ * Fixed bug causing skipped tasks to not get re-executed when restarting flow.
+
+ * Tools:
+
+  * yosys: added warning to indicate that slang was not found, added controls for undefined signals, and buffer insertion.
+  * openroad: added support for using bmaps to place bumps, added IR drop task to provide better "what-if" analysis.
+  * vivado: added support for pre/post scripts.
+
+
+SiliconCompiler 0.35.3 (2025-11-10)
+=========================================
+
+**Minor:**
+
+ * Added support for downloading `.bz2` files as dataroots.
+ * Added new accessor methods to `Flowgraph`.
+ * Implemented lazy loading for the schema to significantly speed up loading from disk.
+ * Implemented multithreaded checks at the start of `.run()` to accelerate the determination of which nodes need to be re-run.
+ * Optimized runtime handling of `.active_*` attributes to avoid excessive copying.
+ * Corrected file upload behavior for the remote runner.
+
+ * Tools:
+
+  * klayout: Fixed the screenshot task to ensure it can be correctly inserted into a flowgraph.
+
+
+SiliconCompiler 0.35.2 (2025-10-28)
+=========================================
+
+**Minor:**
+
+ * Corrected `sc-issue` handling of libraries to properly include pdk information.
+ * Added `.find_task` to `Task` class to replace `get_task` and deprecated this method.
+ * Restored missing copy flags in schema to ensure proper upload to remote runners.
+ * Added tool version check to start of `.run()` to allow for early version checking when possible.
+ * `.check_filepaths` now checks dependency filepaths too.
+
+ * Tools:
+
+  * builtin: added tasks for filtering files between nodes and entry node to copy files into the build directory.
+  * gtkwave: added fst to supported file extensions.
+  * openroad: fixed screenshot task to allow for insertion into flows and handling of timing information.
+  * surfer: added fst to supported file extensions.
+  * verilator: fixed path used for automatic VCD dump.
+
+
+SiliconCompiler 0.35.1 (2025-10-17)
+=========================================
+
+**Minor:**
+
+ * Added support for providing external tool install scripts and groups to sc-install.
+ * Fixed installation order in `sc-install` to use lists instead of sets, preserving the intended group ordering.
+ * Fixed path handling to correctly resolve paths when dataroot starts with an environment variable.
+ * Updated task scheduling to more reliably honor the node order defined in the flowgraph.
+
+ * Tools:
+
+  * opensta: reimplemented task skipping logic for FPGA timing analysis.
+
+
+SiliconCompiler 0.35.0 (2025-10-08)
+=========================================
+
+This release introduces a major architectural overhaul to improve usability, flexibility, and error checking.
+These are changes that will require you to update all your existing scripts and workflows.
+This is a release towards reaching v1.0.0.
+
+**Major:**
+
+ * The monolithic `Chip` object has been replaced by a set of target-specific `Project` classes (`ASIC`, `FPGA`, `Sim`, and `Lint`). This change provides better type-hinting, validation, and isolates settings for different targets.
+ * The `Design` class is now the primary interface for managing sources. The old `.input()` calls have been replaced by a more structured "fileset" system, allowing you to group related files (e.g., RTL, SDC, etc.) and toggle them easily.
+ * The command-line dashboard, which shows real-time progress of a run, is now on by default for interactive sessions. This can be controlled via `.option.set_nodashboard(True)`.
+ * The `sc` command-line application has been removed in favor of using Python scripts directly for better reproducibility. The `.clock()` helper method has also been removed.
+ * While direct schema manipulation with `.set()` and `.add()` remains supported, we now recommend using a more "Pythonic" API with helper methods for common settings. This improves code readability and reduces errors from misspelled keys.
+ * All task drivers have been rewritten to the new API.
+ * The core API has been refactored to be more object-oriented. Instead of interacting with a single, monolithic `Chip` object, you now work with distinct objects that have clear responsibilities, such as `Project` and `Design`.
+
+**Minor:**
+
+ * Significantly expanded testing coverage of user facing methods to better support checks for backwards compatibility.
+
+
+SiliconCompiler 0.34.3 (2025-08-11)
+=========================================
+
+**Minor:**
+
+ * Implemented support for sets in schema, denoted by `{}`.
+ * Fixed cache folder handling by appending unique ID to each folder to avoid name collisions.
+ * Command line dashboard shows siliconcompiler log when tool log is not available, output is now preserved on exit, and improved handling of multiple jobs layout.
+ * Added `job.log` to build directory to provide a file source for the logging as well as the terminal.
+
+ * Tools:
+
+  * slang: updated to slang v9.0.
+
+
+SiliconCompiler 0.34.2 (2025-07-21)
+=========================================
+
+**Minor:**
+
+ * Fixed handling of tool command line arguments to ensure they are all strings.
+ * Fixed handling of schema parameters with default fields beyond just value.
+ * Fixed handling of schema set parameters.
+ * Added time delays when packages are locked to avoid deadlocks.
+ * Moved package caching to Resolver class to allow for shared caching across schema sections.
+ * Modified return value of `.getkeys()` to return a sorted tuple of the keys.
+
+
+SiliconCompiler 0.34.1 (2025-07-07)
+=========================================
+
+**Major:**
+
+ * Removed support for Python 3.8.
+ * Changed node names from {step}{index} to {step}/{index} [Ciprian167].
+
+**Minor:**
+
+ * Ensure only tool outputs are forwarded for skipped nodes.
+
+ * Tools:
+
+  * openroad: limit default max displacement for detailed placement optimizations.
+  * opensta: added support to gracefully handle empty input files.
+  * surfer: added support for surfer for waveform viewing [infinitymdm].
+  * vpr: added support to generate timing analysis files.
+
+
+SiliconCompiler 0.34.0 (2025-06-16)
+=========================================
+
+**Major:**
+
+ * Added `.find_files` and `.check_filespaths` functionality to `BaseSchema`.
+ * Added functionality to `BaseSchema` to allow reverse traversal of the schema.
+ * Removed support for paths containing environmental variables.
+
+
+**Minor:**
+
+ * Added a values only mode to `getdict` to only return the values in the schema.
+ * Changes the log color in the commandline dashboard to white for better visibility.
+
+
+SiliconCompiler 0.33.2 (2025-06-03)
+=========================================
+
+**Minor:**
+
+ * Fixed bug in git submodule checkouts that left the incorrect version of the submodules checked out.
+ * Updated replay script to provide access to replay python scripts.
+ * Fixed bug in remote client that caused errors when running with hashing turned on.
+ * Updated `[record,starttime]` and `[record,endtime]` to include microseconds.
+
+ * Tools:
+
+  * slang: updated to version 8.1.
+
+
+SiliconCompiler 0.33.1 (2025-05-23)
+=========================================
+
+**Minor:**
+
+ * Removed flowgraph utility functions and replaced with calls to flowgraph class.
+ * Fixed manifest merging during remote run.
+ * Switched core scheduler code to be class instead of a collection methods.
+ * Attempt to determine if sudo is needed during `sc-install` and selectively apply it.
+
+ * Tools:
+
+  * opensta: added support for sdf reading.
+  * slang: use elaboration for linting to ensure user feedback.
+  * yosys: ensure cell areas are annotated before determining flattening.
+
+
+SiliconCompiler 0.33.0 (2025-05-19)
+=========================================
+
+**Major:**
+
+ * Core schema infrastructure rewritten to provide better testing and easier use when integration changes.
+
+**Minor:**
+
+ * Added multi-job handling to command line dashboard and corrected handling of coloring in the log.
+ * Updated help, scopes, and default values in various keys int he schema.
+ * Allow packages to reference keys as data source.
+ * Speedup load time by selective loading large libraries.
+ * Added caching to flowgraph node handling to speed up common use cases.
+
+ * Tools:
+
+  * openroad: added gif of IR drop
+  * yosys: improved yosys-slang integration
+  * sv2v: allow runtime bypass via `['tool', 'sv2v', 'task', 'convert', 'var', 'skip_convert'] = True`.
+
+
+SiliconCompiler 0.32.3 (2025-04-11)
+=========================================
+
+**Major:**
+
+ * Added a commandline dashboard to provide quick overview of a run. Accessible by adding `.dashboard(type='cli')` before calling `run()`. [Ciprian167]
+
+**Minor:**
+
+ * Fixed `sc-issue` bug that caused the directory to have a partial name.
+ * Fixed `replay.sh` generator that caused an invalid bash script to get generated during issue creation.
+
+ * Tools:
+
+  * openroad: fixed metal fill script bug that prevented the metal fill from executing properly.
+  * opensta: added build scripts for opensta.
+  * yosys: added ability use yosys as a frontend for simple design.
+
+
+SiliconCompiler 0.32.2 (2025-03-31)
+=========================================
+
+**Minor:**
+
+ * Expanded tool builds to support arm architectures, where possible.
+ * Added tool group descriptions to `sc-install -help`.
+
+ * Tools:
+
+  * openroad: added repair design option to repair timing to reduce number of design rule violations.
+  * yosys: split the FPGA and ASIC synthesis flows.
+
+
+SiliconCompiler 0.32.1 (2025-03-13)
+=========================================
+
+**Minor:**
+
+ * Added github specific url resolver for downloading artifacts from github.
+ * Added support to specify step and index for `sc-show` and `sc-dashboard`.
+
+
+SiliconCompiler 0.32.0 (2025-03-11)
+=========================================
+
+**Major:**
+
+ * Changed default behavior of `.summary` to only print metrics summary, and added `.snapshot` to generate and display job summary image.
+ * Moved default verilog/system verilog frontend parser to Slang.
+
+
+**Minor:**
+
+ * Changed examples to use a `requirements.txt` file for external dependencies.
+
+ * Tools:
+
+  * openroad: added timing histogram reports.
+
+
+SiliconCompiler 0.31.1 (2025-03-06)
+=========================================
+
+**Minor:**
+
+ * Fixed tcl manifest to correctly reflect the data types from the schema.
+ * Added end of install status message to `sc-install`.
+
+
+ * Tools:
+
+  * vpr: updated to v9.0 and added timing metrics extraction.
+
+
+SiliconCompiler 0.31.0 (2025-03-03)
+=========================================
+
+**Major:**
+
+ * Updated schema to support further advanced packaging.
+
+
+**Minor:**
+
+ * Improved the generation of relay files to provide better insight when debugging.
+ * Disabled the generation of the html report by default.
+ * Fixed the handling of environmental variables to ensure they are all set at the start of the node execution.
+ * Made schema fields pernode and scope enums for easier handling.
+
+
+ * Tools:
+
+  * openroad: added global routing metrics recording.
+  * yosys: added support for loading slang and moosic plugins.
+
+
+SiliconCompiler 0.30.0 (2025-02-18)
+=========================================
+
+**Major:**
+
+ * Updated schema to support advanced packaging.
+
+
+**Minor:**
+
+ * Added additional feedback during `sc-install` if user paths are not configured.
+ * Added support for generating screenshots and displaying `.dot` files.
+
+ * Tools:
+
+  * bluespec: fixed support for builtin modules.
+  * openroad: added macro placement constraints script option via `['tool', 'openroad', 'task', 'macro_placement', 'file', 'rtlmp_constraints']`, automatic power grid blockage for pins via `['tool', 'openroad', 'task', 'power_grid', 'file', 'fixed_pin_keepout']`.
+
+
+SiliconCompiler 0.29.4 (2025-02-06)
+=========================================
+
+**Minor:**
+
+ * Added helper function to allow tasks to handle clock information in a uniform method.
+ * Improved feedback on unsupported platforms during `sc-install`.
+
+
+ * Tools:
+
+  * bambu: updates to better handle platform and clock information.
+  * openroad: added recover_power option support.
+  * yosys: switch to use builtin `keep_hierarchy` to speedup compile times.
+
+
+SiliconCompiler 0.29.3 (2025-01-28)
+=========================================
+
+**Major:**
+
+ * Added color support to logger to allow for easier identification of warnings and errors.
+
+**Minor:**
+
+ * Corrected install scripts for surelog and bambu.
+ * Fixed task setup order to avoid setting up tasks before the input nodes have been setup.
+
+ * Tools:
+
+  * slang: added elaboration task.
+  * yosys: added controls for separator used during flattening via `['tool', 'yosys', 'task', 'syn_asic', 'var', 'hierarchy_separator']`.
+
+
+SiliconCompiler 0.29.2 (2025-01-16)
+=========================================
+
+**Major:**
+
+ * Added gtkwave show task to allow for vcd viewing.
+ * Removed enablement for conda-eda as this is no longer a supported project.
+
+**Minor:**
+
+ * Allow passing a file path to `.register_source` to make it easier to handle retive path to the current file.
+
+ * Tools:
+
+  * openroad: added support for mutli-bit flipflop mapping and initial support for scan chain insertion, correct pin ordering from constraints.
+
+
+SiliconCompiler 0.29.1 (2025-01-09)
+=========================================
+
+**Major:**
+
+ * Added optional `optimizer` install extra to provide design optimization via google-vizier.
+
+**Minor:**
+
+ * Added capability to import flist files via `Chip.import_flist`
+ * Added quiet loglevel to limit siliconcompiler logging to just the most critical information.
+
+ * Tools:
+
+  * openroad: switch to turn on new macro placer by default and correct handling of dont_use based on cell lists.
+  * yosys: add detailed metrics for cell counts, added support for handling clockgate insertion, simplified library file handling, and updated lec task.
+  * sta: added check_library task to help verify library setups for asic flows.
+
+
+SiliconCompiler 0.29.0 (2024-12-12)
+=========================================
+
+**Major:**
+
+ * Update asicflow and openroad driver to utilize smaller tasks. This is a breaking change from the previous implementation, but allows for better flow composability.
+ * Added `['record', 'pythonversion']` and `['record', 'pythonpackage']` to schema to allow to better environment and provenance tracking.
+
+
+**Minor:**
+
+ * Reworked remote client into single class to allow for better job tracking locally.
+ * Updated logic for printing package access information to avoid repeating information when possible during a run.
+
+ * Tools:
+
+  * openroad: rework tasks into smaller tasks, add access to `eliminate_dead_logic` via `['tool', 'openroad', 'task', 'init_floorplan', 'var', 'remove_dead_logic']`
+  * yosys: fix fpga synthesis to allow for better macro extraction and added ability to map tri-state buffers to asic synthesis.
+
+
+SiliconCompiler 0.28.9 (2024-11-27)
+=========================================
+
+**Minor:**
+
+ * Added option to limit size of emailed logs based on number of lines.
+ * Fixed handling of `find_files` in frontend tools
+ * Removed automatic error when FPGA is not loaded, as this can be handled by the tool/task drivers.
+
+ * Tools:
+
+  * vivado: update tool and task drivers to handle v2024.x and cleaned up output filenames.
+
+
+SiliconCompiler 0.28.8 (2024-11-20)
+=========================================
+
+**Minor:**
+
+ * Fixed dashboard handling of graph metrics when job history contains different sets.
+
+ * Tools:
+
+  * openroad: added reporting of module cell areas.
+  * vpr: added options to prevent crashing in designed with dangling ports.
+
+
+SiliconCompiler 0.28.7 (2024-11-12)
+=========================================
+
+**Minor:**
+
+ * Correct requirements to remove dashboard from python 3.9.7, due to issue in 3.9.7.
+
+
+SiliconCompiler 0.28.6 (2024-11-12)
+=========================================
+
+**Minor:**
+
+ * Added a support module to call for the manifest summary from `python3 -m siliconcompiler.apps.utils.summarize -cfg <file>`.
+ * Removed dashboard from python 3.9.7, due to issue in 3.9.7.
+
+ * Tools:
+
+  * openroad: updated metrics task to allow for verilog inputs.
+
+
+SiliconCompiler 0.28.5 (2024-11-06)
+=========================================
+
+**Major:**
+
+ * Added interposer_demo target and interposerflow and drcflow.
+
+**Minor:**
+
+ * Added macroarea, padcellarea, and stdcellarea to metrics.
+ * Added footprint to datasheet in schema.
+ * Improved handling of `sc-show` and `sc-dashboard` when searching for manifests.
+
+ * Tools:
+
+  * openroad: added metrics task to collect metrics and an rdlroute task to perform floorplan initization and rdlrouting.
+  * klayout: fixed handling of fill during GDS generation.
+
+
+SiliconCompiler 0.28.4 (2024-10-28)
+=========================================
+
+**Major:**
+
+ * Added testing support for Python 3.13.
+
+
+**Minor:**
+
+ * Added support to allow dashboard to auto select an open port if not specified.
+
+ * Tools:
+
+  * openroad: updated minimum version to support database markers and added support to save clock routing.
+  * surelog: ensure its require list is complete to properly detect changes in inputs.
+  * yosys: added screenshot task.
+  * klayout: added drc task to run DRC and convert_drc_db task to convert a klayout DRC database to openroads.
+  * vpr: added `vpr_device_code` support.
+  * magic: added support for uncompressing LEF files.
+
+
+SiliconCompiler 0.28.3 (2024-10-14)
+=========================================
+
+**Major:**
+
+ * Added `sc-install` utility application to help install tools on supported platforms.
+
+
+**Minor:**
+
+ * Added rhel8 and rhel9 install scripts.
+ * Fixed bug in `sc-install` to account for different operating systems support.
+ * Ensure generated files `.errors` and `.warnings` are included in the metrics files.
+
+ * Tools:
+
+  * openroad: added options to control optimization (`remove_synth_buffers`, `rsz_skip_setup_repair`, and `rsz_skip_hold_repair`).
+  * xdm: added install script.
+
+
+
+SiliconCompiler 0.28.2 (2024-10-02)
+=========================================
+
+**Major:**
+
+ * Added `sc-install` utility application to help install tools on supported platforms.
+
+
+**Minor:**
+
+ * Updated `.input/.output` to support receiving lists of files.
+
+
+SiliconCompiler 0.28.1 (2024-09-20)
+=========================================
+
+**Major:**
+
+ * Updated lambdapdk to add support for ihp130 and added demo target.
+
+
+**Minor:**
+
+ * Tools:
+
+  * openroad: fix rotation handling in floorplanning.
+  * xyce: updated tool driver implementation.
+  * xdm: added xyce netlist conversion tool.
+  * openfpgaloader: removed non-functional implementation of openfpgaloader driver.
+
+
+SiliconCompiler 0.28.0 (2024-09-18)
+=========================================
+
+**Major:**
+
+ * Updated schema constraints to remove the use of the z-axis.
+ * Added schematic information to the schema.
+ * Changed component placement constraints to reference the lower left corner of the instance instead of the center.
+
+
+**Minor:**
+
+ * Tools:
+
+  * openroad: updated to account for new placement and rotation constraints.
+
+
+SiliconCompiler 0.27.1 (2024-08-28)
+=========================================
+
+**Minor:**
+
+ * Fix path handling from commandline.
+
+
+SiliconCompiler 0.27.0 (2024-08-28)
+=========================================
+
+**Major:**
+
+ * Deprecated `.load_target()` in favor of `.use()`.
+ * Added a `-use` option to the `sc` cli app to allow for loading of modules.
+ * Removed the chip input from libraries, pdks, fpga, etc to simplify setup.
+
+
+SiliconCompiler 0.26.5 (2024-08-26)
+=========================================
+
+**Major:**
+
+ * Moved surelog distribution to a separate package, making SiliconCompiler a pure python distribution.
+
+**Minor:**
+
+ * Fixed handling of files and directories from the commandline interface.
+
+
+SiliconCompiler 0.26.4 (2024-08-22)
+=========================================
+
+**Minor:**
+
+ * Limit schema sections getting imported from libraries to speed up importing.
+ * Added verilator tool option to dvflow.
+ * General speedup improvements to schema object.
+ * Added `find_node_file` helper function to make accessing files in the node run directory as easy as possible.
+
+
+SiliconCompiler 0.26.3 (2024-08-20)
+=========================================
+
+**Major:**
+
+ * Removed `-generate` from `sc-issue` when creating a sharable testcase.
+ * Allow for recursive definitions of asic logic and macro libs from imported libraries.
+
+**Minor:**
+
+ * `smake` improved handling of boolean arguments and arguments with default values.
+ * Corrected `.swap_library` to correctly swap libraries.
+
+
+SiliconCompiler 0.26.2 (2024-08-15)
+=========================================
+
+**Minor:**
+
+ * Added portname to pins in schema.
+ * Allow `.swap_library` to swap to `None` when removing a soft-library.
+
+ * Tools:
+
+  * openroad: fixed max density error to 100% and allow for multiple padring files to be loaded instead of just one.
+
+
+SiliconCompiler 0.26.1 (2024-08-02)
+=========================================
+
+**Major:**
+
+ * Added `smake` commandline tool to enable a Makefile like interface to `make.py` files.
+ * Removed the need to have local execution for remote jobs.
+
+**Minor:**
+
+ * Added additional helper functionality to `Library`, `PDK`, and `FPGA` to better handle package registration.
+
+
+SiliconCompiler 0.26.0 (2024-07-30)
+=========================================
+
+**Major:**
+
+ * Removed ['option', 'copyall'] from schema.
+ * Updated ['option', 'loglevel'] to be lower case settings.
+ * Added ['record', 'toolexitcode] to track the tool exit code during execution.
+ * Added whitelist of directories to `sc-remote` to avoid uploaded directories not approved by the user.
+ * Add support to automatically add soft IP libraries to ['option', 'library'] if specified by the library developer.
+
+
+SiliconCompiler 0.25.0 (2024-07-26)
+=========================================
+
+**Major:**
+
+ * Removed ['option', 'mode'] and ['option', 'frontend'] from schema.
+ * Moved flowgraph runtime information into ['record', ...].
+ * Implemented a dynamic flowgraph that is capable to skipping nodes that are not needed, for example in the case that a design contains VHDL and not verilog, the verilog preprocessing is skipped.
+ * Split ['input', 'rtl', 'verilog'] into  ['input', 'rtl', 'systemverilog'] and  ['input', 'rtl', 'verilog'] to be better able to tell the file types apart.
+ * Added support for remote jobs to be marked as rejected.
+
+
+**Minor:**
+
+ * Fixed issue generation for python only tasks.
+ * Added memory usage collection to python only tasks.
+ * Prevent `Chip.collect()` from collecting the user home directory and current build directory.
+
+ * Tools:
+
+  * slang: added warning and error metrics collection.
+
+
+SiliconCompiler 0.24.1 (2024-07-11)
+=========================================
+
+**Major:**
+
+ * Added slang tool with a lint task.
+
+**Minor:**
+
+ * Corrected reading of previous run manifests to avoid loading manifests of nodes while will need to be rerun.
+
+
+SiliconCompiler 0.24.0 (2024-07-09)
+=========================================
+
+**Major:**
+
+ * Overhaul of Chip and Schema python APIs.
+
+  * Major Chip function changes: renamed `register_package_source` -> `register_source` and `_getworkdir` -> `getworkdir`.
+  * Major Schema function changes: renamed `_has_field` -> `has_field`, `_remove` -> `remove`, and `_is_empty` -> `is_empty`.
+
+ * Overhaul of Schema keys to clean unused keys and keys with overlapping purposes, major changes:
+
+  * Added metrics: drcs, setupskew, holdskew, and inverters.
+  * Removed the unit section of the Schema.
+  * Renamed ['option', 'cache'] -> ['option', 'cachedir'].
+  * Merged behavior of ['option', 'flowcontinue'] and ['option', 'continue'] into ['option', 'continue'].
+  * Removed ['option', 'relax'], ['option', 'trace'], ['option', 'skipall'], and ['option', 'skipchecks'].
+
+ * Add ability for job scheduler to send status update emails via ['option', 'scheduler', 'msgcontact'] and ['option', 'scheduler', 'msgevent'].
+ * Make resume the default behavior for runs, when a new run is needed ['option', 'clean'] can be set to True to delete the old run and start fresh.
+ * Add capability to copy an old run and resume from a specific node, allowing users to preserve the original run while avoiding rerunning previous steps.
+
+**Minor:**
+
+ * Add option to `write_flowgraph` to add file annotations to graphs.
+
+
+SiliconCompiler 0.23.4 (2024-07-02)
+=========================================
+
+**Major:**
+
+ * Add support for docker based running through the use of the ['option', 'scheduler', 'name'] = 'docker'.
+
+**Minor:**
+
+ * Ensure that exceptions are printed to log when they occur during runs.
+ * Added timestamp checking to resume checks when file hashes are not available.
+ * Implemented totaltime metric to track the total execution time of a run.
+
+
+SiliconCompiler 0.23.3 (2024-06-25)
+=========================================
+
+**Minor:**
+
+ * Expended daily CI testing to include all examples.
+ * Cleaned up python requirements to remove unused ones.
+ * Added `verbose` and `require_reports` flags to `check_checklists` to allow for better control of checklist checking.
+
+
+SiliconCompiler 0.23.2 (2024-06-20)
+=========================================
+
+**Minor:**
+
+ * Limit logging while generating testcases during run.
+ * Move sc-leflib to test requirements
+
+
+SiliconCompiler 0.23.1 (2024-06-18)
+=========================================
+
+**Major:**
+ * Fixed accounting for resources in scheduler.
+ * Removed limitation that prevents slurm from being the first node in the execution graph.
+ * Added capability to generate standalone testcases on failures to make issue reporting easier.
+
+**Minor:**
+
+ * Print stacktraces in logger to allow for better tracking of errors.
+
+* Tools:
+
+  * opensta: fixed thread handling in tool driver and added a library reporting task to collect information about timing libraries.
+  * openroad: correct image collecting to avoid generating IR drop on every task.
+  * slurm: provide clear error message when slurm is not installed.
+  * surelog: correct top module handling in systemverilog mode.
+
+
+SiliconCompiler 0.23.0 (2024-06-13)
+=========================================
+
+**Major:**
+ * Added support to hash directories.
+ * Ensure that resume removes stale data in following nodes during run.
+ * Run provides warning if system is running out of memory.
+ * Local scheduler updated to prevent executing parallel nodes which exceed the resources available, also controllable via ['option', 'scheduler', 'maxnodes'].
+ * Added support for nodes to receive the same file from multiple inputs.
+ * Added support to detect changes to the input files and node settings during resume and rerun those nodes.
+ * Added support for mixed-frontends.
+
+**Minor:**
+
+ * Ensure that global values can be access and modified in strict mode.
+ * Added build scripts to tools for ubuntu 24.04.
+ * Added synflow which runs yosys synthesis and opensta timing.
+ * In strict mode, only files declared by a task driver will be copied into the inputs directory.
+ * In the event of a tool failure the node will run to completion before erroring out to allow for additional data gathering.
+ * Renamed export step in asicflow to ensure proper graph handling.
+
+* Tools:
+
+  * opensta: added a standalone tool with timing task.
+  * openroad: ensure the SDC file is correctly copied in when screenshot task is part of a flowgraph.
+
+
+SiliconCompiler 0.22.0 (2024-05-23)
+=========================================
+
+**Major:**
+ * Added support to handle casting to strings in the schema when setting a string key.
+ * Added initial support to allow for type changing in the schema via `Schema._change_type`.
+ * Corrected tool module searching to correctly allow for tool modules to be in `__init__.py`
+ * Increased the default densities of all asic targets to 40%.
+
+**Minor:**
+
+* Tools:
+
+  * openroad: added additional support to control what is written out in the export task.
+  * verilator: ensure if the user defines the `VERILATOR` parameter, the tool driver filters it out as as generates an error otherwise.
+
+
+SiliconCompiler 0.21.13 (2024-05-15)
+=========================================
+
+**Minor:**
+
+* Tools:
+
+  * openroad: fixed run issues related to placement density selection and missing DRV reporting.
+
+
+SiliconCompiler 0.21.12 (2024-05-13)
+=========================================
+
+**Minor:**
+
+* Search for summary image by walking backwards through the executed nodes.
+* Sped up schema loading and merging by avoiding unneeded deepcopies.
+* Added support to set a list in the schema with a 'set()'
+
+* Tools:
+
+  * ghdl: added support for ['option', 'define'].
+  * yosys: added kogge-stone operator mapping to asic flow, removed library merging hack which is no longer needed.
+  * openroad: added better support for selecting global placement density, added support to control metrics and reports in tasks via ['tool', 'openroad', 'task', <task>, 'var', 'reports'].
+  * netgen: filter errors in stderr to ensure "Note:" are not interpreted as an error.
+  * klayout: allow tool to handle fill importing natively from DEF.
+
+
+SiliconCompiler 0.21.11 (2024-04-26)
+=========================================
+
+**Minor:**
+
+* Added helper functions to tcl to make accessing schema information easier.
+* Added helper functions to allow tools to have consistent behavior around picking from pdk/library/option variables during setup.
+* Ensure the remote client downloads the final results from the remote to get any logs and error messages.
+
+* Tools:
+
+  * openroad: fixed default routing via settings.
+  * klayout: made hide_layer variable more consistent with klayouts layer information, and added support for .gz file handling in show and screenshotting tasks.
+
+
+SiliconCompiler 0.21.10 (2024-04-22)
+=========================================
+
+**Minor:**
+
+* Switch to use templates for generating tool files instead of python print statements to make it easier to maintain.
+* Added logic depth to schema metrics.
+
+* Tools:
+
+  * yosys: added support for handling hierarchy selection with globbing, added better handling of library merging to ensure liberty templates are properly copied in.
+  * openroad: added support for extracting logic depth of the design and added irdrop extraction to tool driver.
+
+
+SiliconCompiler 0.21.9 (2024-04-12)
+=========================================
+
+**Minor:**
+
+* General cleanup of documentation building.
+
+* Tools:
+
+  * yosys: added support for specifying blackbox models via ['tool', 'yosys', 'task', 'syn_asic', 'var', 'blackbox_modules']
+
+
+SiliconCompiler 0.21.8 (2024-04-11)
+=========================================
+
+**Minor:**
+
+* Fixed packaging extraction when downloading from github.
+* Fixed remote run file retrieval to avoid errors when extracting and moving files.
+
+* Tools:
+
+  * vpr: added support for show and screenshoting tasks.
+
+
+SiliconCompiler 0.21.7 (2024-04-02)
+=========================================
+
+**Minor:**
+
+* Update remote code to honor constraints transmitted by the remote runner.
+* Add fall back to package locking when file system locking is not available.
+* Fixed handling of github artifact packages.
+* Added build scripts for ubuntu22.
+
+* Tools:
+
+  * vpr: add reporting images to tool driver, these can be disabled via ['tool', 'vpr', 'task', 'place' or 'route', 'var', 'enable_images'] = 'false'.
+
+
+SiliconCompiler 0.21.6 (2024-03-28)
+=========================================
+
+**Minor:**
+
+* Fixed handling of files with codec errors.
+* Update package lock file handling to avoid race conditions in parallel flows.
+
+* Tools:
+
+  * yosys: minor code cleanup in FPGA flow.
+  * vpr: add support for clock routing.
+  * surelog: added wrapper comments in output file for parsing to indicate where segments of code came from.
+
+
+SiliconCompiler 0.21.5 (2024-03-21)
+=========================================
+
+**Minor:**
+
+* Added a github data source to handle data from private repositories.
+
+* Tools:
+
+  * vpr: added pin metrics collection for FPGA flows.
+
+
+SiliconCompiler 0.21.4 (2024-03-15)
+=========================================
+
+**Minor:**
+
+* Added keys to schema to track FPGA resources.
+
+* Tools:
+
+  * yosys: add metrics collection for FPGA flows.
+  * vpr: added metrics collection for FPGA flows.
+
+
+SiliconCompiler 0.21.3 (2024-03-13)
+=========================================
+
+**Minor:**
+
+* Tools:
+
+  * openroad: fixed handling of pin constraints
+  * yosys: updated to take advantange of native dont_use interfaces
+
+
+SiliconCompiler 0.21.2 (2024-03-08)
+=========================================
+
+**Minor:**
+
+* Fix importing of package data from non libraries
+* Fix unlocking behavior in schema keys
+
+
+SiliconCompiler 0.21.1 (2024-03-07)
+=========================================
+
+**Minor:**
+
+* Fix handling of python module packages on older versions of python.
+
+
+SiliconCompiler 0.21.0 (2024-03-07)
+=========================================
+
+**Major:**
+
+* Added support for handling soft libraries in the schema via ['option', 'library'] and updated all frontend task drivers to support these.
+
+**Minor:**
+
+* Ensure that libraries, which import a library, are handled correctly.
+
+
+SiliconCompiler 0.20.3 (2024-03-06)
+=========================================
+
+**Minor:**
+
+* Added testing to ensure command line arguments are all checked for functionality and follow the schema pattern.
+* Fixed python package lookup when the installed package does not match the name of the distribution.
+* Added print controls to command line applications to allow custom arguments to be displayed along with schema values via the key `sc_print:`.
+* Updated the conda environment and added testing to ensure functionality.
+
+
+SiliconCompiler 0.20.2 (2024-02-20)
+=========================================
+
+**Minor:**
+
+* Fixed some issued identified by tclint.
+* Added helper function to better detect locally installed and editable python packages for package registration.
+
+
+SiliconCompiler 0.20.1 (2024-02-12)
+=========================================
+
+**Major:**
+
+* Moved from hosting third party pdks in SiliconCompiler to fully using lamdapdk.
+* Added a demonstration target for gf180.
+
+**Minor:**
+
+* Tools:
+
+  * vpr: added support for pin constraints.
+  * openroad: added estimated routing congestion to the task image writing and updated fmax metric collection to use OpenROAD directly.
+
+
+SiliconCompiler 0.20.0 (2024-02-01)
+=========================================
+
+**Major:**
+
+* Update file path hashing to include package information.
+
+**Minor:**
+
+* Tools:
+
+  * yosys: update FPGA synthesis to better map LUTs and memories.
+  * openroad: added option to control CTS with obstruction awareness via  via ['tool', 'openroad', 'task', 'cts', 'var', 'cts_obstruction_aware'].
+  * klayout: added operation to be able to rename cells in layout via ['tool', 'klayout', 'task', 'operations', 'var', 'operations', 'rename_cell'].
+
+
+SiliconCompiler 0.19.1 (2024-01-24)
+=========================================
+
+**Major:**
+
+* Tools:
+
+  * yosys: updated implementation for FPGA flow to better support flip-flop mapping and hard macro extraction and mapping.
+
+**Minor:**
+
+* Package downloading to ensure GitHub release artifacts can be downloaded from private repositories.
+
+
+SiliconCompiler 0.19.0 (2024-01-05)
+=========================================
+
+**Major:**
+
+* Expanded and clarified the datasheet category of the schema.
+
+
+SiliconCompiler 0.18.2 (2023-12-18)
+=========================================
+
+**Minor:**
+
+* Fixed resolving paths in package sources when paths contain environmental variables.
+
+
+SiliconCompiler 0.18.1 (2023-12-13)
+=========================================
+
+**Minor:**
+
+* Fixed importing of libraries to collect package sources during import.
+
+* Tools:
+
+  * klayout: fixed loading of schema in the presence of other modules named schema.
+
+
+SiliconCompiler 0.18.0 (2023-12-04)
+=========================================
+
+**Major:**
+
+* Added ['option', 'cache'] keypath to control the location of the cached data.
+* Added support for Python 3.12
+
+
+SiliconCompiler 0.17.0 (2023-11-16)
+=========================================
+
+**Major:**
+
+* Added ['package', 'source', '<name>', 'path'] and ['package', 'source', '<name>', 'ref'] to support directly downloading of required data for a design, pdk, library, etc.
+
+* Removed support for $SCPATH and ['option', 'scpath'] in favor of using package sources.
+
+**Minor:**
+
+* Tools:
+
+  * yosys: fixed handling of blackboxes during verilog reading, improved the sdc parsing to better estimate the clock for yosys-abc
+
+  * OpenROAD: fixed PDN file handling to only read files once to avoid errors from redefining the same grids.
+
+
+SiliconCompiler 0.16.3 (2023-11-02)
+=========================================
+
+**Minor:**
+
+* Removed unused ['flowgraph', '<graph>', '<step>', '<index>', 'valid'] field from schema.
+
+* Tools:
+
+  * klayout: fixed DEF to GDS generation by ensuring the correct units are used during DEF read in and fixes the stream writing to honor OASIS if requested.
+
+  * OpenROAD: fixed handling of unidirectional layers in routing task and added tasks to support generating OpenRCX parasitic extraction decks.
+
+
+SiliconCompiler 0.16.2 (2023-10-13)
+=========================================
+
+**Minor:**
+
+* Added line numbers to the error and warning log files to aid in tracking down the message in the main log.
+
+
+SiliconCompiler 0.16.1 (2023-10-11)
+=========================================
+
+**Minor:**
+
+* Fixed incorrect settings when submitting remote jobs.
+
+
+SiliconCompiler 0.16.0 (2023-10-09)
+=========================================
+
+**Major:**
+
+* Deprecated support for Python 3.6 and 3.7.
+
+* Added ['option', 'from'], ['option', 'to'], and ['option', 'prune'] to better control the execution of the flowgraph.
+
+* Removed leflib from SilconCompiler and use the standalone implementation provided via `pip install sc-leflib`.
+
+**Minor:**
+
+* Moved the built in server to use the Schema class for handling its settings.
+
+* Fixed handling of Windows paths when submitting jobs from a Windows machine to a linux runner.
+
+* Corrected the return behavior from the schema `.get()` to ensure lists are copied instead of being returned by reference.
+
+* Fixed behavior where `sc-show` would require both step and index to be specified and allowed for directories to be specified as the show target.
+
+* Tools:
+
+  * yosys: Updated to support new ABC interface for passing along dont_use cells.
+
+  * verilator: added support for assertions via ['tool', 'verilator', 'task', 'compile'/'lint', 'var', 'enable_assert']
+
+
+SiliconCompiler 0.15.4 (2023-09-25)
+=========================================
+
+**Minor:**
+
+* Added `-design` to `sc-dashboard` and ensured common behavior between `sc-show` and `sc-dashboard`.
+
+* Disabled sorting of keys in writing of the json schema to preserve the order in the original dictionary.
+
+* Added an alias (`siliconcompiler`) to the commandline application `sc` to allow Windows users to be better able to use SiliconCompiler.
+
+* Tools:
+
+  * surelog: Ensure the bundled version is built using a static zlib library for Windows distribution.
+
+  * OpenROAD: Added more controls over the heatmap image generation and to only write heatmaps with data available.
+
+
+SiliconCompiler 0.15.3 (2023-09-21)
+=========================================
+
+**Minor:**
+
+* Fixes to `sc-show` for viewing remote files to ensure it does not attempt to use the file paths from the remote, but instead the local file paths.
+
+* Tools:
+
+  * klayout: Use build technology files and layer display files in show and ensure these are placed into the outputs directory when exporting to a GDS.
+
+
+SiliconCompiler 0.15.2 (2023-09-18)
+=========================================
+
+**Minor:**
+
+* Fixes minor bug in the dashboard which prevented the launching the dashboard.
+
+* Ensures all tool output goes through the logger.
+
+* Improved implementation of `.valid()` to provide faster checking.
+
+* Tools:
+
+  * OpenROAD: fixed bugs in instance creation and pin access function calls. Implemented support for multiple library corners assigned to a single scenario in timing constraints.
+  * yosys: Implemented support for multiple library corners assigned to a single scenario in timing constraints.
+
+
+SiliconCompiler 0.15.1 (2023-09-08)
+=========================================
+
+**Major:**
+
+* Merged `sc-configure` into `sc-remote` to unify the remote interface
+
+**Minor:**
+
+* Fixed missing information in documentation build for flowgraphs.
+
+* Removed call to `delete_job` on remote jobs, relying on remote to handle cleanup instead.
+
+* Refactored core run functions for better code management.
+
+
+SiliconCompiler 0.15.0 (2023-08-31)
+=========================================
+
+**Major:**
+
+* Updated schema to remove unused ['option', 'skipstep'] key and add record to store the remote job id in ['record', 'remoteid'].
+
+**Minor:**
+
+* Added additional error checking and file cleanup to remote run to ensure empty files are not left behind.
+
+* Fixed handling of setting list of tuples in the schema to corrected parse the values.
+
+* Tools:
+
+  * OpenROAD - disabled timing optimizations by default, added support for generating report images in the screenshot task via ['tool', 'openroad', 'task', 'screenshot', 'var', 'include_report_images'].
+  * Chisel - added support for handling `build.sbt` via the input fileset ['input', 'config', 'chisel'].
+
+
+SiliconCompiler 0.14.0 (2023-08-21)
+=========================================
+
+**Major:**
+
+* Reworked FPGA to allow for better handling of FPGA parameters in the schema.
+* Added missing mechanical parameters to the schema and updating the signal interface naming for clarity.
+* Stop execution upon node failures, instead of continuing with repeated failures.
+
+**Minor:**
+
+* Ensure ['option', 'nodisplay'] is set when the environment does not support graphics.
+
+* Added error checking for ['option', 'steplist'] to match current flowgraph.
+
+* Removed physyn step from asicflow.
+
+* Fixed issue when running remote and the submitted files are not updated.
+
+* Tools:
+
+  * OpenROAD - update default value for [..., 'var', 'grt_macro_extension'] to '0' to allow for better routing.
+  * verilator - reworked options selection to allow for better control of user selected tool options.
+  * yosys - added support for blackboxes in libraries via ['library', \<lib\>, 'output', 'blackbox', 'verilog'].
+
+
+SiliconCompiler 0.13.2 (2023-08-10)
+=========================================
+
+**Major:**
+
+* Added graphs view to dashboard for comparing metrics across runs.
+
+* Added ``sc-remote`` app for checking server status and interacting with running remote jobs (replaces ``sc-ping``).
+
+**Minor:**
+
+* Added checkbox to dashboard for enabling "raw" view of manifest.
+
+* Tools:
+
+  * OpenROAD - made repair_design more verbose (requires updated version), added option to generate design images at end of task via ['tool', 'openroad', 'task', \<task\>, 'var', 'ord_enable_images'], tweaked pin placement behavior, added SDF file output to export task.
+  * surelog - fixed driver to sanitize escape characters in Verilog output, added option to disable write cache via ['tool', 'surelog', 'task', 'parse', 'var', 'disable_write_cache'].
+  * klayout - added option to allow missing cells in stream files via ['library', \<lib\>, 'option', 'var', 'klayout_allow_missing_cell'], added option to set DB units via ['pdk', \<pdk\>, 'var', 'klayout', 'units', \<stackup\>].
+
+
+SiliconCompiler 0.13.1 (2023-07-21)
+=========================================
+
+**Minor:**
+
+* Improved remote run reliability, including graceful time-outs when server not responding and thread-safety fixes.
+
+* Added ['option', 'libext'] support for Surelog, Verilator, and Icarus.
+
+* Removed dashboard support for Python 3.6.
+
+* Made aesthetic tweaks to dashboard.
+
+* Fixed bundled Surelog on pre-macOS 12.
+
+* Tools:
+
+  * yosys - fixed synthesis strategies.
+  * verilator - added multithreading, added FST trace format support.
+  * OpenROAD - bumped minimum version to better support IR drop analysis, added additional controls for abstract LEF generation, updated scripts to improve `ORFS <https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts>`_ correspondence, fixed to use correct layers for parasitic estimation.
+
+
+SiliconCompiler 0.13.0 (2023-07-07)
+=========================================
+
+**Major:**
+
+* Added dashboard to SiliconCompiler to allow better inspection of the run information and added `sc-dashboard` app to open and display the dashboard.
+
+**Minor:**
+
+* Added ['input', 'constraint', 'upf'] as a recognized format
+
+* Tools:
+
+  * surelog - added support for lowmem option via ['tool', 'surelog', 'task', 'parse', 'var', 'enable_lowmem']
+
+
+SiliconCompiler 0.12.3 (2023-06-23)
+=========================================
+
+**Major:**
+
+* Added new flow ``screenshotflow`` to enable generating high quality stream images via klayout and imagemagick/montage.
+* Added new tool ``execute`` to enable executing the output of a previous task, such as in the case of compiling a binary in one step and executing it in the next.
+
+**Minor:**
+
+* ``sc-show`` fixed error handling when attempting to how a file without a manifest.
+* Added support for `pathlib.Path` objects when setting file and dir type parameters in the manifest.
+
+* Tools:
+
+  * yosys - fixed marking liberty files dont_use and ensure each library is merged together for ABC. Updated driver to use lower case true/false for ['tool', 'openroad', 'task', '*', 'var'] to be consistent with other tools.
+  * verilator - added support for pins-bv via ['tool', 'verilator', 'task', 'compile', 'var', 'pins_bv'] and compile modes via ['tool', 'verilator', 'task', 'compile', 'var', 'mode'].
+
+
+SiliconCompiler 0.12.2 (2023-06-14)
+=========================================
+
+**Major:**
+
+* Added additional arguments to ``sc-show`` to provide access to specific steps and indices in the run.
+
+**Minor:**
+
+* Tools:
+
+  * OpenROAD - added generation of separate timing and power reports in the reports/ directory to provide better insights into the design, added additional parameters to timing repair to enable minimizing total negative slack ['tool', 'openroad', 'task', 'place', 'var', 'rsz_repair_tns'], and added support for RTL-MP for macro placement.
+  * yosys - added initial support for hierarchical synthesis via ['tool', 'yosys', 'task', 'syn_asic', 'var', 'hier_threshold'], this is disabled by default while it is still in development.
+
+
+SiliconCompiler 0.12.1 (2023-06-07)
+=========================================
+
+**Major:**
+
+* Fixed writing of manifest to preserve values that were previously removed incorrectly.
+* Updated recording of ['record', ...] to track tool versions, tool options, task start and end times, and SiliconCompiler version, while preserving control of sensitive records like ['record', 'ipaddr'] with ['option', 'track'].
+
+**Minor:**
+
+* Fixed handling of ``sc-issue`` to avoid clobbering the user set options and only bundle the required files for a testcase to minimize the size of the file.
+* Added error checking for ``create_cmdline`` to check for invalid arguments.
+* Tools:
+
+  * OpenROAD - added support for disallowing one site gaps in detail placement ['tool', 'openroad', 'task', 'place', 'var', 'dpl_disallow_one_site']. Added support for ['option', 'warningoff']
+  * surelog - Added support for ['option', 'warningoff']
+  * Verilator - Added support for ['option', 'warningoff']
+
+
+SiliconCompiler 0.12.0 (2023-05-24)
+=========================================
+
+**Major:**
+
+* Added/updated parameters in ['datasheet'] section of the schema to allow for better capturing of design datasheet.
+* Updated Verilator tool driver to support CFLAGS/LDFLAGS and fix linting task.
+* Added operations task to klayout to allow for unit operations on GDSs like merging, adding outlines, rotating, etc.
+* Added options to ``archive()`` to support archiving multiple jobs and filtering files to include.
+
+**Minor:**
+
+* Added enforcement of ['option', 'mode'] to ensure it is set for better manifest checking.
+* Added per-pin voltage constraints for better support of multiple power/voltage domains, ['constraint', 'timing', scenario, 'voltage', pin].
+* Fixed tool drivers to ensure proper use of ``find_files()`` is not done in ``setup()``.
+* Added check for permissions error while collecting child process memory statistics.
+
+
+SiliconCompiler 0.11.2 (2023-05-15)
+=========================================
+
+**Major:**
+
+* Updated ``sc-issue`` to generate self-contained testcases to allow for better sharing of testcases.
+* Updated klayout tool driver to support map-file option for DEF-GDS export step, and remove need for hard coded options in ``.lyt`` file in favor of getting values from the schema.
+
+**Minor:**
+
+* Updated loading order to target in commandline interface to ensure schema parameers are set before loading target.
+* Error checking for flowgraphs with duplicated edges.
+* Added ``-ext`` to ``sc-show`` command to control what file is opened when multiple files are available.
+* Tools:
+
+  * OpenROAD - added flags to control antenna repairs: ['tool', 'openroad', 'task', 'route', 'var', 'ant_check'] and ['tool', 'openroad', 'task', 'route', 'var', 'ant_repair']; added clock buffer selection option from the library with ['library', lib, 'option', 'openroad_cts_clock_buffer']
+
+
+SiliconCompiler 0.11.1 (2023-05-03)
+=========================================
+
+**Major:**
+
+* Revamped documentation for better readability and navigability.
+
+**Minor:**
+
+* Fixed handling when loading schemas from JSON to ensure values are normalized correctly.
+* When a tool fails, the last 10 lines of the log is printed when ['option', 'quiet'] is set to aid in debugging.
+* Updated server/client to use python tarfile module instead of spawning subprocesses.
+* Implemented python linting.
+* Tools:
+
+  * OpenROAD - implemented snapping to sites or manufacturing grid for component placement via ['tool', 'openroad', 'task', 'floorplan', 'var', 'ifp_snap_strategy'] and
+    added ability to select SDC IO buffer for automatic constraint generation via ['tool', 'openroad', 'task', 'floorplan', 'var', 'sdc_buffer'].
+  * yosys - fixed invalid keypath access when logiclib is incorrectly specified.
+
+
+SiliconCompiler 0.11.0 (2023-04-17)
+=========================================
+
+**Major:**
+
+* ``sc-issue`` added as command line application to support sharing runnable testcases.
+* Removed the requirement that the initial task of the flowgraph be called 'import' and the final task be called 'export'.
+* Fully implemented ``.node()`` to take in a task module, simplifying the construction of a flowgraph and removing its dependence on ['option', 'scpath'].
+
+**Minor:**
+
+* ['tool', tool, version, 'sbom'] added to be able to track a tools `SBOM <https://en.wikipedia.org/wiki/Software_supply_chain>`_.
+* ``.hash_files()`` updated to honor the 'hash' field for the file parameters.
+* ``.calc_yield()``, ``.calc_area()``, ``.calc_dpw()`` updated to new schema parameters.
+
+SiliconCompiler 0.10.2 (2023-04-04)
+=========================================
+
+**Major:**
+
+* Support for Python 3.11
+* Building arm64 wheels for surelog
+
+**Minor:**
+
+* Tools:
+
+  * general - deployed docker based CI with automatic tool building and testing
+  * klayout - support for OAS stream files via ['tool', 'klayout', 'task', 'export', 'var', 'stream'] = 'oas', better detection of missing layout cells
+  * yosys - support for controlling buffer insertion via ['tool', 'yosys', 'task', 'syn_asic', 'var', 'add_buffers'] = 'True'/'False'
+  * openroad - correct handling of INF timing in metrics
+* Improve memory recording to account for child processes
+* General documentation cleanup
+
+SiliconCompiler 0.10.1 (2023-03-11)
+=========================================
+
+**Major:**
+
+* Adding ``._record_metric()`` for tool drivers to use when recording metrics to ensure they honor the schema units and record the source of the metric at the same time.
+
+**Minor:**
+
+* Improved error handling and messaging for remote jobs.
+* Fixed HTML summary report and PNG summary image not getting rebuilt when calling ``.summary()``
+* Updated ``.summary()`` table to display units and format numbers accordingly.
+
+SiliconCompiler 0.10.0 (2023-03-08)
+=========================================
+
+**Major:**
+
+* Schema overhauled (see `schema documentation <https://docs.siliconcompiler.com/en/stable/reference_manual/schema.html>`_ for details):
+
+  * Added ability to override certain schema parameters on a per-step/index basis.
+  * Added step and index to schema access methods.
+  * Expanded constraints category to include component and pin placement.
+  * Cleaned up parameters which were duplicated in other categories.
+  * Implemented ['input', ...] and ['output', ...] filesets along with ``.input()`` and ``.output()`` helper functions
+* Added tasks to tools prevent step name from getting used for task identification.
+* Implemented ``.use()`` in favor of ``.load_pdk()``, ``.load_flow()``, etc. to take in Python modules instead of strings.
+* Changed libraries, flows, checklists, and pdks to explicitly return a particular class object.
+* Generate a summary PNG.
+* Removed Floorplanning API.
+* Added support for custom macros and scripts in the remote workflow.
+
+**Minor:**
+
+* Updated OpenROAD scripts to support a hierarchical flow.
+* Updated Yosys scripts to better support hierarchy.
+* Improved auto documentation generation.
+* Updated pdk and library settings to provide additional corners where available.
+* Updated documentation, including Installation, Quickstart Guide and Tutorials.
+* Added Fmax as a first-order metric to the Schema
+
+SiliconCompiler 0.9.6 (2022-10-03)
+=========================================
+
+**Major:**
+
+* Fixed bug that causes tool setup information to be lost when running a flow in multiple chunks using a steplist.
+
+**Minor:**
+
+* Fixed old schema references in Yosys synthesis strategy scripts.
+* Updated error message for missing file requirements.
+* Updated OpenROAD scripts to handle multiple LEF files.
+* Updated KLayout driver to use batch mode flag and capture more warnings.
+* Updated Verilator driver to implement ['option', 'trace], ['option', 'warningoff'], and provide passthroughs for CFLAGS and LDFLAGS.
+* Removed support for 'extraopts' passthrough in Verilator driver.
+* Updated version of Surelog bundled with wheels distribution.
+
+SiliconCompiler 0.9.5 (2022-09-12)
+=========================================
+
+**Minor:**
+
+* Schema: Added ['tool', <tool>, 'prescript'/'postscript', <step>, <index>] to support user-supplied pre- and post-scripts for script-based tools.
+* Schema: Added ['tool', <tool>, 'file', <step>, <index>] passthrough parameter.
+* Added runtime logic to terminate tools that do not exit on their own after a job is interrupted with ctrl-c.
+* Fixed KLayout show bugs.
+* Fixed issue building SC in editable mode using newer versions of Pip/setuptools.
+
+SiliconCompiler 0.9.4 (2022-08-25)
+=========================================
+
+**Major:**
+
+* Changed ``run()`` logic to not reset metrics to zero.
+
+  * ``summary()`` will only display metrics that have been explicitly set.
+
+**Minor:**
+
+* Schema: Changed ['constraint', <scenario>, 'libcorner'] from scalar to list.
+* Added support for --latches option in GHDL driver.
+* Added ``:keypath:`` directive to distributed Sphinx extensions.
+* Added reports and final manifest to ``archive()`` outputs.
+* Fixed bug where ``job`` argument to ``find_files()`` was not handled properly.
+* Fixed pin sizes and PDN vias in Caravel wrapper example.
+* Updated flow scripts to support newer version of OpenROAD.
+* Updated version of Surelog bundled with wheels distribution.
+
+SiliconCompiler 0.9.3 (2022-08-01)
+=========================================
+
+**Major:**
+
+* Added basic editing functionality for signoff checklists in HTML report.
+* Changed file collection behavior:
+
+  * For local runs, inputs are not copied into import/ at all.
+  * For remote runs, inputs are copied into import/0/inputs/ only, not outputs/.
+* Implemented ['option', 'entrypoint'], allowing users to specify an alternative top-level.
+* Implemented support for "pure Python" tools.
+
+  * A ``run()`` method inside a tool setup file will be run instead of an executable.
+
+**Minor:**
+
+* Changed ``run()`` behavior to read metrics from all leaf tasks.
+* Fixed implementation of ['option', 'jobincr'].
+* Fixed bug causing exception on ``summary()`` for machines with a default encoding other than UTF-8.
+* Fixed logfile reading logic to gracefully handle invalid characters.
+* Improved error messages for some common issues.
+
+SiliconCompiler 0.9.2 (2022-07-08)
+=========================================
+
+**Major:**
+
+* Schema: Added ['option', 'flowcontinue'] to control whether flow continues when a tool reports errors.
+
+  * This used to be controlled by ['tool', \<tool\>, 'continue'], but this parameter is meant to feed directly into tools (rather than controlling the SC runtime).
+* Schema: Added ['option', 'continue'] parameter to control whether errors in the Python API are fatal.
+
+  * The default value makes errors fatal, setting this parameter to True reverts to the old behavior.
+* Added VPR-based FPGA bitstream generation flow.
+* Added logic to set errors and warnings metrics based on ['tool', \<tool\>, 'regex', ...] matches. This reduces tool driver boilerplate and makes the metrics consistent with the generated regex match files.
+
+**Minor:**
+
+* Changed default technology target for ``sc`` app.
+* Changed KLayout show script to always use a dark background.
+* Changed ``check_manifest()`` to allow tool tasks to have multiple inputs (behaving as if they were merged with a "join" builtin).
+* Changed ``check_manifest()`` to return True on success rather than 0 (the previous behavior didn't match the documentation).
+* Changed Yosys and OpenROAD tool drivers to make them easier to use in flows with alternate step names.
+* Changed GHDL tool driver to allow additional CLI options via ['tool', \<tool\>, 'var', ..., 'extraopts'].
+* Removed return codes from ``post_process()``.
+
+SiliconCompiler 0.9.1 (2022-06-21)
+=========================================
+
+**Major:**
+
+* Added input filetype inference based on file extension (restores functionality lost in 0.9.0).
+* Added manifest tree viewer to HTML report.
+* Added simulator exe compilation support to Verilator.
+* Improved TCL manifest generation:
+
+  * Fixed escaping of special characters and whitespace.
+  * Fixed insertion of "$env" in filepaths.
+  * Changed tuple printing to be TCL list instead of tuple-like string.
+
+**Minor:**
+
+* Schema: Added tool CLI arguments to ['record', ...] schema.
+* Changed create_cmdline() switchlist parameter to accept switch names as specified on command line.
+* Changed setup module docs generator to be packaged with SC.
+* Changed HTML report to be self-contained.
+* Fixed CSV manifest generation.
+
+SiliconCompiler 0.9.0 (2022-05-19)
+=========================================
+
+**Major:**
+
+* Schema: Reorganized entire schema! Changes summarized below:
+
+  * Cleaned and consolidated top-level organization, most parameters are now nested.
+  * Moved build configuration options underneath ['option', ...].
+  * Added ['output', ...] to store pointers to flow outputs.
+  * Added ['model', ...] to store pointers to design abstractions (timing libraries, layouts, etc).
+  * Added ['datasheet', ...] to store information about design's interface.
+  * Added ['unit', ...]  to store user driven SI units specification (temp,voltage, etc)
+  * Renamed ['eda', ...] to ['tool', ...]
+  * Renamed ['mcmm', ...] to ['constraint', ...]
+  * Replaced ['source'], ['constraint'], and ['read', ...] with more flexible ['input', \<filetype\>] to supply input files.
+  * Added support for storing multiple PDKs in schema and selecting which one to use for run (analogous to flows).
+  * Change ['flowgraph'] to support modular flow composition
+  * Added support for package management ['depgrah'].
+  * Added checklist support.
+  * Removed special ['library', ...] keypaths. All libraries are now created as Chip objects, and have their full config imported into a parent chip's schema.
+* Added 'sup' packaging utility
+* Added ability to configure stdout and stderr redirection on a per-tool basis (thanks to @suppamax for implementing).
+* Added flexible tool version checking based on PEP-440 standard, now enabled by default.
+* Added 'clean' feature for cleaning up intermediate tool outputs.
+* Added 'resume' feature for restarting failed flows (for debugging).
+* Added automatic capture of peak memory usage (adds dependency on `psutil <https://psutil.readthedocs.io/en/latest/>`_).
+* Changed ['design'] to be a required parameter for instantiating a Chip.
+* Changed error behavior to consistently raise exceptions rather than exit.
+* Removed tool script copy feature, so now all EDA scripts are run from the reference directory.
+
+**Minor:**
+
+* Schema: Added ability to store per-parameter designer notes.
+* Added offline wheels distribution.
+* Added ``read_lef()`` function to help with PDK bring-up.
+* Added environment variables to replay scripts.
+* Added LVS/DRC signoff flow and top-level GDS stream out flow.
+* Added native support for Sky130 I/O library, along with Heartbeat + padring example.
+* Changed internals to minimize SC performance overhead with large flowgraphs.
+* Changed task runtime tracking to distinguish between time spent in tool and total time.
+* Fixed breakpoints to work more consistently across tools.
+
+Note: Since there was no public release of version 0.8.0, this list summarizes all changes since 0.7.0.
+
+SiliconCompiler 0.7.0 (2022-03-02)
+=========================================
+
+**Major:**
+
+* Schema: Added ability to specify environment variables on a per-tool, per-task basis.
+* Schema: Added per-tool 'techmap' parameter to library schema.
+* Added browser-viewable report generation to core.summary().
+
+**Minor:**
+
+* Schema: Added filetypes to library schema: 'def', 'gerber', 'netlist', 'model' category.
+* Schema: Added 'stackup' key to library lef/gds parameters.
+* Schema: Changed 'pdk' and 'stackup' library parameters to lists.
+* Schema: Added 'dir' passthrough to library schema.
+* Schema: Added 'nodisplay' option to schema to better support headless jobs.
+* Schema: Added 'licensefile' to package parameters to support non-standard licenses.
+* Schema: Added 'gerber' to read schema.
+* Schema: Added several cell categories to library schema.
+* Changed how PDK-specific Yosys and OpenROAD parameters are driven to avoid hardcoding process info in tool drivers.
+* Fixed step ordering bug in core.summary().
+* Fixed bug with how 'arg', 'index' is handled.
+* Fixed small bugs in automatic documentation generation.
+* Added core.check_filepaths() helper.
+
+SiliconCompiler 0.6.0 (2022-02-11)
+=========================================
+
+**Major:**
+
+* Schema: Added 'flow' key to flowgraph to enable multi-flow targets.
+* Schema: Added 'flow' parameter to enable selection between flows in flowgraph.
+* Schema: Changed '_' separated tuple target to a single 'module' load target.
+* Schema: Added 'regex' for grep like functionality.
+* Schema: Changed metal grid to use PDK metal name as the major key.
+* Schema: Added 'tool' key to PDK settings to avoid tool file conflicts.
+* Schema: Added 'units' parameter to enable tech agnostic SDC.
+* Schema: Added ability to specify tricky apr setup files on a per tool basis (tracks, taps, vias, antenna, etc).
+* Schema: Added checklist functionality
+* Added core.grep function
+* Added core.check_logfile function to core API to emulate grep behavior
+* Added core.load_{target, flow, lib, pdk} functions to core API in place of target()
+* Added asap7 target
+* Added docker support for basic RTL2GDS tool chain
+* Removed core.target() function
+
+**Minor:**
+
+* Schema: Changed lib 'driver' to move into cells (consistency)
+* Schema: Added site symmetry to avoid full lef parser.
+* Schema: Changed tool version switch to a list
+* Schema: Changed 'asic', 'targetlib' to 'asic', 'logiclib' for clarity.
+* Schema: Changed 'eda, 'report' parameter guideline to always use 'metric' as keyword
+* Schema: Added -skip_check option to speed up new target bringup
+* Schema: Added -skip_step option to enable skipping specific steps
+* Schema: Added 'pdk', ['file', 'directory', 'variable'] parameters to enable tool-specific PDK setups.
+* Schema: Changed cell types to be hardcoded (tapcell, buf, clkbuf, etc) to avoid fragmentation.
+
+SiliconCompiler 0.4.1 (2022-01-06)
+===================================
+
+**Minor:**
+
+* Fix bug in Yosys parameter requirements spec that made check_manifest() too strict
+
+SiliconCompiler 0.4.0 (2022-01-05)
+===================================
+
+**Major:**
+
+* Schema: Add 'tool' key to PDK fields
+* Schema: Remove unneeded 'record' keys
+* Implement automatic record-keeping
+* Implement checks that flow make sense in terms of file I/O and that required files resolve
+* Allow importing multiple files with the same basename
+
+**Minor:**
+
+* Automatically configure KLayout path on macOS
+* Allow importing multiple files with the same basename
+* Implement -I CLI switch for include directory
+
+
+SiliconCompiler 0.3.1 (2021-12-21)
+===================================
+
+**Minor:**
+
+* Fix sc-show on Windows.
+
+SiliconCompiler 0.3.0 (2021-12-21)
+===================================
+
+**Major:**
+
+* Schema: add 'read' section.
+* Schema: Add alternate frontend support.
+
+**Minor:**
+
+* Fix old version of Surelog bundled with wheels
+
+
+SiliconCompiler 0.1.1 (2021-12-08)
+===================================
+
+**Minor:**
+
+* Fix: Prevent sc-show crash when PDK files are not found.
+* Fix: Ensure sc-show can find KLayout executable on Windows
+
+SiliconCompiler 0.1.0 (2021-12-03)
+===================================
+
+**Major:**
+
+* First public release!!!

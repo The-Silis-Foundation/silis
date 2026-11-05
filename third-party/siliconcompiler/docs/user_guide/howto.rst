@@ -1,0 +1,734 @@
+.. _howto:
+
+.. index:: ! how do I, ! recipes, ! cookbook
+
+##########
+How do I…?
+##########
+
+A task-oriented reference: the shortest correct way to do common things.
+Feel free to suggest new entries.
+
+For questions rather than method calls -- what a target is, whether the public
+server is confidential, why a run failed -- see the
+:ref:`Frequently Asked Questions <faq>`.
+
+Entries are grouped by what you are trying to do, roughly in the order people
+need them.
+
+Set up a build
+==============
+
+Create a design object
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from siliconcompiler import Design
+   design = Design('<design>')
+
+Dataroot: register a new source of files
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   design.set_dataroot("<name>", "<path>", tag="<version>")
+
+The path may be a local directory, a git URL, or an archive URL. ``tag`` applies
+to remote sources only, and is a git commit, branch, or tag. See
+:term:`dataroot`, and :ref:`Data Sources <builtin_resolvers>` for every scheme a
+path can take.
+
+Dataroot: authenticate against a private repository
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Put the token in the environment variable for its host, and keep it out of the
+script:
+
+.. code-block:: bash
+
+   export GITHUB_TOKEN=<token>   # github.com
+   export GITLAB_TOKEN=<token>   # gitlab.com
+   export GIT_TOKEN=<token>      # a git repository or GitLab instance on any other host
+   export HTTPS_TOKEN=<token>    # an https:// archive on any other host
+
+A ``git+ssh://`` dataroot needs no token: it uses this machine's SSH keys, and is
+the better choice where you can use it. Each scheme's entry in :ref:`Data Sources
+<builtin_resolvers>` lists the variables it reads and how it sends the token, with
+the full table for ``git+https://`` under :ref:`git <resolver-git>`. Every variable
+also has a :ref:`dataroot-specific form <resolver_tokens>`, for when two dataroots
+on one host need different tokens.
+
+A private repository does not need the ``+private`` marker (``git+ssh+private://``,
+``file+private://`` and the rest). The marker says a source must never leave this
+machine: a :ref:`remote run <remote_processing>` is not to upload it, so the
+SiliconCompiler server has to hold its own copy. Mark a source ``+private`` only if
+it must stay here; a repository this machine can fetch needs no marker.
+
+.. _howto_s3_dataroot:
+
+Dataroot: fetch from S3 or an S3-compatible store
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Install the ``s3`` extra (``pip install "siliconcompiler[s3]"``), then name one
+archive object, or a prefix whose ``<tag>.tar.gz`` is the archive:
+
+.. code-block:: python
+
+   design.set_dataroot("<name>", "s3://<bucket>/<key>.tar.gz", tag="<version>")
+   design.set_dataroot("<name>", "s3://<bucket>/<prefix>/", tag="<version>")
+
+The object is unpacked as an ``https://`` archive is, in the same formats.
+
+Credentials come from the AWS chain, as for the AWS CLI: ``AWS_PROFILE``,
+``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY``, ``~/.aws/credentials``, SSO,
+or an instance role. With none found, the request goes unsigned, which reads a
+public bucket. An ``s3+private://`` source requires credentials instead.
+
+For a store other than AWS -- MinIO, Ceph, Cloudflare R2 -- set its endpoint, and
+its keys as the AWS variables:
+
+.. code-block:: bash
+
+   export AWS_ENDPOINT_URL_S3=https://<account>.r2.cloudflarestorage.com
+   export AWS_ACCESS_KEY_ID=<key>
+   export AWS_SECRET_ACCESS_KEY=<secret>
+
+Dataroot relative to my current file
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   design.set_dataroot('<name>', __file__)
+
+Create an ASIC project object
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from siliconcompiler import ASIC
+   project = ASIC(design)
+
+Add files to a fileset
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! add_file, ! source files, ! add sources, ! filetype
+
+Group a design's files into named :term:`filesets <fileset>` and register them
+against a :term:`dataroot` so the paths survive being run from elsewhere. The
+:term:`fileset` and filetype are inferred from the extension:
+
+.. code-block:: python
+
+   design.set_dataroot("mydesign", __file__)
+
+   with design.active_dataroot("mydesign"), design.active_fileset("rtl"):
+       design.set_topmodule("mydesign")
+       design.add_file("rtl/mydesign.v")        # -> fileset "rtl", type verilog
+
+   with design.active_dataroot("mydesign"), design.active_fileset("sdc"):
+       design.add_file("constraints/mydesign.sdc")
+
+   with design.active_dataroot("mydesign"), design.active_fileset("testbench"):
+       design.add_file("tb/mydesign_tb.sv")
+
+Pass ``filetype=`` explicitly when the extension does not imply it. A design may
+carry as many filesets as you like -- only the ones you activate are compiled.
+
+Activate filesets
+^^^^^^^^^^^^^^^^^
+
+.. index:: ! active fileset, ! select fileset, ! which files are compiled
+
+Choose which of the design's filesets this run compiles:
+
+.. code-block:: python
+
+   project.add_fileset(["rtl", "sdc"])     # ignores "testbench"
+
+This is how one design serves several flows: an ASIC build activates ``rtl`` and
+``sdc``, while a simulation activates ``rtl`` and ``testbench``.
+
+Run a compilation
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   project.run()
+
+See what happened
+=================
+
+Display my layout
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+    project.show()
+
+Display a previous run from the command line
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! sc-show, ! viewer
+
+.. code-block:: bash
+
+   sc-show -design <name>
+
+Change the logging level, or quieten the output
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! logging, ! log level, ! logger, ! verbose, ! verbosity, ! debug output, ! quiet, ! silence
+
+Two different things control how much you see.
+
+SiliconCompiler's own messages come from a standard Python logger, so set its
+level directly. There is no ``option`` for this:
+
+.. code-block:: python
+
+    project.logger.setLevel("DEBUG")     # or "INFO" (the default), "WARNING", "ERROR"
+
+Tool output is separate. It is summarised by default; set
+:keypath:`option,quiet` to suppress it entirely, or unset it to see everything
+the tool prints:
+
+.. code-block:: python
+
+    project.option.set_quiet(True)                              # whole run
+    project.option.set_quiet(True, step="synthesis", index="0")  # one node
+
+Either way the full tool log is always written to
+``<step>.log`` in the node directory -- see
+:ref:`Directory structures <directory_structures>`.
+
+Use the manifest from a previous run
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! pkg.json, ! resume
+
+.. code-block:: python
+
+    from siliconcompiler import Project
+
+    project = Project.from_manifest("build/<design>/<jobname>/<design>.pkg.json")
+
+Control a run
+=============
+
+.. _howto_smake:
+
+Run a build script's targets without editing it
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! smake, ! make.py, ! build targets, ! run an example
+
+A build script usually holds more than one thing you might want to do -- lint,
+synthesize, run the full flow, sweep a parameter. Writing each as a function and
+editing the bottom of the file to pick one gets old quickly.
+
+:ref:`smake <app-smake>` runs those functions by name. Point it at a ``make.py``
+and every top-level function becomes a target, with its arguments turned into
+command-line switches and its docstring into help text:
+
+.. code-block:: bash
+
+   smake --help                        # what this script can do
+   smake syn                           # call syn()
+   smake asic --fileset rtl.memory     # call asic(fileset="rtl.memory")
+
+Nothing special is needed in the script -- these are ordinary functions:
+
+.. code-block:: python
+
+   def syn(fileset: str = "rtl", pdk: str = "freepdk45"):
+       """Synthesis only, the quickest check."""
+       ...
+
+Functions whose names start with ``_`` are helpers, not targets, and are left
+out of ``--help``. ``smake -C <dir>`` runs a script in another directory, and
+``smake -f <file>`` uses a file that is not called ``make.py``.
+
+This is why several :ref:`examples <examples>` ship a ``make.py`` rather than a
+script with one entry point: ``examples/heartbeat/make.py`` exposes ten targets
+covering every project type. ``python3 make.py`` still works, but runs whatever
+the ``__main__`` block chooses -- usually one of the targets, not the one you
+meant.
+
+Run only part of the flow
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! from, ! to, ! prune, ! partial run, ! rerun a step, ! only synthesis, ! resume
+
+A re-run resumes by default: nodes that already completed are reused, so
+restarting from a step re-runs it and everything downstream.
+
+.. code-block:: python
+
+   project.option.add_from("synthesis")    # start here, reusing earlier results
+   project.option.add_to("synthesis")      # and stop here
+
+:keypath:`option,from` and :keypath:`option,to` take **step names only**, not
+indices -- a deliberate choice to keep them simple. To drop individual
+(step, index) nodes, use :keypath:`option,prune`:
+
+.. code-block:: python
+
+   project.option.add_prune(("floorplan.init", "0"))
+
+Start a fresh run
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   project.option.set_clean(True)
+
+Start a fresh run and keep the old one
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! jobname, ! jobincr, ! job increment
+
+.. code-block:: python
+
+   project.option.set_clean(True)
+   project.option.set_jobincr(True)
+
+Start a fresh run using the previous run information
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   project.option.set_clean(True)
+   project.option.set_jobincr(True)
+   project.option.add_from('floorplan')
+
+Control how much of the machine a run uses
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! threads, ! cores, ! parallelism, ! maxnodes, ! maxthreads, ! CPU usage, ! concurrency
+
+Two job-wide limits, both defaulting to the number of available CPU cores:
+
+.. code-block:: python
+
+   project.option.scheduler.set_maxnodes(4)     # concurrent nodes in the job
+   project.option.scheduler.set_maxthreads(8)   # threads available to each task
+
+:keypath:`option,scheduler,maxnodes` bounds how many
+:term:`flowgraph nodes <flowgraph node>` run at once;
+:keypath:`option,scheduler,maxthreads` bounds each task's own threading. On a
+machine you are still using for other work, lowering both is usually what you
+want -- otherwise a wide flow will happily take every core.
+
+To override the thread count for one task rather than the whole job:
+
+.. code-block:: python
+
+   from siliconcompiler.tools.yosys.syn_asic import ASICSynthesis
+
+   ASICSynthesis.find_task(project).set_threads(4, step="synthesis", index="0")
+
+Build directory
+^^^^^^^^^^^^^^^
+
+.. index:: ! builddir, ! build tree, ! output directory
+
+.. code-block:: python
+
+    project.option.set_builddir("/path/to/build")
+
+See :ref:`Directory structures <build_directory>` for what a run writes there.
+
+Cache directory
+^^^^^^^^^^^^^^^
+
+.. index:: ! cachedir, ! package cache, ! download cache
+
+.. code-block:: python
+
+    project.option.set_cachedir("/path/to/cache")
+
+Defaults to ``~/.sc/cache``, which holds both the downloaded data sources and the
+caches the tools keep for themselves; see :ref:`the SC home directory <sc_home>`.
+
+Preserve options across sessions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Options such as scheduler information can be preserved :ref:`across sessions
+<user_settings>`:
+
+.. code-block:: python
+
+   project.option.write_defaults()
+
+Check my setup before running
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! check_manifest, ! validate, ! preflight
+
+.. code-block:: python
+
+    project.check_manifest()
+
+.. _howto_floorplanning:
+
+Floorplanning
+=============
+
+.. index:: ! floorplan, ! floorplanning, ! die area, ! core area, ! diearea,
+   ! corearea, ! coremargin, ! utilization, ! macro placement, ! pin placement,
+   ! constraints
+
+Floorplan constraints belong to the **project**, not to the design: a die size
+is a property of one compilation, while a :class:`.Design` is meant to be reused
+across several. They all hang off ``project.constraint`` -- ``area`` for the die
+and core, ``component`` for macros, ``pin`` for I/O.
+
+.. warning::
+   There is no ``option,floorplan`` keypath, on the design or anywhere else.
+   ``design.set('option', 'floorplan', 'diearea', ...)`` is not an older
+   spelling of something that moved: no release has ever had it, so code that
+   contains it was invented rather than ported. The calls below are the real
+   ones, and every one of them is on the project.
+
+Set the die size
+^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   project.constraint.area.set_dieoutline(500, 500, coremargin=10)
+
+Width and height in µm, with the die's lower-left corner at the origin.
+``coremargin`` is the gap between the die edge and the core the standard cells
+are placed in -- room for the power ring and the I/O.
+
+Give the core size instead when what you know is how much room the logic needs;
+the die is grown outwards from it by the margin:
+
+.. code-block:: python
+
+   project.constraint.area.set_coreoutline(480, 480, coremargin=10)
+
+Only one of the two is needed -- whichever is missing is derived from the other
+and the margin -- but setting both is allowed, and then both are used as given.
+For an outline that is not a rectangle, pass the vertices to
+:meth:`.ASICAreaConstraint.set_diearea`; the core is offset edge by edge so it
+follows the die rather than its bounding box.
+
+Let the tool pick the die size
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set neither area and the floorplanner sizes the die from a :term:`utilization`
+target and an aspect ratio. Every demo target already sets those -- 40% and a
+small core margin -- which is why the :ref:`quickstart <quickstart_guide>` never
+mentions a die. Change them with:
+
+.. code-block:: python
+
+   project.constraint.area.set_density(40, aspectratio=1.0, coremargin=10)
+
+Density is the percentage of the core the cells occupy after synthesis; 40--70%
+is the usual range, lower for congested designs. Both it and the aspect ratio
+are ignored once a die or core area is given.
+
+Automatic sizing is fine until the design contains something the tool cannot
+size around. A :term:`macro` needs a die chosen with it in mind, and a pad ring
+needs one it can be drawn against -- ``init_floorplan`` refuses to size a ring
+from density, because the ring is placed at absolute coordinates and a die
+picked afterwards would not line up with it.
+
+Place a macro, or keep the placer away from one
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Component constraints are made by instance name, and the name may be a glob:
+
+.. code-block:: python
+
+   sram = project.constraint.component.make_component("*sram*memory")
+   sram.set_halo(5.0, 5.0)         # placement keepout around it, in um
+   sram.set_placement(100, 250)    # pin it down instead of letting the tool choose
+   sram.set_rotation("R90")
+
+A halo on its own is usually enough -- it stops standard cells crowding the
+macro's pins, which is the common failure. Fixing the placement starts to matter
+once several macros have to share an edge. :ref:`Instantiating a hardened module
+<hardened_modules>` covers getting the macro into the build in the first place.
+
+Put a pin on a particular side
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   project.constraint.pin.make_pinconstraint("clk").set_side("west")
+
+Sides are ``left``/``west``, ``top``/``north``, ``right``/``east`` and
+``bottom``/``south``. A bus is constrained as a unit rather than a pin at a
+time, which is what keeps its order along the edge:
+
+.. code-block:: python
+
+   project.constraint.pin.make_buspinconstraints(
+       [f"data[{i}]" for i in range(32)], side="north", pitch=2.0)
+
+:meth:`.ASICPinConstraints.make_buspinconstraints` documents how ``pitch``,
+``side_width``, ``center`` and ``side_offset`` divide up an edge: one of the
+first two sets the spacing, one of the last two sets where the bus sits.
+
+Wrap a design in an IO pad ring
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! padring, ! pad ring, ! IO pads, ! bond pad, ! CELLMAP,
+   ! place_pads, ! connect_by_abutment
+
+:ref:`Implementing an IO pad ring <padring_tutorial>` walks through this end to
+end, and ``examples/padring`` is the working design it builds. In short, four
+pieces are involved:
+
+#. **The ring in RTL.** Depend on lambdalib's pad ring generator rather than
+   naming technology cells, and describe the cell order per side in a
+   ``CELLMAP``. ``lambdalib`` installs with ``lambdapdk``, so it is already
+   present::
+
+       from lambdalib.padring import Padring
+       ...
+       self.add_depfileset(Padring(), "rtl")
+
+#. **A top level whose ports are the pads.** Name them for what they carry, and
+   declare the direction each is really used in -- the ring's cells are all
+   bidirectional, but a pin on the finished part is not, and only the supplies are
+   genuinely ``inout``. Underneath, the logic talks to the ring through
+   ``din``/``dout``/``oen``/``ie`` and a technology configuration bus per side,
+   never touching a pad cell, which is what keeps it portable between
+   technologies.
+
+#. **Physical construction in TCL**, in filesets of your own on the design.
+   These names are yours rather than reserved ones, and nothing looks for them
+   until step 4 below names them:
+
+   .. code-block:: python
+
+      with self.active_dataroot("mydesign"), self.active_fileset("padring.sky130"):
+          self.add_file("openroad/padring.tcl")
+      # likewise "pdn.sky130" and "globalconns.sky130"
+
+#. **The hooks that point the tasks at those filesets.** These are task
+   variables, not schema keys:
+
+   .. code-block:: python
+
+      InitFloorplanTask.find_task(project).add_openroad_padringfileset("padring.sky130")
+      PowerGridTask.find_task(project).add_openroad_powergridfileset("mydesign", "pdn.sky130")
+      for task in APRTask.find_task(project):
+          task.add_openroad_globalconnectfileset("mydesign", "globalconns.sky130")
+
+   These three lines are the end of the setup rather than the whole of it --
+   each names a fileset that has to have been created first, and copying them
+   alone gets you three hooks pointing at nothing. The pad ring hook takes only
+   a fileset name because a pad ring is always read from the design being built;
+   the power grid and global connect hooks take the owning library first, since
+   those two are often supplied by a library instead -- when neither is set,
+   both are collected from the ASIC libraries in the build, and setting one
+   turns that fallback off.
+
+The TCL itself places pads into IO rows, then corners, then fill, then calls
+``connect_by_abutment`` so the supply and configuration signals pass between
+neighbouring cells, then adds bond pads. The order matters. Use
+``-connect_to_pads`` on the core power rings so the core is fed from the ring.
+
+These are OpenROAD commands rather than SiliconCompiler ones, so their arguments
+are documented upstream: `pad <https://openroad.readthedocs.io/en/latest/main/src/pad/README.html>`_ for ``place_pads``, ``place_corners``,
+``place_io_fill``, ``connect_by_abutment`` and ``place_bondpad``, and
+`pdn <https://openroad.readthedocs.io/en/latest/main/src/pdn/README.html>`_ for ``define_pdn_grid``, ``add_pdn_ring``, ``add_pdn_stripe`` and
+``add_global_connection``.
+
+A die with a ring is usually **pad limited**: its size is set by how many pads
+must fit around the edge, not by the logic inside. Set it explicitly --
+``init_floorplan`` will not size a ring from density, because the ring is placed
+at absolute coordinates and a die chosen afterwards would not line up with it.
+
+Extend SiliconCompiler
+======================
+
+Set up a new tool
+^^^^^^^^^^^^^^^^^
+
+See :ref:`Tools <dev_tools>`
+
+Set up a new flow
+^^^^^^^^^^^^^^^^^
+
+See :ref:`Flows <dev_flows>`
+
+Set up a new PDK
+^^^^^^^^^^^^^^^^
+
+See :ref:`PDKs <dev_pdks>`
+
+Set up a new library
+^^^^^^^^^^^^^^^^^^^^
+
+See :ref:`Libraries <dev_libraries>`
+
+Set up a new target
+^^^^^^^^^^^^^^^^^^^
+
+See :ref:`Targets <dev_targets>`
+
+Reuse a block as a hardened macro
+=================================
+
+Use a macro I already have
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. index:: ! hard macro, ! use a macro, ! instantiate a macro, ! LEF, ! blackbox, ! add_asiclib, ! add_alias, ! macro placement
+
+.. warning::
+   Adding a ``.lef`` to your design's own fileset does **not** work::
+
+       design.add_file("mymacro.lef", fileset="rtl")   # wrong
+
+   The parent will synthesize the macro's RTL anyway, and place-and-route then
+   fails with ``LEF master ... not found``. A macro is a *library*, not a source
+   file.
+
+Package the views into a :class:`.StdCellLibrary`:
+
+.. code-block:: python
+
+   from siliconcompiler import StdCellLibrary
+
+   macro = StdCellLibrary("mymacro")
+   macro.set_dataroot("macro", __file__)
+   macro.add_asic_pdk("skywater130")            # must match the parent's PDK
+
+   with macro.active_dataroot("macro"), macro.active_fileset("models.physical"):
+       macro.add_file("mymacro.lef")            # abstract view for place & route
+       macro.add_file("mymacro.gds")            # layout, merged into the final GDS
+       macro.add_asic_aprfileset()
+
+   with macro.active_dataroot("macro"), macro.active_fileset("models.timing.typical"):
+       macro.add_file("mymacro_typical.lib")    # timing view
+       macro.add_asic_libcornerfileset("typical", "nldm")
+
+Then, in the parent project, do two things -- **both are required**:
+
+.. code-block:: python
+
+   # MyMacro() is the Design holding the macro's RTL -- the same sources the
+   # parent would otherwise synthesize, and what the alias tells it to skip.
+   project.add_alias(MyMacro(), "rtl", None, None)        # 1. blackbox the RTL
+   project.add_asiclib(macro)                             # 2. inject the views
+
+   # Macros need room. Too small a die and the placer cannot fit them.
+   project.constraint.area.set_dieoutline(250, 250, coremargin=10)
+
+Without the alias the parent re-synthesizes the block instead of instantiating
+the hardened version; without the library the tools have no physical or timing
+view of it.
+
+:ref:`Instantiating a hardened module <hardened_modules>` works through this
+end to end, including producing the macro from a first build.
+
+Harden a parameterized module so I can reuse it as a macro
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A :term:`hardened macro` has no parameters, so a parameterized module cannot be
+hardened directly. Use :class:`.Uniquified`, which generates a parameter-free
+variant per used parameter combination plus a wrapper that dispatches to
+them. See the :ref:`uniquify tutorial <uniquify_modules>` and the
+:ref:`Uniquify API <uniquify_api>`.
+
+.. code-block:: python
+
+   from siliconcompiler import ASIC
+   from siliconcompiler.targets import freepdk45_demo
+   from siliconcompiler.tools.slang.utils.macro import Uniquified
+
+   # parent_design: your Design that instantiates the parameterized module.
+   uq = Uniquified(parent_design, ["mymodule"])
+   uq.build(target=freepdk45_demo)   # harden every used parameterization
+
+   project = ASIC(parent_design)
+   project.add_fileset("rtl")
+   freepdk45_demo(project)
+   uq.wireup(project)                # alias wrappers + inject macros
+
+Find out which parameter values my module is instantiated with
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Construct :class:`.Uniquified` (construction only elaborates and generates in
+memory -- no disk writes, no tools) and read its state:
+
+.. code-block:: python
+
+   uq = Uniquified(parent_design, ["mymodule"])
+   print(uq.variants)   # {'mymodule': ['mymodule__N8', 'mymodule__N16']}
+
+Rebuild only some hardened variants
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Pass ``macros`` to :meth:`.Uniquified.build` as a variant name, a module
+name, or a glob; add ``rebuild=True`` to force a rebuild even if a cached
+macro exists.
+
+.. code-block:: python
+
+   uq.build(target=freepdk45_demo, macros="mymodule__N8", rebuild=True)
+
+Schema internals
+================
+
+Avoid rebuilding an expensive object (such as a PDK) many times
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If a schema object is a pure function of its construction arguments, base it
+on ``CachedSchema``. Instances are built once per unique (hashable) set of
+arguments, and the shared, frozen instance is returned on subsequent
+constructions. This is useful for heavy objects, like PDKs, that would
+otherwise be re-created dozens of times while loading a target.
+
+.. code-block:: python
+
+   from siliconcompiler import PDK
+   from siliconcompiler.schema import CachedSchema
+
+   class MyPDK(PDK, CachedSchema):
+       def __init__(self):
+           super().__init__("mypdk")
+           # ... expensive schema population ...
+
+   MyPDK() is MyPDK()   # True -- same shared instance, built only once
+
+The shared instance is *frozen*: calling ``set``, ``add``, ``unset``,
+``remove``, or using ``EditableSchema`` on it raises a
+``SchemaFrozenError``. This protects the shared object from accidental
+modification.
+
+Get a modifiable version of a frozen (cached) object
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use ``copy()``. A copy is always mutable and fully independent of the shared
+instance, so you are free to modify it. Objects reloaded from a manifest
+(for example, inside a run) are likewise mutable.
+
+.. code-block:: python
+
+   my_pdk = MyPDK()          # frozen, shared
+   local = my_pdk.copy()     # mutable, independent
+   local.set("pdk", "foundry", "virtual")
+
+To modify a frozen object in place (for example, to write resolved file
+paths or hashes back into a shared object during a run), use the ``_thaw``
+context manager, which restores the frozen state on exit:
+
+.. code-block:: python
+
+   with my_pdk._thaw():
+       my_pdk.set(*keypath, hashes, field="filehash")
+
+.. warning::
+   ``_thaw()`` is internal API -- the leading underscore is not decorative. It
+   exists for SiliconCompiler's own run machinery, carries no compatibility
+   guarantee, and mutating a shared instance affects every holder of it.
+   ``copy()`` is the supported answer; reach for ``_thaw()`` only when you
+   genuinely need the mutation to be visible through the shared object.

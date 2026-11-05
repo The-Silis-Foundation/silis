@@ -1,0 +1,11 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2017 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`ifndef COMMON_GUARD
+ `define COMMON_GUARD 1
+Inside `__FILE__.
+`endif

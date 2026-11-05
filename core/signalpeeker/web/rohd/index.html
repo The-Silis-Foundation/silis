@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="./">
+
+  <meta charset="UTF-8">
+  <script>
+    // Shim for Flutter web <-> Silis host communication
+    // Note: VSCODE_WEBVIEW must be false so ROHD displays the full Module Tree in the hierarchy pane
+    window.VSCODE_WEBVIEW = false;
+    window.__rohdMessageQueue = [];
+    window.rohdEmbed = {
+      postMessage: function(msg) {
+        // Emit through console prefix so Python QWebEnginePage intercepts it
+        console.log('SILIS_ROHD_MSG:' + JSON.stringify(msg));
+      }
+    };
+    window.deliverRohdResponse = function(msg) {
+      if (typeof window.__rohdMessageCallback === 'function') {
+        window.__rohdMessageCallback(msg);
+      } else {
+        window.__rohdMessageQueue.push(msg);
+      }
+    };
+    window.loadVcdContent = function(text, fileName) {
+      const msg = {
+        type: 'vcdContents',
+        text: text,
+        fileName: fileName || 'waveform.vcd'
+      };
+      window.deliverRohdResponse(msg);
+    };
+    window.loadWaveBytes = function(byteArr, fileName) {
+      const msg = {
+        type: 'vcdBytes',
+        bytes: byteArr,
+        uri: fileName || 'waveform.fst'
+      };
+      window.deliverRohdResponse(msg);
+    };
+    if (window.__pendingVcd) {
+      window.loadVcdContent(window.__pendingVcd.text, window.__pendingVcd.fileName);
+      delete window.__pendingVcd;
+    }
+    window.addEventListener('message', function(e) {
+      if (e.data && typeof window.__rohdMessageCallback === 'function') {
+        window.__rohdMessageCallback(e.data);
+      }
+    });
+
+    // Dynamic Signal Addition function
+    window.addRohdSignal = function(signalName) {
+      if (!signalName) return;
+      var payload = JSON.stringify({
+        "version": 6,
+        "signals": [
+          { "id": signalName, "name": signalName, "radix": "hex" }
+        ],
+        "session": {}
+      });
+      if (window.__rohdHomeModel && typeof window.__rohdHomeModel.nD === 'function') {
+        window.__rohdHomeModel.nD(payload);
+      } else {
+        window.__pendingAddSignals = window.__pendingAddSignals || [];
+        window.__pendingAddSignals.push(signalName);
+      }
+    };
+
+    // Polling hook to flush pending signals once Flutter home model is initialized
+    setInterval(function() {
+      if (window.__rohdHomeModel && typeof window.__rohdHomeModel.nD === 'function') {
+        if (window.__pendingAddSignals && window.__pendingAddSignals.length > 0) {
+          var sigs = window.__pendingAddSignals.splice(0);
+          var sigObjs = sigs.map(function(s) {
+            return { "id": s, "name": s, "radix": "hex" };
+          });
+          var pl = JSON.stringify({
+            "version": 6,
+            "signals": sigObjs,
+            "session": {}
+          });
+          window.__rohdHomeModel.nD(pl);
+        }
+      }
+    }, 250);
+
+    // Assertion & Warning Timeline Overlay Markers
+    window.__rohdMarkers = [];
+    window.setTimelineMarkers = function(markers) {
+      window.__rohdMarkers = markers || [];
+      window.renderTimelineMarkers();
+    };
+
+    window.renderTimelineMarkers = function() {
+      var container = document.getElementById('rohd-marker-overlay');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'rohd-marker-overlay';
+        container.style.cssText = 'position:fixed; top:0; left:0; right:0; height:38px; pointer-events:none; z-index:9999; overflow:hidden;';
+        document.body.appendChild(container);
+      }
+      container.innerHTML = '';
+      if (!window.__rohdMarkers || window.__rohdMarkers.length === 0) return;
+
+      window.__rohdMarkers.forEach(function(m) {
+        var el = document.createElement('div');
+        el.className = 'rohd-assertion-flag';
+        el.style.cssText = 'position:absolute; top:2px; width:14px; height:18px; cursor:pointer; pointer-events:auto; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold; color:white; border-radius:3px; box-shadow:0 1px 4px rgba(0,0,0,0.6);';
+        
+        var isFatal = m.severity === 'fatal' || m.severity === 'error';
+        el.style.backgroundColor = isFatal ? '#e06c75' : '#e5c07b';
+        el.style.left = (m.rel_x ? (m.rel_x * 100) : 50) + '%';
+        el.textContent = isFatal ? '!' : '?';
+        el.title = (m.severity ? m.severity.toUpperCase() + ': ' : '') + (m.msg || 'Assertion') + ' at ' + (m.file || '') + ':' + (m.line || '');
+
+        el.addEventListener('click', function(e) {
+          e.stopPropagation();
+          // Jump waveform cursor directly to assertion timestamp if available
+          if (m.time_ps !== undefined && m.time_ps !== null) {
+            if (window.__rohdCursorDispatcher && typeof window.__rohdCursorDispatcher.jumpToTime === 'function') {
+              window.__rohdCursorDispatcher.jumpToTime(m.time_ps);
+            }
+          }
+          // Notify host to jump Monaco directly to failed assertion source and time
+          window.rohdEmbed.postMessage({
+            type: 'jumpToAssertion',
+            file: m.file,
+            line: m.line,
+            time_ps: m.time_ps
+          });
+        });
+        container.appendChild(el);
+      });
+    };
+
+    // Provide keyboard shortcut forwarding from document to Flutter canvas
+    window.addEventListener('keydown', function(e) {
+      // Ctrl+O / Cmd+O to open waveform file
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        window.rohdEmbed.postMessage({ type: 'openWaveformFile' });
+      }
+      // Ctrl+S / Cmd+S to save signal list
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        // Handled internally by Flutter key listener or via button
+      }
+    });
+
+    // Waveform Zoom API and Wheel Zoom handler
+    function _dispatchWaveZoom(factor, clientX) {
+      // 1. If direct A.O0 instance exists, call wb(factor, focalX)
+      if (window.__rohdWaveformPanel && typeof window.__rohdWaveformPanel.wb === 'function') {
+        try {
+          var focalX = (clientX != null && clientX !== undefined) ? clientX : (window.innerWidth / 2);
+          window.__rohdWaveformPanel.wb(factor, focalX);
+          if (window.rohdForceRepaint) window.rohdForceRepaint();
+          return true;
+        } catch (e) {
+          console.warn('[ROHD Zoom] wb failed:', e);
+        }
+      }
+      // 2. Fallback to shift_wheel postMessage
+      var deltaY = factor > 1.0 ? -120 : 120;
+      var cx = (clientX != null && clientX !== undefined) ? clientX : (window.innerWidth / 2);
+      window.postMessage({
+        source: 'rohd_wave_viewer',
+        type: 'shift_wheel',
+        deltaY: deltaY,
+        clientX: cx,
+        shift: true,
+        jsShiftDown: true
+      }, '*');
+      if (window.rohdForceRepaint) window.rohdForceRepaint();
+      return true;
+    }
+
+    window.zoomInWaveform = function(focalX) {
+      _dispatchWaveZoom(1.5, focalX);
+    };
+
+    window.zoomOutWaveform = function(focalX) {
+      _dispatchWaveZoom(1.0 / 1.5, focalX);
+    };
+
+    // Intercept mouse wheel scrolling to perform horizontal waveform time-scale zoom
+    window.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var factor = e.deltaY < 0 ? 1.35 : (1.0 / 1.35);
+      _dispatchWaveZoom(factor, e.clientX);
+    }, { passive: false, capture: true });
+  </script>
+  <meta name="description" content="ROHD Wave Viewer">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="ROHD Wave Viewer">
+  <link rel="apple-touch-icon" href="icons/waveform-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="waveform.svg"/>
+  <link rel="alternate icon" type="image/png" href="waveform.png"/>
+
+  <title>ROHD Wave Viewer</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Google Fonts: Noto Sans for character support -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Force WebView to keep compositing by having a tiny animated element -->
+  <style>
+    @keyframes rohd-compositor-pulse {
+      0%, 100% { opacity: 0.01; }
+      50% { opacity: 0.02; }
+    }
+    #rohd-compositor-nudge {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      pointer-events: none;
+      z-index: -9999;
+      background: transparent;
+      animation: rohd-compositor-pulse 0.5s infinite;
+      will-change: opacity;
+    }
+  </style>
+
+  <!-- Load wellen_bridge WASM bindings (flutter_rust_bridge) -->
+  <script src="pkg/wellen_bridge.js"></script>
+</head>
+<body>
+  <!-- Tiny element with CSS animation to force WebView compositor to stay active -->
+  <div id="rohd-compositor-nudge"></div>
+  <script id="flutter-init">
+    // Counter for forcing repaints - used to create visible DOM changes
+    window._rohdRepaintCounter = 0;
+    window._rohdLastLayoutHeight = 0;
+
+    function forceSynchronousLayout(element) {
+      // Reading offsetHeight flushes pending layout in embedded webviews.
+      window._rohdLastLayoutHeight = element.offsetHeight;
+    }
+
+    // Function to force the WebView compositor to present a frame
+    // Called from Dart after zoom operations. Simplified to reduce overhead.
+    window.rohdForceRepaint = function() {
+      window._rohdRepaintCounter++;
+      // Verbose logging disabled - uncomment to debug:
+      // console.log('[rohdForceRepaint] run', window._rohdRepaintCounter);
+
+      var canvases = document.querySelectorAll('canvas');
+
+      // Strategy 1: Touch the canvas transform to force GPU recalculation
+      canvases.forEach(function(canvas) {
+        var z = (window._rohdRepaintCounter % 2 === 0) ? '0.001px' : '0.002px';
+        canvas.style.transform = 'translateZ(' + z + ')';
+        forceSynchronousLayout(canvas);
+      });
+
+      // Strategy 2: Toggle a tiny compositor nudge element's opacity
+      try {
+        var nudge = document.getElementById('rohd-compositor-nudge');
+        if (nudge) {
+          nudge.style.willChange = 'opacity';
+          nudge.style.opacity = (window._rohdRepaintCounter % 2 === 0) ? '0.01' : '0.02';
+          forceSynchronousLayout(nudge);
+        }
+      } catch (e) {}
+
+      // Strategy 3: Simulate a right-click (contextmenu) which forces repaint
+      // without triggering marker placement. We prevent default to avoid
+      // showing an actual context menu.
+      try {
+        var canvas = document.querySelector('canvas');
+        if (canvas) {
+          var rightClick = new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            buttons: 2,
+            clientX: 1,
+            clientY: 1,
+            view: window
+          });
+          // Temporarily add a handler to prevent the menu
+          var handler = function(e) { e.preventDefault(); e.stopPropagation(); };
+          canvas.addEventListener('contextmenu', handler, {capture: true, once: true});
+          canvas.dispatchEvent(rightClick);
+        }
+      } catch (e) {}
+
+      // Strategy 4: Dispatch a window resize event - some webviews flush on resize
+      try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+
+      // Strategy 5: Simulate pointerleave/pointerenter on the document body
+      try {
+        var leaveEvent = new PointerEvent('pointerleave', {bubbles: true, cancelable: true});
+        document.body.dispatchEvent(leaveEvent);
+        var enterEvent = new PointerEvent('pointerenter', {bubbles: true, cancelable: true});
+        document.body.dispatchEvent(enterEvent);
+      } catch (e) {}
+
+      // Strategy 6: Trigger a blur/focus cycle on window as last resort
+      try {
+        if (document.hasFocus && document.hasFocus()) {
+          window.dispatchEvent(new Event('blur'));
+          window.dispatchEvent(new Event('focus'));
+        }
+      } catch (e) {}
+
+      // Strategy 6: Animation frames to ensure repaint and reset transforms
+      requestAnimationFrame(function() {
+        canvases.forEach(function(canvas) { canvas.style.transform = ''; });
+        requestAnimationFrame(function() { forceSynchronousLayout(document.body); });
+      });
+    };
+
+    // Initialize WASM first, then load Flutter via flutter_bootstrap.js
+    (async function() {
+      // Get base URI from the base element for proper path resolution
+      var baseHref = document.querySelector('base')?.href || '';
+      
+      // Log environment info for debugging
+      console.log('User Agent:', navigator.userAgent);
+      console.log('WebAssembly support:', typeof WebAssembly !== 'undefined');
+      
+      // Test WebAssembly reference-types support (needed for externref)
+      var hasReferenceTypes = false;
+      try {
+        // Try to create a simple wasm module with a table that uses externref
+        var testBytes = new Uint8Array([
+          0x00, 0x61, 0x73, 0x6D, // magic
+          0x01, 0x00, 0x00, 0x00, // version
+          0x04, 0x05, 0x01,       // table section
+          0x6F, 0x01, 0x00, 0x04  // table externref min=0 max=4
+        ]);
+        var testModule = new WebAssembly.Module(testBytes);
+        hasReferenceTypes = true;
+        console.log('WebAssembly reference-types: SUPPORTED');
+      } catch (e) {
+        console.log('WebAssembly reference-types: NOT SUPPORTED -', e.message);
+      }
+      
+      // Initialize the WASM module first
+      try {
+        var wasmPath = baseHref + 'pkg/wellen_bridge_bg.wasm';
+        // With --target no-modules, wasm_bindgen expects an object with module_or_path
+        await wasm_bindgen({ module_or_path: wasmPath });
+        // After initialization, wasm_bindgen object has the exported functions
+        console.log('wellen_bridge WASM initialized');
+        
+        // CRITICAL: Explicitly assign wasm_bindgen to window for Dart @JS annotations to find it
+        // Dart's @JS("wasm_bindgen.frb_*") expects window.wasm_bindgen to exist
+        window.wasm_bindgen = wasm_bindgen;
+        console.log('window.wasm_bindgen assigned:', typeof window.wasm_bindgen);
+        
+        console.log('wasm_bindgen wire functions:', Object.keys(wasm_bindgen).filter(k => k.startsWith('wire')));
+        console.log('wasm_bindgen frb functions:', Object.keys(wasm_bindgen).filter(k => k.startsWith('frb')));
+        // Test calling frb functions directly
+        if (typeof wasm_bindgen.frb_get_rust_content_hash === 'function') {
+          var hash = wasm_bindgen.frb_get_rust_content_hash();
+          console.log('frb_get_rust_content_hash() returned:', hash);
+        } else {
+          console.error('frb_get_rust_content_hash is NOT a function:', typeof wasm_bindgen.frb_get_rust_content_hash);
+        }
+      } catch (e) {
+        console.error('Failed to initialize wellen_bridge WASM:', e);
+      }
+
+      // Handle Shift+wheel for zooming the waveform. We must add the listener
+      // with `{ passive: false }` so `preventDefault()` is allowed on wheel events.
+      try {
+        // Track Shift key state on the global window for a Dart fallback
+        window.addEventListener('keydown', function(e) {
+          try {
+            if (e.key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+              window.__shiftDown = true;
+            }
+          } catch (err) { }
+        }, { capture: true });
+
+        window.addEventListener('keyup', function(e) {
+          try {
+            if (e.key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+              window.__shiftDown = false;
+            }
+          } catch (err) { }
+        }, { capture: true });
+
+        // Also clear on blur / visibilitychange in case the page loses focus
+        window.addEventListener('blur', function() { try { window.__shiftDown = false; } catch (_) {} }, true);
+        document.addEventListener('visibilitychange', function() { try { if (document.visibilityState !== 'visible') window.__shiftDown = false; } catch (_) {} }, true);
+
+        // Function to simulate mouse movement to wake up the WebView compositor
+        // The compositor seems to defer presentation while modifier keys are held,
+        // but mouse movement wakes it up
+        function simulateMouseMove() {
+          try {
+            var canvas = document.querySelector('canvas');
+            if (!canvas) return;
+            var rect = canvas.getBoundingClientRect();
+            var centerX = rect.left + rect.width / 2;
+            var centerY = rect.top + rect.height / 2;
+            var moveEvent = new MouseEvent('mousemove', {
+              bubbles: true,
+              cancelable: true,
+              clientX: centerX + Math.random() * 2 - 1,
+              clientY: centerY + Math.random() * 2 - 1,
+              view: window
+            });
+            canvas.dispatchEvent(moveEvent);
+            var flutterView = document.querySelector('flutter-view') || document.querySelector('flt-glass-pane');
+            if (flutterView) {
+              flutterView.dispatchEvent(moveEvent);
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // Shift+wheel listener handled above by our top-level capturing wheel listener
+
+        console.log('Added capturing keydown/keyup and Shift+wheel listener');
+      } catch (err) {
+        console.warn('Could not add non-passive wheel listener:', err);
+      }
+
+      // Now load flutter_bootstrap.js which sets up _flutter.buildConfig and calls loader.load()
+      var script = document.createElement('script');
+      script.src = baseHref + 'flutter_bootstrap.js';
+      script.type = 'application/javascript';
+      document.head.appendChild(script);
+      console.log('index.html: flutter_bootstrap.js appended (page reloaded in GUI)');
+    })();
+  </script>
+</body>
+</html>

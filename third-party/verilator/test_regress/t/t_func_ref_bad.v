@@ -1,0 +1,22 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Antmicro Ltd
+// SPDX-License-Identifier: CC0-1.0
+
+class Cls;
+  function logic get_x(ref logic x);
+    return x;
+  endfunction
+endclass
+
+module t;
+  logic [10:0] a;
+  logic b;
+  Cls cls;
+  initial begin
+    cls = new;
+    b = cls.get_x(a[1]);
+    $stop;
+  end
+endmodule

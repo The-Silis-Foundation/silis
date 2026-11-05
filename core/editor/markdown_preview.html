@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Silis Monaco Markdown Preview</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --text-color: #e6edf3;
+            --text-muted: #8b949e;
+            --border-color: #30363d;
+            --header-border: #21262d;
+            --code-bg: #161b22;
+            --link-color: #58a6ff;
+            --table-alt: #161b22;
+            --blockquote-border: #388bfd;
+            --accent-color: #79c0ff;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+            font-size: 13.5px;
+            line-height: 1.6;
+            box-sizing: border-box;
+            overflow-x: hidden;
+            overflow-y: auto;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        #preview-container {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 28px 36px 64px 36px;
+            box-sizing: border-box;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: #f0f6fc;
+            font-weight: 600;
+            margin-top: 28px;
+            margin-bottom: 14px;
+            line-height: 1.25;
+            letter-spacing: -0.01em;
+        }
+
+        h1 {
+            font-size: 1.85em;
+            padding-bottom: 0.35em;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h2 {
+            font-size: 1.35em;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h3 { font-size: 1.15em; }
+        h4 { font-size: 1.0em; }
+
+        p, ul, ol {
+            margin-top: 0;
+            margin-bottom: 14px;
+            color: #c9d1d9;
+        }
+
+        ul, ol {
+            padding-left: 2em;
+        }
+
+        li + li {
+            margin-top: 0.25em;
+        }
+
+        a {
+            color: var(--link-color);
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        /* Clean crisp monospace badge: neutral monochrome slate, no pink/purple colors */
+        code {
+            padding: 0.18em 0.45em;
+            margin: 0;
+            font-size: 85%;
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 5px;
+            font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            color: #f0f6fc;
+            font-weight: 500;
+        }
+
+        pre {
+            padding: 14px 18px;
+            overflow: auto;
+            font-size: 85%;
+            line-height: 1.45;
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+
+        pre code {
+            padding: 0;
+            margin: 0;
+            font-size: 100%;
+            background-color: transparent;
+            color: #e6edf3;
+            border: none;
+            border-radius: 0;
+        }
+
+        blockquote {
+            padding: 4px 16px;
+            color: var(--text-muted);
+            border-left: 3px solid #388bfd;
+            margin: 0 0 16px 0;
+            background: rgba(56, 139, 253, 0.04);
+            border-radius: 0 4px 4px 0;
+        }
+
+        hr {
+            height: 1px;
+            padding: 0;
+            margin: 24px 0;
+            background-color: #30363d;
+            border: 0;
+        }
+
+        table {
+            border-spacing: 0;
+            border-collapse: collapse;
+            margin-top: 8px;
+            margin-bottom: 20px;
+            width: 100%;
+            overflow: auto;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+        }
+
+        table th {
+            font-weight: 600;
+            background-color: #161b22;
+            color: #f0f6fc;
+            border: 1px solid #30363d;
+            padding: 8px 14px;
+            text-align: left;
+            font-size: 13px;
+        }
+
+        table td {
+            border: 1px solid #30363d;
+            padding: 7px 14px;
+            font-size: 13px;
+            color: #c9d1d9;
+        }
+
+        table tr:nth-child(2n) {
+            background-color: #0f141c;
+        }
+
+        table tr:hover {
+            background-color: #1c2128;
+        }
+
+        /* Clean crisp image preview container */
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            margin: 8px 0 16px 0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+        }
+
+        details {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            background: var(--code-bg);
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--link-color);
+        }
+
+        summary:hover {
+            color: #b4befe;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #45475a;
+            border-radius: 5px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #585b70;
+        }
+    </style>
+    <script src="marked.min.js"></script>
+    <script src="mermaid.min.js"></script>
+</head>
+<body>
+    <div id="preview-container"></div>
+    <script>
+        var _rawText = '';
+
+        if (typeof mermaid !== 'undefined') {
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: 'dark',
+                themeVariables: {
+                    darkMode: true,
+                    background: '#161b22',
+                    primaryColor: '#21262d',
+                    primaryTextColor: '#f0f6fc',
+                    primaryBorderColor: '#30363d',
+                    lineColor: '#58a6ff',
+                    secondaryColor: '#0d1117',
+                    tertiaryColor: '#161b22',
+                    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace'
+                }
+            });
+        }
+
+        function setRawContent(b64) {
+            try {
+                _rawText = decodeURIComponent(escape(atob(b64)));
+            } catch (e) {
+                try {
+                    _rawText = atob(b64);
+                } catch (e2) {
+                    _rawText = b64;
+                }
+            }
+            render();
+        }
+
+        function render() {
+            var container = document.getElementById('preview-container');
+            if (typeof marked !== 'undefined' && marked.parse) {
+                var renderer = new marked.Renderer();
+                var originalCodeRenderer = renderer.code.bind(renderer);
+
+                renderer.code = function(code, language) {
+                    if (language === 'mermaid') {
+                        return '<div class="mermaid">' + code + '</div>';
+                    }
+                    return originalCodeRenderer(code, language);
+                };
+
+                marked.setOptions({
+                    gfm: true,
+                    breaks: false,
+                    tables: true,
+                    headerIds: true,
+                    mangle: false,
+                    renderer: renderer
+                });
+                container.innerHTML = marked.parse(_rawText);
+
+                // Trigger Mermaid rendering on all .mermaid blocks
+                if (typeof mermaid !== 'undefined' && mermaid.run) {
+                    try {
+                        mermaid.run({
+                            querySelector: '.mermaid'
+                        });
+                    } catch (mErr) {
+                        console.error('Mermaid render error:', mErr);
+                    }
+                }
+            } else {
+                container.innerText = _rawText;
+            }
+
+            // Intercept all link clicks and notify native host via document.title
+            var links = container.getElementsByTagName('a');
+            for (var i = 0; i < links.length; i++) {
+                links[i].addEventListener('click', function(e) {
+                    var href = this.getAttribute('href');
+                    if (href && (href.startsWith('file://') || href.startsWith('http://') || href.startsWith('https://'))) {
+                        e.preventDefault();
+                        document.title = 'SILIS_OPEN_LINK:' + href;
+                        setTimeout(function() { document.title = 'Silis Monaco Markdown Preview'; }, 50);
+                    }
+                });
+            }
+        }
+
+        window.setRawContent = setRawContent;
+        window.setText = setRawContent;
+        window.getRawContent = function() { return _rawText; };
+        window.getText = function() { return _rawText; };
+    </script>
+</body>
+</html>

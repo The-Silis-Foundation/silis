@@ -1,0 +1,60 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2019 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  localparam TWO = 2;
+
+  int q[$ : TWO];  // Shall not go higher than [2], i.e. size 3
+
+  initial begin
+    q.push_front(3);
+    if (q.size() != 1) $stop;
+    q.push_front(2);
+    if (q.size() != 2) $stop;
+    q.push_front(1);
+    if (q.size() != 3) $stop;
+    q.push_front(0);
+    if (q.size() != 3) $stop;
+    q[3] = -1;
+    if (q.size() != 3) $stop;
+    if (q[0] != 0) $stop;
+    if (q[1] != 1) $stop;
+    if (q[2] != 2) $stop;
+
+    q.delete();
+    q.push_back(0);
+    q.push_back(1);
+    q.push_back(2);
+    if (q.size() != 3) $stop;
+    q.push_back(3);
+    if (q.size() != 3) $stop;
+    if (q[0] != 0) $stop;
+    if (q[1] != 1) $stop;
+    if (q[2] != 2) $stop;
+
+    // Test insert on bounded queue
+    q.delete();
+    q.push_back(10);
+    q.push_back(30);
+    if (q.size() != 2) $stop;
+    q.insert(1, 20);  // insert into middle while capacity remains
+    if (q.size() != 3) $stop;
+    if (q[0] != 10) $stop;
+    if (q[1] != 20) $stop;
+    if (q[2] != 30) $stop;
+    // Attempt insert on full bounded queue (should have no effect per IEEE 1800-2023)
+    q.insert(1, 99);
+    if (q.size() != 3) $stop;
+    if (q[0] != 10) $stop;
+    if (q[1] != 20) $stop;
+    if (q[2] != 30) $stop;
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('simulator')
+test.top_filename = "t/t_func_dotted.v"
+test.vlt_filename = "t/t_func_dotted_inl0.vlt"
+
+out_filename = test.obj_dir + "/V" + test.name + ".tree.json"
+
+test.compile(v_flags2=["--no-json-edit-nums", test.vlt_filename])
+
+if test.vlt_all:
+    test.file_grep(
+        out_filename,
+        r'{"type":"MODULE","name":"ma",.*"loc":"\w,92:[^"]*",.*"origName":"ma",.*"modPublic":true')
+    test.file_grep(
+        out_filename,
+        r'{"type":"MODULE","name":"mb",.*"loc":"\w,107:[^"]*",.*"origName":"mb",.*"modPublic":true'
+    )
+    test.file_grep(
+        out_filename,
+        r'{"type":"MODULE","name":"mc",.*"loc":"\w,136:[^"]*",.*"origName":"mc",.*"modPublic":true'
+    )
+    test.file_grep(
+        out_filename,
+        r'{"type":"MODULE","name":"mc__PB1",.*"loc":"\w,136:[^"]*",.*"origName":"mc",.*"modPublic":true'
+    )
+
+test.execute()
+
+test.passes()

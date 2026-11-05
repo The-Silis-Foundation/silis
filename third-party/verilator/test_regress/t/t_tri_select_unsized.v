@@ -1,0 +1,26 @@
+// DESCRIPTION: Verilator: Test of selection with unsized Z.
+//
+// Test selecting Z when size is not explicit. Issue 510.
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2012 Jeremy Bennett
+// SPDX-License-Identifier: CC0-1.0
+
+module t (
+    input clk
+);
+
+  wire [1:0] b;
+  wire [1:0] c;
+  wire [0:0] d;  // Explicit width due to issue #508
+  wire [0:0] e;
+
+  // This works if we use 1'bz, or 1'bx, but not with just 'bz or 'bx. It
+  // does require the tri-state Z. Since we get the same effect if b is
+  // dimensioned [0:0], this may be connected to issue #508.
+  assign b[1:0] = clk ? 2'bx : 'bz;
+  assign c[1:0] = clk ? 2'bz : 'bx;
+  assign d = clk ? 1'bx : 'bz;
+  assign e = clk ? 1'bz : 'bx;
+
+endmodule

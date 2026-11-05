@@ -1,0 +1,17 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2017 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  initial begin
+    forever begin
+    end
+    // verilator lint_off UNSIGNED
+    for (reg [31:0] i = 0; i >= 0; i = i + 1) begin
+    end
+    $display;  // So loop not eaten
+  end
+endmodule

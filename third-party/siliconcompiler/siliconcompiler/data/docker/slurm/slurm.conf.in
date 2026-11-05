@@ -1,0 +1,43 @@
+# Slurm configuration file.
+SlurmctldHost={{ hostname }}
+
+# CORE CONFIG
+MpiDefault=none
+ProctrackType=proctrack/linuxproc
+
+SlurmctldPidFile=/run/slurmctld.pid
+SlurmdPidFile=/run/slurmd.pid
+SlurmdSpoolDir=/sc_tools/spool/slurmd
+StateSaveLocation=/sc_tools/spool/slurm
+
+SlurmUser=slurm
+
+# slurmrestd cannot use munge over TCP, so the REST API authenticates with JWT.
+# start_slurm.sh generates the key on first boot.
+AuthAltTypes=auth/jwt
+AuthAltParameters=jwt_key=/sc_tools/etc/jwt_hs256.key
+
+SwitchType=switch/none
+TaskPlugin=task/none
+SrunPortRange=50001-52000
+
+# SCHEDULING
+MinJobAge=30
+MessageTimeout=30
+SchedulerType=sched/builtin
+SchedulerParameters=batch_sched_delay=20,step_retry_time=2,sched_interval=1,sched_min_interval=200000
+SelectType=select/linear
+
+ClusterName=I10
+
+JobAcctGatherType=jobacct_gather/none
+
+SlurmCtldLogFile=/sc_tools/log/slurm/slurmctld.log
+SlurmdLogFile=/sc_tools/log/slurm/slurmd.log
+
+# COMPUTE NODES
+# (Set RealMemory to a bit below the reported value to account for possible consumption at boot)
+NodeName={{ hostname }} State=IDLE CPUs=2 Boards=1 SocketsPerBoard=1 CoresPerSocket=1 ThreadsPerCore=2 RealMemory=4000
+
+# PARTITIONS
+PartitionName=ctldpart Nodes={{ hostname }} Default=yes

@@ -1,0 +1,181 @@
+###############################
+# Reading SC Schema
+###############################
+
+source ./sc_manifest.tcl
+
+##############################
+# Schema Adapter
+###############################
+
+set sc_pdk [sc_cfg_get asic pdk]
+
+##############################
+# Setup debugging
+###############################
+
+source "$sc_refdir/common/debugging.tcl"
+
+###############################
+# Source helper functions
+###############################
+
+source "$sc_refdir/common/procs.tcl"
+
+###############################
+# Common Setup
+###############################
+
+# Read techlef
+set aprfileset [sc_cfg_get library $sc_pdk pdk aprtechfileset openroad]
+foreach sc_techlef [sc_cfg_get_fileset $sc_pdk $aprfileset lef] {
+    # Read techlef
+    puts "Reading techlef: ${sc_techlef}"
+    read_lef $sc_techlef
+}
+
+# Read Lefs
+foreach lib [sc_cfg_get asic asiclib] {
+    set filesets [sc_cfg_get library $lib asic aprfileset]
+    foreach lef_file [sc_cfg_get_fileset $lib $filesets lef] {
+        puts "Reading lef: ${lef_file}"
+        read_lef $lef_file
+    }
+}
+
+# Read Verilog
+if { [file exists "inputs/${sc_topmodule}.vg"] } {
+    puts "Reading netlist verilog: inputs/${sc_topmodule}.vg"
+    read_verilog "inputs/${sc_topmodule}.vg"
+} elseif { [file exists "inputs/${sc_topmodule}.v"] } {
+    puts "Reading netlist verilog: inputs/${sc_topmodule}.v"
+    read_verilog "inputs/${sc_topmodule}.v"
+} else {
+    foreach fs [sc_get_filesets] {
+        lassign $fs fs_lib fs_name
+        foreach netlist [sc_cfg_get_fileset $fs_lib $fs_name verilog] {
+            puts "Reading netlist verilog: ${netlist}"
+            read_verilog $netlist
+        }
+    }
+}
+link_design $sc_topmodule
+
+###############################
+# Source Step Script
+###############################
+
+utl::push_metrics_stage "sc__prestep__{}"
+if { [sc_cfg_tool_task_exists prescript] } {
+    foreach sc_pre_script [sc_cfg_tool_task_get prescript] {
+        puts "Sourcing pre script: ${sc_pre_script}"
+        source $sc_pre_script
+    }
+}
+utl::pop_metrics_stage
+
+utl::push_metrics_stage "sc__step__{}"
+
+###########################
+# Initialize floorplan
+###########################
+
+set sc_floorplan_def [sc_cfg_get_fileset $sc_designlib [sc_cfg_get option fileset] def]
+if { [llength $sc_floorplan_def] > 0 } {
+    set def [lindex $sc_floorplan_def 0]
+    puts "Reading floorplan DEF: ${def}"
+    read_def -floorplan_initialize $def
+} else {
+    # NOTE: two points are the lower left and upper right of a rectangle, more than
+    # two are the vertices of a rectilinear outline.
+    set sc_diearea [sc_cfg_get constraint area diearea]
+
+    # Use die and core sizes, flattened into "x y x y ..."
+    set sc_diesize [concat {*}$sc_diearea]
+
+    if { [llength $sc_diesize] > 4 } {
+        if { [sc_check_version 24 3 7516] == 0 } {
+            utl::error FLW 1 "polygonal floorplans are not supported in this version of\
+                openroad"
+        }
+
+        set outline []
+        foreach { x y } $sc_diesize {
+            lappend outline [ord::microns_to_dbu $x]
+            lappend outline [ord::microns_to_dbu $y]
+        }
+
+        ifp::make_polygon_die $outline
+    } else {
+        set outline [odb::Rect]
+        $outline set_xlo [ord::microns_to_dbu [lindex $sc_diesize 0]]
+        $outline set_ylo [ord::microns_to_dbu [lindex $sc_diesize 1]]
+        $outline set_xhi [ord::microns_to_dbu [lindex $sc_diesize 2]]
+        $outline set_yhi [ord::microns_to_dbu [lindex $sc_diesize 3]]
+
+        [ord::get_db_block] setDieArea $outline
+    }
+}
+
+puts "Floorplan information:"
+puts "  Die area: [sc_format_area [ord::get_die_area]]"
+
+###########################
+# Track Creation
+###########################
+make_tracks
+
+###########################
+# RDL Routing
+###########################
+foreach rdl_file [sc_cfg_tool_task_get var rdlroute] {
+    puts "Sourcing rdlroute: ${rdl_file}"
+    source $rdl_file
+}
+
+######################
+# Do fill
+######################
+
+# System reserved obstructions fill the gap between a polygonal die outline and its
+# bounding box, so they are left alone here: they are the die shape rather than a
+# routing constraint, and odb refuses to delete them anyway (ODB-1111).
+set sc_has_system_obs [sc_check_version 24 3 4645]
+set removed_obs 0
+foreach obstruction [[ord::get_db_block] getObstructions] {
+    if { $sc_has_system_obs && [$obstruction isSystemReserved] } {
+        continue
+    }
+    odb::dbObstruction_destroy $obstruction
+    incr removed_obs
+}
+utl::info FLW 1 "Deleted $removed_obs routing obstructions"
+
+set sc_fillrules [sc_get_fill_rules $sc_pdk]
+if {
+    [sc_cfg_tool_task_get var fin_add_fill] &&
+    [llength $sc_fillrules] > 0
+} {
+    density_fill -rules [lindex $sc_fillrules 0]
+}
+
+utl::pop_metrics_stage
+
+utl::push_metrics_stage "sc__poststep__{}"
+if { [sc_cfg_tool_task_exists postscript] } {
+    foreach sc_post_script [sc_cfg_tool_task_get postscript] {
+        puts "Sourcing post script: ${sc_post_script}"
+        source $sc_post_script
+    }
+}
+utl::pop_metrics_stage
+
+###############################
+# Write Design Data
+###############################
+
+utl::push_metrics_stage "sc__write__{}"
+write_db "outputs/${sc_topmodule}.odb.gz"
+write_def "outputs/${sc_topmodule}.def.gz"
+write_verilog -include_pwr_gnd "outputs/${sc_topmodule}.vg"
+utl::pop_metrics_stage

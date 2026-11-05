@@ -1,0 +1,29 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Antmicro Ltd
+// SPDX-License-Identifier: CC0-1.0
+
+module t (
+    input clk
+);
+
+  process p;
+
+  initial begin
+    wait (p);
+    p.kill();
+    p.await();
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+  always @(posedge clk) begin
+    if (!p) begin
+      p = process::self();
+    end
+    else begin
+      $stop;
+    end
+  end
+endmodule

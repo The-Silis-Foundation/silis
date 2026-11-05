@@ -1,0 +1,72 @@
+set sc_scenarios [dict keys [sc_cfg_get constraint timing scenario]]
+set sc_delaymodel [sc_cfg_get asic delaymodel]
+
+set sc_liberty_map [dict create]
+
+# Read Liberty
+if { [sc_has_sta_mcmm_support] && [sc_cfg_tool_task_get var load_sdcs] } {
+    set liberty_files []
+    foreach lib $sc_logiclibs {
+        foreach scene $sc_scenarios {
+            set lib_filesets []
+            foreach libcorner [sc_cfg_get constraint timing scenario $scene libcorner] {
+                if {
+                    [sc_cfg_exists library $lib asic libcornerfileset $libcorner $sc_delaymodel]
+                } {
+                    lappend lib_filesets \
+                        {*}[sc_cfg_get library $lib asic libcornerfileset $libcorner $sc_delaymodel]
+                }
+            }
+            set files [sc_get_liberty_files $lib $lib_filesets]
+            foreach file $files {
+                if { [lsearch -exact $liberty_files $file] == -1 } {
+                    lappend liberty_files $file
+                }
+            }
+            foreach file $files {
+                if { [sc_check_version 26 1 1257] } {
+                    # OpenSTA fixed lookup
+                    dict lappend sc_liberty_map $scene [file nativename $file]
+                } else {
+                    set file_tail [file tail $file]
+                    while { ![string equal -nocase [file extension $file_tail] ".lib"] } {
+                        set file_tail [file rootname $file_tail]
+                    }
+                    dict lappend sc_liberty_map $scene [file rootname $file_tail]
+                }
+            }
+        }
+    }
+    foreach lib_file $liberty_files {
+        puts "Reading liberty file: ${lib_file}"
+        read_liberty $lib_file
+    }
+} else {
+    utl::info FLW 1 "Defining timing corners: $sc_scenarios"
+    define_corners {*}$sc_scenarios
+    foreach corner $sc_scenarios {
+        foreach lib $sc_logiclibs {
+            set lib_filesets []
+            foreach libcorner [sc_cfg_get constraint timing scenario $corner libcorner] {
+                if {
+                    [sc_cfg_exists library $lib asic libcornerfileset $libcorner $sc_delaymodel]
+                } {
+                    lappend lib_filesets \
+                        {*}[sc_cfg_get library $lib asic libcornerfileset $libcorner $sc_delaymodel]
+                }
+            }
+            foreach lib_file [sc_get_liberty_files $lib $lib_filesets] {
+                puts "Reading liberty file for ${corner}: ${lib_file}"
+                read_liberty -corner $corner $lib_file
+            }
+        }
+    }
+}
+
+# The default delay calculator reads the NLDM tables and ignores the
+# current-source models, so a CCS liberty is only worth reading if the
+# calculator is switched over with it.
+if { $sc_delaymodel == "ccs" } {
+    utl::info FLW 1 "Using CCS delay calculation"
+    set_delay_calculator prima
+}

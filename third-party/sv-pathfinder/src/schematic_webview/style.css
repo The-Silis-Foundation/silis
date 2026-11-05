@@ -1,0 +1,627 @@
+/* C7 — VS Code theming for the schematic webview.
+ * digitaljs renders SVG with its own classes; we theme chrome with --vscode-* vars
+ * and keep wire-value colors semantic (green=1, dim=0, gray=x). */
+
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    display: flex;
+    flex-direction: column;
+}
+
+#toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--vscode-editorWidget-border, #444);
+    flex: 0 0 auto;
+}
+
+#breadcrumb {
+    font-family: var(--vscode-editor-font-family, monospace);
+    opacity: 0.9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* RTL / Gate-Level slider toggle (labels flanking an iOS-style switch) */
+#preset-toggle.sv-seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+    font-size: 0.9em;
+    user-select: none;
+    vertical-align: middle;
+}
+.sv-tab .codicon { margin-right: 4px; vertical-align: middle; font-size: 13px; }
+.sv-seg-label {
+    opacity: 0.5;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.sv-seg-label.active {
+    opacity: 1;
+    color: var(--sv-accent, var(--vscode-charts-blue));
+    font-weight: 600;
+}
+.sv-switch {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 16px;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+.sv-switch input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.sv-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    border: 1px solid var(--vscode-editorWidget-border, #555);
+    border-radius: 999px;
+    transition: background 0.15s;
+}
+.sv-slider::before {
+    content: '';
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    left: 2px;
+    top: 1px;
+    background: var(--vscode-foreground, #dddddd);
+    border-radius: 50%;
+    transition: transform 0.15s;
+}
+.sv-switch input:checked + .sv-slider {
+    background: var(--sv-accent, var(--vscode-charts-blue));
+    border-color: var(--sv-accent, var(--vscode-charts-blue));
+}
+.sv-switch input:checked + .sv-slider::before {
+    transform: translateX(16px);
+    background: #ffffff;
+}
+.sv-switch input:focus-visible + .sv-slider {
+    outline: 1px solid var(--sv-accent, var(--vscode-charts-blue));
+    outline-offset: 1px;
+}
+
+#toolbar-right button {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ffffff);
+    border: 1px solid var(--vscode-editorWidget-border, transparent);
+    border-radius: 3px;
+    padding: 2px 8px;
+    margin-left: 4px;
+    cursor: pointer;
+}
+/* codicon-icon toolbar buttons: center the glyph, tighten the (now icon-only) padding */
+#toolbar-right button.codicon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 6px;
+    font-size: 16px;
+    vertical-align: middle;
+}
+#toolbar-right button.codicon:disabled { opacity: 0.4; cursor: default; }
+
+#toolbar-right button:hover {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+}
+
+#paper-container {
+    flex: 1 1 auto;
+    overflow: hidden; /* navigation is transform-based (drag / wheel pan); no native scroll */
+    position: relative;
+}
+
+/* "Rendering…" overlay: a large netlist blocks the UI thread while digitaljs builds the Circuit and
+   renders the initial paper, then ELK lays it out asynchronously — seconds with no feedback. Cover the
+   canvas until the layout settles (mirrors the elaboration progress notification). The spinner animates
+   `transform` (compositor-driven), so it keeps spinning even while the main thread is blocked. */
+#sv-render-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: none;            /* shown (flex) by showRenderOverlay() for heavy renders only */
+    align-items: center;
+    justify-content: center;
+    background: var(--vscode-editor-background);
+    pointer-events: none;     /* transient; never trap input */
+}
+#sv-render-overlay .sv-ro-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+    font-size: 12px;
+}
+#sv-render-overlay .sv-ro-spinner {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2.5px solid var(--vscode-editorWidget-border, #88888844);
+    border-top-color: var(--sv-accent, var(--vscode-progressBar-background, #4a9cff));
+    animation: sv-ro-spin 0.8s linear infinite;
+}
+@keyframes sv-ro-spin { to { transform: rotate(360deg); } }
+/* size hint under "Rendering schematic…" (known from the netlist before layout) */
+#sv-render-overlay .sv-ro-sub {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+#paper {
+    width: 100%;
+    height: 100%;
+}
+
+/* ---- overlay scrollbars (popups; and main when selected) ---- */
+.sv-scrollbar {
+    position: absolute;
+    z-index: 6;
+    background: transparent;
+}
+.sv-scrollbar.sv-h { left: 0; right: 10px; bottom: 0; height: 9px; }
+.sv-scrollbar.sv-v { top: 0; bottom: 10px; right: 0; width: 9px; }
+.sv-scrollthumb {
+    position: absolute;
+    background: var(--vscode-scrollbarSlider-background, rgba(120, 120, 120, 0.4));
+    border-radius: 4px;
+}
+.sv-scrollbar.sv-h .sv-scrollthumb { top: 1.5px; height: 6px; min-width: 16px; }
+.sv-scrollbar.sv-v .sv-scrollthumb { left: 1.5px; width: 6px; min-height: 16px; }
+.sv-scrollthumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(120, 120, 120, 0.6)); }
+.sv-scrollthumb:active { background: var(--vscode-scrollbarSlider-activeBackground, rgba(120, 120, 120, 0.8)); }
+
+/* ---- minimap (main paper) ---- */
+#sv-minimap {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    z-index: 6;
+    border: 1px solid var(--vscode-editorWidget-border, #454545);
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.9;
+}
+#sv-minimap:hover { opacity: 1; }
+
+/* bottom bar: popup tabs on the left, the "# nets / # devices" status text on the right */
+#status {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-top: 1px solid var(--vscode-editorWidget-border, #444);
+    position: relative;
+    z-index: 10000; /* keep the bar (and its tabs) above the absolutely-positioned dialogs */
+}
+#status-text {
+    margin-left: auto; /* push to the right regardless of how many tabs are present */
+    font-size: 0.85em;
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+/* ---- digitaljs SVG theming ----
+ * Scoped to .djs (digitaljs adds it to EVERY paper element it creates), so the
+ * subcircuit popup windows are themed the same as the main paper. */
+
+/* paper background follows the editor; the svg has its own white default */
+.djs svg {
+    background: var(--vscode-editor-background) !important;
+}
+
+.djs * {
+    font-family: var(--vscode-editor-font-family, monospace);
+}
+
+/* gate bodies / boxes */
+.djs .joint-cell [joint-selector="body"],
+.djs .joint-cell rect.body, .djs .joint-cell circle.body,
+.djs .joint-cell polygon.body, .djs .joint-cell path.body {
+    fill: var(--vscode-editorWidget-background, #252526);
+    stroke: var(--vscode-editor-foreground, #cccccc);
+}
+
+/* Child-instance (subcircuit) boxes filled with the configurable accent so they stand out
+ * at a glance (the "single accent color" setting). A light tint keeps the name + port
+ * labels readable; the accent stroke makes the boundary clear. JointJS tags these element
+ * views with .joint-type-subcircuit. --sv-accent is injected from the setting (falls back
+ * to the theme's chart blue). */
+.djs .joint-type-subcircuit [joint-selector="body"],
+.djs .joint-type-subcircuit rect.body {
+    fill: color-mix(in srgb, var(--sv-accent, var(--vscode-charts-blue)) 16%, var(--vscode-editorWidget-background, #252526));
+    stroke: var(--sv-accent, var(--vscode-charts-blue));
+    stroke-width: 1.5px;
+}
+
+/* text labels (cell names, port labels, wire netnames) */
+.djs .joint-cell text,
+.djs .joint-link text {
+    fill: var(--vscode-editor-foreground, #cccccc);
+}
+
+/* gate decorations drawn as paths: the clock-edge marker (>) on flip-flop / memory clk ports and the
+ * mux's selected-input arrow. digitaljs strokes these 'black', which is invisible on the dark gate
+ * body — recolor to the theme foreground so they're visible in both light and dark themes. */
+.djs .joint-cell path.decor,
+.djs .joint-cell .decor {
+    stroke: var(--vscode-editor-foreground, #cccccc);
+}
+
+/* live value annotation text: under each child-instance port name (.iovalue, also the boxed IO
+ * ports) and under each wire net name (.wirevalue). Small, monospace; blank when there's no
+ * waveform value. The fill is set per-node in JS to match the signal's wire colour (high/low/
+ * def/undef), so it isn't declared here. */
+.djs .joint-cell text.iovalue,
+.djs .joint-link text.wirevalue {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 6pt;
+    pointer-events: none;
+}
+
+/* bidirectional (inout) port marker (⇄) on child-instance ports and boxed IO ports. A structural
+ * cue (the port is bidirectional), so a neutral accent rather than a value colour. */
+.djs .joint-cell text.portbidir {
+    fill: var(--sv-accent, var(--vscode-charts-blue, #4a9cff));
+    font-size: 8pt;
+    pointer-events: none;
+}
+
+/* (the transition flash is driven directly via the Web Animations API in main.mjs — a
+ * thickness+brightness pulse on the wire line — so no CSS keyframe is needed here.) */
+
+/* read-only viewer: hide the box zoom (🔍) affordance; child instances open via
+ * right-click → Expand. (Wire value tooltips are on .joint-link, not .joint-cell.) */
+.djs .joint-cell .tooltip { display: none; }
+
+/* read-only cursors. digitaljs styles nodes with `cursor: move` and port magnets with
+ * `cursor: crosshair` + a hover dim, advertising drag/connect we've disabled. We don't use
+ * digitaljs's `fixed` class (its `.joint-link{pointer-events:none}` would kill our wire
+ * clicks), so neutralize those cursors here instead. Loaded after digitaljs's CSS → wins. */
+.djs .joint-element { cursor: default; }
+.djs:not(.fixed) [magnet=true]:not(.joint-element) { cursor: default; }
+.djs:not(.fixed) [magnet=true]:not(.joint-element):hover { opacity: 1; }
+
+/* hover highlight: accent outline on the hovered cell/wire (class toggled from JS). Uses a stroke
+ * change, NOT a drop-shadow filter: a filter forces the browser to re-rasterize the element (and its
+ * filter region) on every mouse move, which is a major repaint cost on a large schematic. A stroke
+ * tweak only repaints the element, so hover stays cheap at scale. We never touch the wire's stroke
+ * COLOR (only width), so the value palette is preserved. */
+.djs .sv-hover [joint-selector="body"],
+.djs .sv-hover rect.body, .djs .sv-hover circle.body,
+.djs .sv-hover polygon.body, .djs .sv-hover path.body {
+    stroke: var(--sv-accent, var(--vscode-charts-blue));
+    stroke-width: 3px;
+}
+/* 6px (not 4) so it clearly exceeds a BUS wire's native 4px — at 4px a hovered bus looked unchanged.
+ * CSS wins over digitaljs's inline stroke-width attribute, so this lifts both 2px single-bit and 4px
+ * bus wires. */
+.djs .sv-hover path.connection,
+.djs .sv-hover .connection,
+.djs .sv-hover line.wire {
+    stroke-width: 6px;
+}
+
+/* persistent selection: latched accent outline (click to toggle, many at once → trace a
+ * propagation path). Stronger/solid vs the transient hover glow: a thicker body stroke and
+ * wire width plus a brighter glow. We only touch stroke-WIDTH on wires, not the stroke color,
+ * so the value palette is preserved. */
+.djs .sv-selected {
+    filter: drop-shadow(0 0 4px var(--sv-accent, var(--vscode-charts-blue)))
+            drop-shadow(0 0 2px var(--sv-accent, var(--vscode-charts-blue)));
+}
+.djs .sv-selected [joint-selector="body"],
+.djs .sv-selected rect.body, .djs .sv-selected circle.body,
+.djs .sv-selected polygon.body, .djs .sv-selected path.body {
+    stroke: var(--sv-accent, var(--vscode-charts-blue));
+    stroke-width: 2.5px;
+}
+.djs .sv-selected path.connection,
+.djs .sv-selected .connection,
+.djs .sv-selected line.wire {
+    stroke-width: 3px;
+}
+
+/* SOFT find highlight on EVERY match (the focused one also gets .sv-find-current below). Cheap — no
+ * filter, so it scales to a net with many segments: a translucent find-colour halo on the wire's wide
+ * (invisible) wrapper path, which does NOT mask the value-coloured connection on top of it; and a
+ * find-colour outline on element bodies. */
+.djs .sv-find-match [joint-selector="wrapper"] {
+    stroke: var(--vscode-charts-yellow, #e2c08d);
+    stroke-opacity: 0.35;
+}
+.djs .sv-find-match [joint-selector="body"],
+.djs .sv-find-match rect.body, .djs .sv-find-match circle.body,
+.djs .sv-find-match polygon.body, .djs .sv-find-match path.body {
+    stroke: var(--vscode-charts-yellow, #e2c08d);
+}
+
+/* current find match: a distinct find-match GLOW (not the accent used by hover/select) so the match
+ * stands out after Find jumps to it. The glow is on a single element per navigate, so the drop-shadow
+ * filter is fine here (unlike hover). Crucially, on a WIRE we do NOT recolour the stroke — that's the
+ * value colour — only glow + thicken it, so the signal's value stays readable while it's the match. */
+.djs .sv-find-current {
+    filter: drop-shadow(0 0 4px var(--vscode-charts-yellow, #e2c08d))
+            drop-shadow(0 0 2px var(--vscode-charts-yellow, #e2c08d));
+}
+.djs .sv-find-current [joint-selector="body"],
+.djs .sv-find-current rect.body, .djs .sv-find-current circle.body,
+.djs .sv-find-current polygon.body, .djs .sv-find-current path.body {
+    stroke: var(--vscode-charts-yellow, #e2c08d);
+    stroke-width: 3px;
+}
+.djs .sv-find-current path.connection,
+.djs .sv-find-current .connection,
+.djs .sv-find-current line.wire {
+    stroke-width: 6px;
+}
+/* When a found signal is ALSO selected, show the SELECTION (accent) glow — otherwise the find glow
+ * masks it (same specificity, find is later in the cascade) and a click-to-select looks like nothing
+ * happened. The two-class selector outranks the single-class find rule, so selection wins here. */
+.djs .sv-find-current.sv-selected {
+    filter: drop-shadow(0 0 4px var(--sv-accent, var(--vscode-charts-blue)))
+            drop-shadow(0 0 2px var(--sv-accent, var(--vscode-charts-blue)));
+}
+.djs .sv-find-current.sv-selected [joint-selector="body"],
+.djs .sv-find-current.sv-selected rect.body, .djs .sv-find-current.sv-selected circle.body,
+.djs .sv-find-current.sv-selected polygon.body, .djs .sv-find-current.sv-selected path.body {
+    stroke: var(--sv-accent, var(--vscode-charts-blue));
+}
+
+/* dangling-net stub (sv-pathfinder.schematicShowDanglingNets): a declared-but-unconnected net,
+ * shown as a dashed, muted, port-less label box so it reads as "this net exists but connects to
+ * nothing" rather than a real IO port. */
+.djs .sv-dangling [joint-selector="body"],
+.djs .sv-dangling rect.body {
+    stroke: var(--vscode-descriptionForeground, #888);
+    stroke-dasharray: 4 3;
+    fill-opacity: 0.4;
+}
+.djs .sv-dangling .ioname { fill: var(--vscode-descriptionForeground, #888); font-style: italic; }
+.djs .sv-dangling .joint-port { display: none; }
+
+/* NOTE: wire value colors are NOT set here. digitaljs colors the wire's `line` selector
+ * by signal value via SVG attributes (high/low/def/undef); a CSS `stroke` rule on the
+ * connection path overrides those attributes and would flatten every wire to one color.
+ * The theme-aware value palette is installed on cells.Wire.prototype.attrs.signal in
+ * main.mjs instead. */
+
+/* ---- popup taskbar (one tab per open child window), lives at the left of the status bar --- */
+#sv-taskbar {
+    display: none; /* shown (flex) only when popups exist */
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    min-width: 0; /* allow the tab row to shrink/scroll rather than push the status text off */
+}
+.sv-tab {
+    flex: 0 0 auto;
+    max-width: 200px;
+    padding: 2px 10px;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ffffff);
+    border: 1px solid var(--vscode-editorWidget-border, transparent);
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.85em;
+    font-family: var(--vscode-editor-font-family, monospace);
+}
+.sv-tab:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+.sv-tab.sv-min { opacity: 0.55; font-style: italic; } /* minimized */
+/* main-page tab: always first, visually set apart, never minimized */
+.sv-tab.sv-tab-main {
+    background: transparent;
+    border-color: var(--sv-accent, var(--vscode-charts-blue));
+    margin-right: 6px;
+}
+.sv-tab.sv-tab-main:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2)); }
+
+/* titlebar buttons: our injected minimize, and jquery-ui's close restyled to match it
+ * (flat, transparent, same size/hover) instead of jquery-ui's bordered icon button. */
+/* popup titlebar buttons (our minimize + jquery-ui's re-skinned close), both codicon-icon */
+.sv-min-btn,
+.ui-dialog .ui-dialog-titlebar-close {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    color: var(--vscode-editor-foreground, #cccccc);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    text-indent: 0; /* counter jquery-ui's .ui-button-icon-only text-indent:-9999px (hides the codicon) */
+}
+.sv-min-btn { right: 2.1em; }
+/* jquery-ui pins this button at right:0, so nudge it left toward the minimize with margin */
+.ui-dialog .ui-dialog-titlebar-close { right: 0; margin: 0 4px 0 0; }
+.sv-min-btn:hover,
+.ui-dialog .ui-dialog-titlebar-close:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+.sv-min-btn .codicon,
+.ui-dialog .ui-dialog-titlebar-close .codicon { font-size: 13px; }
+/* hide jquery-ui's original sprite icon (we inject a codicon instead) */
+.ui-dialog .ui-dialog-titlebar-close .ui-icon { display: none; }
+/* popup zoom/export buttons (digitaljs .btn) carry a codicon now */
+.ui-dialog .btn .codicon { font-size: 14px; vertical-align: middle; }
+
+/* ---- right-click context menu ---- */
+/* Hover tooltip. Uses the editor-hover-widget theme tokens so it's readable in BOTH light and dark
+ * themes (the old digitaljs bus tooltip was light-only). */
+#sv-tooltip {
+    position: fixed;
+    z-index: 1000;
+    display: none;
+    max-width: 360px;
+    padding: 6px 9px;
+    pointer-events: none;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, #cccccc));
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-editorWidget-border, #454545));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+}
+#sv-tooltip .sv-tip-header {
+    font-weight: 600;
+    margin-bottom: 2px;
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, #ffffff));
+    word-break: break-all;
+}
+#sv-tooltip .sv-tip-row { display: flex; gap: 10px; }
+#sv-tooltip .sv-tip-k { color: var(--vscode-descriptionForeground, #999999); min-width: 44px; }
+#sv-tooltip .sv-tip-v { word-break: break-all; font-variant-numeric: tabular-nums; }
+
+/* Find box (Ctrl+F): a floating search widget at the top-right of a canvas. One per paper — the main
+ * #paper-container and each subcircuit popup's content (made a positioning context below). */
+/* "limited engine" status-bar badge: shown when the schematic was produced by the limited (yowasp)
+   fallback. Amber so it reads as a caution without being an error. */
+.sv-backend-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 10px;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+}
+.sv-backend-badge .codicon { font-size: 12px; }
+
+.sv-find {
+    position: absolute;
+    top: 8px;
+    right: 16px;
+    z-index: 50;
+    display: none;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 6px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-editorWidget-border, #454545);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+}
+.sv-find input {
+    width: 200px;
+    padding: 2px 6px;
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    color: var(--vscode-input-foreground, #cccccc);
+    background: var(--vscode-input-background, #3c3c3c);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+    outline: none;
+}
+.sv-find input:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+.sv-find .sv-find-count {
+    min-width: 38px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999999);
+    font-variant-numeric: tabular-nums;
+}
+.sv-find button {
+    background: transparent;
+    border: none;
+    color: var(--vscode-icon-foreground, var(--vscode-editor-foreground, #cccccc));
+    cursor: pointer;
+    padding: 3px;
+    border-radius: 3px;
+}
+.sv-find button:hover { background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1)); }
+/* a popup's find box positions against the dialog content (below the titlebar), not the whole window */
+.ui-dialog .ui-dialog-content { position: relative; }
+
+#sv-ctxmenu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 168px;
+    padding: 4px 0;
+    background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+    color: var(--vscode-menu-foreground, var(--vscode-editor-foreground, #cccccc));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border, #454545));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    font-size: var(--vscode-font-size);
+    user-select: none;
+}
+.sv-ctxitem {
+    padding: 4px 18px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.sv-ctxitem:hover {
+    background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, #094771));
+    color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground, #ffffff));
+}
+.sv-ctxsep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--vscode-menu-separatorBackground, var(--vscode-editorWidget-border, #454545));
+}
+
+/* ---- subcircuit popup window (jquery-ui dialog) theming ---- */
+.ui-dialog {
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-editorWidget-border, #454545);
+    color: var(--vscode-editor-foreground, #cccccc);
+}
+
+.ui-dialog .ui-dialog-titlebar {
+    background: var(--vscode-editorWidget-background, #252526);
+    color: var(--vscode-editor-foreground, #cccccc);
+    border: none;
+    border-bottom: 1px solid var(--vscode-editorWidget-border, #454545);
+    font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.ui-dialog .ui-dialog-content {
+    background: var(--vscode-editor-background, #1e1e1e);
+}
+
+/* popup zoom toolbar (digitaljs prepends a .btn-group of − / + to the dialog) → right-align */
+.ui-dialog .btn-group {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.ui-dialog .btn {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ffffff);
+    border: 1px solid var(--vscode-editorWidget-border, transparent);
+    border-radius: 3px;
+    padding: 2px 8px;
+    margin-left: 4px;
+    cursor: pointer;
+}

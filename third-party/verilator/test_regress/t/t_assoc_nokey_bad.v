@@ -1,0 +1,20 @@
+// DESCRIPTION: Verilator: Verilog Test module for SystemVerilog 'alias'
+//
+// Simple bi-directional alias test.
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  initial begin
+    automatic int dict[string] = '{1, 2};
+    automatic int dict2[string] = '{3: 4};  // Legal due to value-to-string conversion
+    $display("dict=%p", dict);
+    $display("dict2=%p", dict2);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

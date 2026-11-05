@@ -1,0 +1,173 @@
+# SC Documentation
+
+This directory contains the SiliconCompiler documentation, powered by
+[Sphinx](https://www.sphinx-doc.org/en/master/).
+
+Contributor process — branches, tests, linters, pull requests — lives in
+[CONTRIBUTING.md](../CONTRIBUTING.md). This file covers only how the docs
+themselves are put together.
+
+## Building
+
+```sh
+pip install -e ..[docs]
+sudo apt install graphviz xdot     # macOS: brew install graphviz
+make html
+```
+
+Open `_build/html/index.html` to view the result, or serve the directory with
+`python3 -m http.server -d _build/html` and browse to
+<http://localhost:8000>. Serving is worth the extra step if you want to try the
+search box: result summaries are fetched with JavaScript, which browsers block on
+`file://` URLs, so search looks broken when you open the file directly.
+
+**Warnings are errors.** `Makefile` passes `-W --keep-going` to Sphinx and Read
+the Docs sets `fail_on_warning`, so a broken cross-reference or malformed
+directive fails the build instead of shipping. Nitpicky mode (`-n`) is
+deliberately off — it reports unresolved type names in docstrings, which is a
+different problem and would bury the signal.
+
+For PDF output, `make latexpdf`, which additionally needs:
+
+```sh
+sudo apt install latexmk texlive-latex-extra imagemagick
+```
+
+Run `make` with no target for the full list Sphinx supports.
+
+## Structure
+
+`index.rst` is the entry point. It opens with a task-oriented "I want to…"
+directory — every tutorial is one click from it, and
+`tests/docs/test_reachability.py` fails if that stops being true — and leads to
+four top-level sections:
+
+| Section | Directory | Contents |
+|---|---|---|
+| User Guide | `user_guide/` | Installation, quickstart, remote and Docker execution, fundamentals, tutorials, FAQ, glossary |
+| Development Guide | `development_guide/` | Building tools, flows, PDKs, libraries and targets; packaging |
+| References | `reference_manual/` | Schema and Python API, CLI apps, pre-defined module catalogues, appendices |
+| Contributing | `development_guide/contribution.rst` | Where a new module belongs, and how to get it reviewed |
+
+`conf.py` holds the Sphinx configuration. `_static/` holds CSS and the custom
+search scorer; `_ext/` holds the Sphinx extensions that live with the docs rather
+than with the package.
+
+Most of the site is generated rather than written. The schema reference, the
+pre-defined tool/flow/PDK/library/target catalogues, the data source (resolver)
+catalogue, the CLI app reference and the tool install matrix are all built from
+the source tree at build time, by `siliconcompiler.schema.docs.schemagen` plus
+the extensions in `_ext/`. Editing those pages means editing the generator or
+the docstrings behind them, not the `.rst`.
+
+`user_guide/tutorials/examples` is a symlink to the top-level `examples/`
+directory, so tutorials can pull real, tested code in with `literalinclude`
+instead of pasting snippets that drift out of date.
+
+Two kinds of file sit beside the pages that use them rather than among them, each
+in its own subdirectory so a directory listing stays a list of pages:
+
+| Directory | Holds |
+|---|---|
+| `include/` | `.inc` fragments pulled in with `include::` — shared text, or a long section split out of its page |
+| `_images/` | sources the build renders into pictures: `.dot` files, plus the occasional `.py` helper for `scdepgraph`/`scflowgraph` |
+
+Both are per-location: there is an `include/` and an `_images/` next to the pages
+that need one, not one of each for the whole site. A fragment shared by pages in
+different directories goes in the `include/` nearest their common parent — the
+supported-technologies table is in `user_guide/include/` because both the landing
+page and `user_guide/what_is_sc.rst` include it.
+
+Three files are written to the root of the built site for machine consumers
+rather than for browsers:
+
+| File | Written by | Contents |
+|---|---|---|
+| `llms.txt` | `_ext/llmstxt.py` | Curated preamble — current API, what no longer exists, module placement — plus a generated index of every page |
+| `llms-full.txt` | `_ext/llmstxt.py` | The same preamble plus the full text of every hand-written page, rendered to Markdown |
+| `schema.json` | `_ext/schemadump.py` | Every schema parameter for every documented class, keyed by keypath |
+
+The preamble is the one hand-written part, at `_llms/preamble.md`, because
+stating which API is current and which names are gone is editorial work that
+cannot be generated. The rest is derived: the page index from the toctree, and
+the schema roots from the `:root:` options on `reference_manual/schema.rst`, so
+neither can drift from the site.
+
+All three are written by the **`html` builder only** — `latexpdf`, `linkcheck`
+and the rest have nowhere to publish them. Rendering every page for
+`llms-full.txt` costs about ten seconds, so if you are rebuilding repeatedly
+while editing one page, skip it:
+
+```sh
+SC_DOCS_SKIP_ARTIFACTS=1 make html
+```
+
+That is an environment variable rather than a Sphinx setting on purpose: changing
+a config value invalidates the cache and forces a full rebuild, costing more than
+it saves. Leave it unset for anything you intend to publish.
+
+## Writing
+
+Pages are written in
+[reStructuredText](https://docutils.sourceforge.io/rst.html). A few conventions
+worth following:
+
+- **Cross-reference with `:ref:`.** Writing ``` `Text <some_label>`_ ``` looks
+  right and is silently wrong: it produces a link to a relative URL rather than a
+  cross-reference, and Sphinx does not warn. `tests/docs/test_rst_lint.py`
+  catches it.
+- **Pull code in, do not paste it.** Prefer `literalinclude` from a file under
+  `examples/` so the code cannot rot independently of the page that shows it.
+
+  Address the code by name — `:pyobject:`, or `:start-at:`/`:end-at:`/
+  `:end-before:` anchored on a line that is already in the file. **`:lines:` is
+  a trap**: inserting a line anywhere above the range silently shifts it, and
+  the page then renders the wrong code with a clean build. There are none left
+  in `docs/`; keep it that way.
+
+  This is not hypothetical. Before they were converted, four of the ranges in
+  `hardened.rst`/`uniquify.rst` had already drifted and were rendering
+  half-docstrings and the wrong two lines — for long enough to be on `main`,
+  with every build green.
+- **Diagrams are `.dot` sources, rendered at build time.** Commit the `.dot` and
+  point at it; do not commit the rendered image:
+
+  ```rst
+  .. graphviz:: _images/multi_job/together.dot
+     :align: center
+  ```
+
+  `sphinx.ext.graphviz` renders it to SVG during the build, so editing a diagram
+  is editing one text file — nobody has to remember to re-run `dot` and commit
+  the result, and the change shows up as a readable diff. `:align:`, `:alt:`,
+  `:caption:`, `:class:` and `:name:` are passed through.
+
+  A flowgraph or dependency graph is not a hand-drawn diagram — its source is the
+  Python that builds it. Render those from the example script the page already
+  shows, using the `scflowgraph` and `scdepgraph` directives in `_ext/graphgen.py`:
+
+  ```rst
+  .. scdepgraph:: examples/macro_reuse/make.py
+     :variable: Top()
+  ```
+
+  Trailing parentheses mean "call this"; arguments must be literals, so
+  `:variable: _project("rtl.memory")` renders one particular configuration and
+  the RST says which.
+- **Screenshots live in `_screenshots/`, and only screenshots do.** Everything
+  under `_images/` is a source the build renders; everything under
+  `_screenshots/` is a committed capture that nothing can regenerate and that
+  therefore goes stale on its own. See `_screenshots/README.md` before adding
+  one.
+- **Link new pages from somewhere a reader will be.** A page reachable only
+  through the toctree tends to go unread; ask what already links to it.
+- **Docstrings are Google style**, rendered by the bundled
+  [`sphinx.ext.napoleon`](https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html).
+  To pull in API documentation for a module:
+
+  ```rst
+  .. automodule:: siliconcompiler.<mod_name>
+      :members:
+  ```
+
+  See `reference_manual/schema_api.rst` for worked examples.

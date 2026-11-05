@@ -1,0 +1,9 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2020 Yutetsu TAKATSUKASA
+// SPDX-License-Identifier: Unlicense
+
+`verilator_config
+hier_block -module "sub?"
+hier_block -module "delay"  // matches recursive modules

@@ -1,0 +1,34 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t (
+    // Inputs
+    input clk
+);
+
+  sub sub (.*);
+
+  // Bad - no global clock
+  always @($global_clock) $display;
+
+endmodule
+
+module sub (
+    input clk
+);
+
+  global clocking ck @(posedge clk);
+  endclocking
+
+  // Bad - global duplicate
+  global clocking ogck @(posedge clk);
+  endclocking
+
+  // Bad - name duplicate
+  global clocking ck @(posedge clk);
+  endclocking
+
+endmodule

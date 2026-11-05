@@ -1,0 +1,685 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2025-2025, The OpenROAD Authors
+
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:python_wrap_cc.bzl", "PYTHON_EXTENSION_LINKOPTS", "PYTHON_STABLE_API_DEFINE", "python_wrap_cc")
+load("//bazel:tcl_encode_or.bzl", "tcl_encode")
+load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+
+package(
+    features = [
+        "parse_headers",
+        "layering_check",
+        # TODO(b/299593765): Fix strict ordering.
+        "-libcxx_assertions",
+    ],
+)
+
+exports_files([
+    ".clang-tidy",
+    "BUILD.bazel",
+    "LICENSE",
+    "MODULE.bazel",
+    "src/Design.i",
+    "src/Exception.i",
+    "src/options.i",
+])
+
+string_flag(
+    name = "platform",
+    build_setting_default = "cli",
+    values = [
+        "cli",
+        "gui",
+    ],
+)
+
+config_setting(
+    name = "platform_cli",
+    flag_values = {
+        ":platform": "cli",
+    },
+)
+
+config_setting(
+    name = "platform_gui",
+    flag_values = {
+        ":platform": "gui",
+    },
+)
+
+OPENROAD_LIBRARY_DEPS = [
+    ":openroad_version",
+    "//src/ant",
+    "//src/ant:ui",
+    "//src/cgt",
+    "//src/cts",
+    "//src/cts:ui",
+    "//src/dbSta",
+    "//src/dbSta:dbNetwork",
+    "//src/dbSta:dbReadVerilog",
+    "//src/dbSta:ui",
+    "//src/dft",
+    "//src/dft:ui",
+    "//src/dpl",
+    "//src/dpl:ui",
+    "//src/drt",
+    "//src/drt:ui",
+    "//src/dst",
+    "//src/dst:ui",
+    "//src/est",
+    "//src/est:ui",
+    "//src/exa",
+    "//src/exa:ui",
+    "//src/fin",
+    "//src/gpl",
+    "//src/gpl:ui",
+    "//src/grt",
+    "//src/grt:ui",
+    "//src/ifp",
+    "//src/ifp:ui",
+    "//src/mpl",
+    "//src/mpl:ui",
+    "//src/odb/src/3dblox",
+    "//src/odb/src/cdl",
+    "//src/odb/src/db",
+    "//src/odb/src/defin",
+    "//src/odb/src/defout",
+    "//src/odb/src/lefin",
+    "//src/odb/src/lefout",
+    "//src/odb:ui",
+    "//src/pad",
+    "//src/par",
+    "//src/par:ui",
+    "//src/pdn",
+    "//src/ppl",
+    "//src/psm",
+    "//src/ram",
+    "//src/rcx",
+    "//src/rcx:ui",
+    "//src/rmp",
+    "//src/rmp:ui",
+    "//src/rsz",
+    "//src/rsz:ui",
+    "//src/stt:ui",
+    "//src/syn",
+    "//src/syn:ui",
+    "//src/tap",
+    "//src/tap:ui",
+    "//src/upf:ui",
+    "//src/utl",
+    "//src/utl:ui",
+    "//src/web",
+    "//src/web:ui",
+    ":ord",
+]
+
+# Flags applied to top-level OpenROAD targets only. Flags that apply
+# globally to every cc_* target (-Wall, -Wextra, -Wno-sign-compare,
+# -Wno-unused-parameter, etc.) live in .bazelrc — do not repeat them here.
+OPENROAD_COPTS = [
+    "-Wno-error",
+    "-pedantic",
+    "-Wno-cast-qual",  # typically from TCL swigging
+    "-Wno-missing-braces",  # typically from TCL swigging
+    "-Wredundant-decls",
+    "-Wformat-security",
+    "-Wmismatched-tags",
+    "-fopenmp",
+]
+
+OPENROAD_DEFINES = [
+    "BUILD_TYPE=\\\"$(COMPILATION_MODE)\\\"",
+    "BAZEL_BUILD",
+    "GPU=false",
+    "BUILD_PYTHON=false",
+    "ABC_NAMESPACE=abc",
+]
+
+cc_library(
+    name = "cli_completer",
+    srcs = ["src/cli_completer.cc"],
+    hdrs = ["src/cli_completer.h"],
+    includes = ["src"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@tcl_lang//:tcl",
+    ],
+)
+
+cc_library(
+    name = "tcl_readline_setup",
+    srcs = ["src/tcl_readline_setup.cc"],
+    hdrs = ["src/tcl_readline_setup.h"],
+    includes = ["src"],
+    visibility = ["//src/sta:__pkg__"],
+    deps = [
+        ":cli_completer",
+        "//third-party/linenoise",
+        "@tcl_lang//:tcl",
+    ],
+)
+
+# Deps shared by :openroad and :openroad-qt. Kept as a Starlark list
+# rather than a cc_library wrapper because layering_check is enabled
+# package-wide: a deps-only cc_library does not re-export its deps'
+# headers to consumers, so direct binary deps are what each Main.cc
+# include needs to see.
+OPENROAD_MAIN_DEPS = [
+    ":ord",
+    ":tcl_readline_setup",
+    "//bazel:tcl_library_init",
+    "//src/cut",
+    "//src/sta:opensta_lib",
+    "//src/utl",
+    "//src/web",
+    "@abseil-cpp//absl/base:no_destructor",
+    "@boost.stacktrace",
+    "@tcl_lang//:tcl",
+]
+
+cc_binary(
+    name = "openroad",
+    srcs = [
+        "src/Main.cc",
+    ],
+    copts = OPENROAD_COPTS,
+    defines = OPENROAD_DEFINES,
+    features = ["-use_header_modules"],
+    malloc = select({
+        "@platforms//os:linux": "@tcmalloc//tcmalloc",
+        "@platforms//os:macos": "@bazel_tools//tools/cpp:malloc",
+    }),
+    visibility = ["//visibility:public"],
+    deps = OPENROAD_MAIN_DEPS + select(
+        {
+            ":platform_cli": [
+                ":openroad_lib",
+                "//src/gui",
+                "//src/gui:gui_stub",
+            ],
+            ":platform_gui": [
+                ":openroad_lib_qt",
+                "//src/gui:gui_qt",
+            ],
+        },
+    ),
+)
+
+# Qt GUI variant. Build explicitly when the interactive GUI is wanted:
+#   bazelisk build //:openroad-qt
+# Additive to the existing `--//:platform=gui //:openroad` flag path —
+# this target is preferable for ad-hoc GUI builds because it does not
+# invalidate `:openroad`'s cache the way flipping the flag does.
+cc_binary(
+    name = "openroad-qt",
+    srcs = [
+        "src/Main.cc",
+    ],
+    copts = OPENROAD_COPTS,
+    defines = OPENROAD_DEFINES,
+    features = ["-use_header_modules"],
+    malloc = select({
+        "@platforms//os:linux": "@tcmalloc//tcmalloc",
+        "@platforms//os:macos": "@bazel_tools//tools/cpp:malloc",
+    }),
+    visibility = ["//visibility:public"],
+    deps = OPENROAD_MAIN_DEPS + [
+        ":openroad_lib_qt",
+        "//src/gui:gui_qt",
+    ],
+)
+
+# CLI variant: the default. What downstream rule libraries pull as a
+# build-time tool, and what `bazelisk build //:openroad` produces.
+cc_library(
+    name = "openroad_lib",
+    srcs = [
+        "src/Design.cc",
+        "src/OpenRoad.cc",
+        "src/Tech.cc",
+        "src/Timing.cc",
+        ":openroad_swig",
+        ":openroad_tcl",
+    ],
+    copts = OPENROAD_COPTS,
+    defines = OPENROAD_DEFINES + ["BUILD_GUI=false"],
+    features = ["-use_header_modules"],
+    includes = [
+        "include",
+    ],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/gui",
+        "//src/sta:opensta_lib",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/synchronization",
+        "@boost.stacktrace",
+        "@tcl_lang//:tcl",
+    ] + OPENROAD_LIBRARY_DEPS,
+)
+
+# Qt variant: same sources, linked against the Qt GUI implementation.
+# Used by :openroad-qt, and by :openroad when --//:platform=gui is set.
+# Compiled separately (different `BUILD_GUI` define + different gui dep).
+cc_library(
+    name = "openroad_lib_qt",
+    srcs = [
+        "src/Design.cc",
+        "src/OpenRoad.cc",
+        "src/Tech.cc",
+        "src/Timing.cc",
+        ":openroad_swig",
+        ":openroad_tcl",
+    ],
+    copts = OPENROAD_COPTS,
+    defines = OPENROAD_DEFINES + ["BUILD_GUI=true"],
+    features = ["-use_header_modules"],
+    includes = [
+        "include",
+    ],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/gui:gui_qt",
+        "//src/sta:opensta_lib",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/synchronization",
+        "@boost.stacktrace",
+        "@tcl_lang//:tcl",
+    ] + OPENROAD_LIBRARY_DEPS,
+)
+
+cc_library(
+    name = "ord",
+    hdrs = [
+        "include/ord/Design.h",
+        "include/ord/InitOpenRoad.hh",
+        "include/ord/OpenRoad.hh",
+        "include/ord/Tech.h",
+        "include/ord/Timing.h",
+    ],
+    includes = [
+        "include",
+    ],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/sta:opensta_lib",
+        "@abseil-cpp//absl/synchronization",
+        "@tcl_lang//:tcl",
+    ],
+)
+
+cc_library(
+    name = "openroad_version",
+    hdrs = [
+        ":OpenRoadVersion",
+    ],
+    includes = [
+        "include",
+    ],
+)
+
+genrule(
+    name = "OpenRoadVersion",
+    srcs = [],
+    outs = ["include/ord/Version.hh"],
+    cmd = """
+        VERSION=""
+        if [ -f bazel-out/stable-status.txt ]; then
+            VERSION=$$(grep '^STABLE_GIT_VERSION ' bazel-out/stable-status.txt \
+                        | cut -d' ' -f2-) || true
+        fi
+        [ -z "$$VERSION" ] && VERSION="bazel-nostamp"
+        printf '#define OPENROAD_VERSION "%s"\\n' "$$VERSION" > $@
+        printf '#define OPENROAD_GIT_DESCRIBE ""\\n' >> $@
+    """,
+    # stamp = -1 means "stamp when --stamp is set" (via --config=release).
+    # Without --stamp (the default), STABLE_GIT_VERSION is empty and
+    # the output is deterministic, so the Bazel cache is not invalidated
+    # on every commit.
+    stamp = -1,
+)
+
+tcl_encode(
+    name = "openroad_tcl",
+    srcs = ["//src/sta:tcl_util"] + [
+        "src/Metrics.tcl",
+        "src/OpenRoad.tcl",
+    ],
+    char_array_name = "ord_tcl_inits",
+    namespace = "ord",
+)
+
+tcl_wrap_cc(
+    name = "openroad_swig",
+    srcs = [
+        "src/OpenRoad.i",
+        ":error_swig",
+    ],
+    module = "ord",
+    namespace_prefix = "ord",
+    root_swig_src = "src/OpenRoad.i",
+    swig_includes = [
+        "src",
+    ],
+)
+
+cc_binary(
+    name = "_openroadpy.so",
+    srcs = [":openroad_swig-py"],
+    defines = [PYTHON_STABLE_API_DEFINE],
+    linkopts = PYTHON_EXTENSION_LINKOPTS,
+    linkshared = True,
+    deps = [
+        ":openroad_lib",
+        ":ord",
+        "//src/ant",
+        "//src/cgt",
+        "//src/cts",
+        "//src/dpl",
+        "//src/drt",
+        "//src/exa",
+        "//src/fin",
+        "//src/gpl",
+        "//src/grt",
+        "//src/gui",
+        "//src/gui:gui_stub",
+        "//src/ifp",
+        "//src/odb/src/db",
+        "//src/par",
+        "//src/pdn",
+        "//src/ppl",
+        "//src/psm",
+        "//src/rcx",
+        "//src/rsz",
+        "//src/stt",
+        "//src/tap",
+        "//src/utl",
+        "@boost.stacktrace",
+        "@rules_python//python/cc:current_py_cc_headers",
+    ],
+)
+
+py_library(
+    name = "openroad_py",
+    srcs = [":openroad_swig-py"],
+    data = [":_openroadpy.so"],
+    imports = ["."],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/gpl:gpl_py",
+        "//src/odb:odb_py",
+        "//src/utl:utl_py",
+    ],
+)
+
+python_wrap_cc(
+    name = "openroad_swig-py",
+    srcs = [
+        "include/ord/Design.h",
+        "include/ord/Tech.h",
+        "include/ord/Timing.h",
+        "src/OpenRoad-py.i",
+        ":error_swig-py",
+    ],
+    module = "openroadpy",
+    root_swig_src = "src/OpenRoad-py.i",
+    swig_includes = [
+        "include",
+        "src",
+    ],
+    deps = [
+        "//src/ant:swig-py",
+        "//src/cgt:swig-py",
+        "//src/cts:swig-py",
+        "//src/dpl:swig-py",
+        "//src/drt:swig-py",
+        "//src/exa:swig-py",
+        "//src/fin:swig-py",
+        "//src/gpl:swig-py",
+        "//src/grt:swig-py",
+        "//src/ifp:swig-py",
+        "//src/odb:swig-py",
+        "//src/par:swig-py",
+        "//src/pdn:swig-py",
+        "//src/ppl:swig-py",
+        "//src/psm:swig-py",
+        "//src/rcx:swig-py",
+        "//src/rsz:swig-py",
+        "//src/stt:swig-py",
+        "//src/tap:swig-py",
+        "//src/utl:swig-py",
+    ],
+)
+
+filegroup(
+    name = "error_swig",
+    srcs = [
+        "src/Exception.i",
+    ],
+    visibility = ["//:__subpackages__"],
+)
+
+filegroup(
+    name = "error_swig-py",
+    srcs = [
+        "src/Exception-py.i",
+    ],
+    visibility = ["//:__subpackages__"],
+)
+
+filegroup(
+    name = "design_swig",
+    srcs = [
+        "src/Design.i",
+    ],
+)
+
+filegroup(
+    name = "options_swig",
+    srcs = [
+        "src/options.i",
+    ],
+    visibility = ["//:__subpackages__"],
+)
+
+# ---------------------------------------------------------------------------
+# Packaging aliases
+#
+# The implementation lives in //packaging/ to isolate @rules_pkg loads from
+# downstream consumers, but the user-facing targets stay at the top level.
+# ---------------------------------------------------------------------------
+
+alias(
+    name = "install",
+    actual = "//packaging:install",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "tarfile",
+    actual = "//packaging:tarfile",
+    visibility = ["//visibility:public"],
+)
+
+# Lightweight test suites that run without building OpenROAD.
+# Usage:
+#   bazelisk test --test_tag_filters=doc_check //src/... # all documentation checks
+#   bazelisk test //:dup_id_test                         # duplicate message ID check
+
+# buildifier: disable=native-sh-test
+sh_test(
+    name = "dup_id_test",
+    srcs = ["//etc:find_dup_ids.sh"],
+    data = ["//etc:find_messages.py"],
+    tags = ["local"],
+)
+
+# Make sure the Qt GUI variant keeps building. :openroad is exercised by
+# downstream rule libraries that pull it as a tool; :openroad-qt has no
+# such consumer in CI, so a build_test pins its compilability.
+build_test(
+    name = "openroad_qt_build_test",
+    targets = [":openroad-qt"],
+)
+
+# ---------------------------------------------------------------------------
+# Lint & tidy targets
+#
+# bazelisk test //:lint_test   — run all lint checks
+# bazelisk run  //:fix_lint    — auto-fix then lint
+# ---------------------------------------------------------------------------
+
+# --- TCL linting (tclint) -------------------------------------------------
+
+# buildifier: disable=native-sh-test
+sh_test(
+    name = "lint_tcl_test",
+    srcs = ["//bazel:tcl_lint_test.sh"],
+    args = [
+        "$(rootpath //bazel:tclint)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "tclint.toml",
+        "//bazel:tclint",
+        "@git",
+    ],
+    tags = ["local"],
+)
+
+# --- TCL formatting check (tclfmt --check) --------------------------------
+
+# buildifier: disable=native-sh-test
+sh_test(
+    name = "fmt_tcl_test",
+    srcs = ["//bazel:tcl_fmt_test.sh"],
+    args = [
+        "$(rootpath //bazel:tclfmt)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "tclint.toml",
+        "//bazel:tclfmt",
+        "@git",
+    ],
+    tags = ["local"],
+)
+
+# --- TCL auto-format only (tclfmt --in-place) -----------------------------
+
+# buildifier: disable=native-sh-binary
+sh_binary(
+    name = "tidy_tcl",
+    srcs = ["//bazel:tcl_tidy.sh"],
+    args = [
+        "$(rootpath //bazel:tclfmt)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "tclint.toml",
+        "//bazel:tclfmt",
+        "@git",
+    ],
+)
+
+# --- Bazel linting (buildifier -lint=warn) --------------------------------
+
+# buildifier: disable=native-sh-test
+sh_test(
+    name = "lint_bzl_test",
+    srcs = ["//bazel:bzl_lint_test.sh"],
+    args = [
+        "$(rootpath @buildifier_prebuilt//:buildifier)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "MODULE.bazel",
+        "@buildifier_prebuilt//:buildifier",
+        "@git",
+    ],
+    tags = ["local"],
+)
+
+# --- Bazel formatting check (buildifier -mode=check -lint=off) ------------
+
+# buildifier: disable=native-sh-test
+sh_test(
+    name = "fmt_bzl_test",
+    srcs = ["//bazel:bzl_fmt_test.sh"],
+    args = [
+        "$(rootpath @buildifier_prebuilt//:buildifier)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "MODULE.bazel",
+        "@buildifier_prebuilt//:buildifier",
+        "@git",
+    ],
+    tags = ["local"],
+)
+
+# --- Bazel auto-format only (buildifier -mode=fix) ------------------------
+
+# buildifier: disable=native-sh-binary
+sh_binary(
+    name = "tidy_bzl",
+    srcs = ["//bazel:bzl_tidy.sh"],
+    args = [
+        "$(rootpath @buildifier_prebuilt//:buildifier)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "@buildifier_prebuilt//:buildifier",
+        "@git",
+    ],
+)
+
+# --- Umbrella targets ------------------------------------------------------
+
+test_suite(
+    name = "lint_test",
+    tests = [
+        ":fmt_bzl_test",
+        ":fmt_tcl_test",
+        ":lint_bzl_test",
+        ":lint_tcl_test",
+    ],
+)
+
+# Linting is done here (not just formatting) because not all lint violations
+# are auto-fixable — fix_lint fixes what it can, then reports the rest.
+# buildifier: disable=native-sh-binary
+sh_binary(
+    name = "fix_lint",
+    srcs = ["//bazel:fix_lint.sh"],
+    args = [
+        "$(rootpath //bazel:tcl_tidy.sh)",
+        "$(rootpath //bazel:tclfmt)",
+        "$(rootpath //bazel:tcl_lint_test.sh)",
+        "$(rootpath //bazel:tclint)",
+        "$(rootpath //bazel:bzl_tidy.sh)",
+        "$(rootpath @buildifier_prebuilt//:buildifier)",
+        "$(rootpath //bazel:bzl_lint_test.sh)",
+        "$(rootpath @buildifier_prebuilt//:buildifier)",
+        "$(rootpath @git)",
+    ],
+    data = [
+        "MODULE.bazel",
+        "tclint.toml",
+        "//bazel:bzl_lint_test.sh",
+        "//bazel:bzl_tidy.sh",
+        "//bazel:tcl_lint_test.sh",
+        "//bazel:tcl_tidy.sh",
+        "//bazel:tclfmt",
+        "//bazel:tclint",
+        "@buildifier_prebuilt//:buildifier",
+        "@git",
+    ],
+)

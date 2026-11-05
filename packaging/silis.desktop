@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Silis
+GenericName=Silicon Scaffold ASIC EDA
+Comment=Modern ASIC Silicon Scaffold GUI & CLI EDA Flow
+Exec=AppRun %F
+Icon=silisicon
+Categories=Development;Engineering;Electronics;
+Terminal=false
+StartupNotify=true
+MimeType=application/x-silisproj;

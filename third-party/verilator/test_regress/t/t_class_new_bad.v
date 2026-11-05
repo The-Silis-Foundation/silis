@@ -1,0 +1,55 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2020 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+
+class ClsNoArg;
+  int imembera;
+  function new();
+    imembera = 5;
+  endfunction
+endclass
+
+class ClsNoNew;
+  int imembera;
+endclass
+
+class ClsArg;
+  int imembera;
+  function new(int i);
+    imembera = i + 1;
+  endfunction
+endclass
+
+class ClsNew1;
+  static
+  function new();  // <--- Error: new can't be static
+  endfunction
+endclass
+
+class ClsNew2;
+  virtual
+  function new();  // <--- Error: new can't be virtual
+  endfunction
+endclass
+
+class ClsNew3;
+  extern virtual function new();  // <--- Error: new can't be virtual
+endclass
+function ClsNew3::new();
+endfunction
+
+module t;
+  initial begin
+    ClsNoArg c1;
+    ClsNoNew c2;
+    ClsArg c3;
+    c1 = new(3);  // Bad, called with arg
+    c2 = new(3);  // Bad, called with arg
+    c3 = new();  // Bad, called without arg
+    c1 = new[2];
+    $stop;
+  end
+endmodule

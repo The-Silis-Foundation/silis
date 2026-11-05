@@ -1,0 +1,25 @@
+{
+    "ignorePatterns": [
+      {
+        "pattern":"^https://www.intel.com/content/www/us/en/security-center/vulnerability-handling-guidelines.html$"
+      },
+      {
+        "pattern":"^https://stackoverflow.com"
+      },
+      {
+        "pattern":"^https://bloclibrary.dev/$"
+      },
+      {
+        "pattern":"^https://raw.githubusercontent.com/intel/rohd-wave-viewer/refs/heads/badges/coverage/main.png$"
+      },
+      {
+        "pattern":"^https://intel\\.github\\.io/rohd-wave-viewer(?:/.*)?$"
+      },
+      {
+        "pattern":"^https://github.com/intel/rohd-wave-viewer/blob/main/.github/workflows/coverage.yml$"
+      },
+      {
+        "pattern":"^https://marketplace\\.visualstudio\\.com/manage/publishers/?$"
+      }
+    ]
+  }

@@ -1,0 +1,157 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Greg Davill
+// SPDX-License-Identifier: CC0-1.0
+
+`define stop $stop
+`define checkh(gotv,
+               expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+
+package arr_pkg;
+  localparam logic [31:0] PKG_ADDRS[3] = '{32'hAA001000, 32'hAA002000, 32'hAA003000};
+endpackage
+
+module t (  /*AUTOARG*/);
+
+  typedef logic [31:0] word_t;
+  typedef word_t word_pair_t[2];
+
+  word_t stream_src = 32'h1234_5678;
+  word_pair_t stream_words;
+
+  // Arrays spliced into unpacked array concatenations of parameters, element by element
+  // (IEEE 1800-2023 10.10)
+
+  localparam logic [31:0] BASE_ADDRS[3] = '{32'h80001000, 32'h80002000, 32'h80003000};
+
+  // Sub-array slice at the start
+  localparam logic [31:0] ALL_ADDRS[4] = {BASE_ADDRS[0:1], 32'h80003000, 32'h80004000};
+
+  // Sub-array slice in the middle
+  localparam logic [31:0] MID[5] = {32'hFF, BASE_ADDRS[0:1], 32'hAA, 32'hBB};
+
+  // Multiple full sub-arrays
+  localparam logic [31:0] EXTRA[2] = '{32'hC0, 32'hD0};
+  localparam logic [31:0] MULTI[5] = {BASE_ADDRS, EXTRA};
+
+  // Sub-array with default (sparse ConsArray)
+  localparam logic [31:0] DFLT[3] = '{default: 32'hDD};
+  localparam logic [31:0] WITH_DFLT[4] = {DFLT, 32'hEE};
+
+  // Slice at the end
+  localparam logic [31:0] TAIL[4] = {32'hAA, 32'hBB, BASE_ADDRS[1:2]};
+
+  // Multiple slices combined
+  localparam logic [31:0] MULTI_SLICE[4] = {BASE_ADDRS[0:1], BASE_ADDRS[1:2]};
+
+  // Single-element slice
+  localparam logic [31:0] SINGLE[3] = {BASE_ADDRS[0:0], 32'hAA, 32'hBB};
+
+  // Descending-range source array
+  localparam logic [31:0] DESC[2:0] = '{32'hD0, 32'hD1, 32'hD2};
+  localparam logic [31:0] WITH_DESC[4] = {DESC[1:0], 32'hAA, 32'hBB};
+
+  // Slice bounds from parameter expressions
+  localparam int unsigned N = 2;
+  localparam logic [31:0] PARAM_SLICE[4] = {BASE_ADDRS[0:N-1], 32'hAA, 32'hBB};
+
+  // Multiple param-bounded slices composing a larger array
+  localparam logic [31:0] SRC_A[4] = '{32'hA0, 32'hA1, 32'hA2, 32'hA3};
+  localparam logic [31:0] SRC_B[4] = '{32'hB0, 32'hB1, 32'hB2, 32'hB3};
+  localparam int unsigned NA = 2;
+  localparam int unsigned NB = 3;
+  localparam int unsigned TOTAL = NA + NB;
+  localparam logic [31:0] COMPOSED[TOTAL] = {SRC_A[0:NA-1], SRC_B[0:NB-1]};
+
+  // Keyed pattern of elements of another array param
+  localparam logic [31:0] KEYED_FROM_ARR[3] = '{
+      0: BASE_ADDRS[2],
+      1: BASE_ADDRS[0],
+      2: BASE_ADDRS[1]
+  };
+
+  // Package-scoped array spliced in
+  localparam logic [31:0] WITH_PKG[4] = {arr_pkg::PKG_ADDRS, 32'hFF};
+
+  // Package-scoped array slice
+  localparam logic [31:0] PKG_SLICE[4] = {arr_pkg::PKG_ADDRS[0:1], 32'hAA, 32'hBB};
+
+  initial begin
+    // Streaming concatenation as a positional assignment-pattern member
+    stream_words = '{{<<8{stream_src}}, 32'h0};
+    `checkh(stream_words[0], 32'h7856_3412);
+    `checkh(stream_words[1], 32'h0000_0000);
+
+    `checkh(ALL_ADDRS[0], 32'h80001000);
+    `checkh(ALL_ADDRS[1], 32'h80002000);
+    `checkh(ALL_ADDRS[2], 32'h80003000);
+    `checkh(ALL_ADDRS[3], 32'h80004000);
+
+    `checkh(MID[0], 32'hFF);
+    `checkh(MID[1], 32'h80001000);
+    `checkh(MID[2], 32'h80002000);
+    `checkh(MID[3], 32'hAA);
+    `checkh(MID[4], 32'hBB);
+
+    `checkh(MULTI[0], 32'h80001000);
+    `checkh(MULTI[1], 32'h80002000);
+    `checkh(MULTI[2], 32'h80003000);
+    `checkh(MULTI[3], 32'hC0);
+    `checkh(MULTI[4], 32'hD0);
+
+    `checkh(WITH_DFLT[0], 32'hDD);
+    `checkh(WITH_DFLT[1], 32'hDD);
+    `checkh(WITH_DFLT[2], 32'hDD);
+    `checkh(WITH_DFLT[3], 32'hEE);
+
+    `checkh(TAIL[0], 32'hAA);
+    `checkh(TAIL[1], 32'hBB);
+    `checkh(TAIL[2], 32'h80002000);
+    `checkh(TAIL[3], 32'h80003000);
+
+    `checkh(MULTI_SLICE[0], 32'h80001000);
+    `checkh(MULTI_SLICE[1], 32'h80002000);
+    `checkh(MULTI_SLICE[2], 32'h80002000);
+    `checkh(MULTI_SLICE[3], 32'h80003000);
+
+    `checkh(SINGLE[0], 32'h80001000);
+    `checkh(SINGLE[1], 32'hAA);
+    `checkh(SINGLE[2], 32'hBB);
+
+    `checkh(WITH_DESC[0], 32'hD1);
+    `checkh(WITH_DESC[1], 32'hD2);
+    `checkh(WITH_DESC[2], 32'hAA);
+    `checkh(WITH_DESC[3], 32'hBB);
+
+    `checkh(PARAM_SLICE[0], 32'h80001000);
+    `checkh(PARAM_SLICE[1], 32'h80002000);
+    `checkh(PARAM_SLICE[2], 32'hAA);
+    `checkh(PARAM_SLICE[3], 32'hBB);
+
+    `checkh(COMPOSED[0], 32'hA0);
+    `checkh(COMPOSED[1], 32'hA1);
+    `checkh(COMPOSED[2], 32'hB0);
+    `checkh(COMPOSED[3], 32'hB1);
+    `checkh(COMPOSED[4], 32'hB2);
+
+
+    `checkh(KEYED_FROM_ARR[0], 32'h80003000);
+    `checkh(KEYED_FROM_ARR[1], 32'h80001000);
+    `checkh(KEYED_FROM_ARR[2], 32'h80002000);
+
+    `checkh(WITH_PKG[0], 32'hAA001000);
+    `checkh(WITH_PKG[1], 32'hAA002000);
+    `checkh(WITH_PKG[2], 32'hAA003000);
+    `checkh(WITH_PKG[3], 32'hFF);
+
+    `checkh(PKG_SLICE[0], 32'hAA001000);
+    `checkh(PKG_SLICE[1], 32'hAA002000);
+    `checkh(PKG_SLICE[2], 32'hAA);
+    `checkh(PKG_SLICE[3], 32'hBB);
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

@@ -1,0 +1,242 @@
+#!/usr/bin/env perl
+######################################################################
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2025-2026 Wilson Snyder
+#
+######################################################################
+
+require 5.006_001;
+use warnings;
+use Getopt::Long;
+use FindBin qw($RealBin $RealScript);
+use IO::File;
+use Pod::Usage;
+use Cwd qw(abs_path getcwd);
+
+use strict;
+use vars qw($Debug @Opt_Verilator_Sw);
+
+#######################################################################
+#######################################################################
+# main
+
+autoflush STDOUT 1;
+autoflush STDERR 1;
+
+$Debug = 0;
+
+# No arguments can't do anything useful.  Give help
+if ($#ARGV < 0) {
+    pod2usage(-exitstatus => 2, -verbose => 0);
+}
+
+# We sneak a look at the flags so we can do some pre-environment checks
+# All flags will hit verilator...
+foreach my $sw (@ARGV) {
+    $sw = "'$sw'" if $sw =~ m![^---a-zA-Z0-9_/\\:.+]!;
+    push @Opt_Verilator_Sw, $sw;
+}
+
+Getopt::Long::config("no_auto_abbrev", "pass_through");
+if (! GetOptions (
+          # Major operating modes
+          "help"        => \&usage,
+          "debug:s"     => \&debug,
+          "debugi=i"    => sub { $Debug ||= 1; },
+          # "version!"  => \&version,   # Also passthru'ed
+          # Additional parameters
+          "<>"          => sub {},      # Ignored
+    )) {
+    pod2usage(-exitstatus => 2, -verbose => 0);
+}
+
+# Normal, non-gdb
+run(verilator_coverage_bin()
+    . " " . join(' ', @Opt_Verilator_Sw));
+
+#----------------------------------------------------------------------
+
+sub usage {
+    pod2usage(-verbose => 2, -exitval => 0, -output => \*STDOUT);
+}
+
+sub debug {
+    shift;
+    my $level = shift;
+    $Debug = $level || 3;
+}
+
+#######################################################################
+#######################################################################
+# Builds
+
+sub verilator_coverage_bin {
+    my @basenames = ();
+    if ($ENV{VERILATOR_COVERAGE_BIN}) {
+        push @basenames, $ENV{VERILATOR_COVERAGE_BIN};
+    } else {
+        if (!$Debug) {
+            push @basenames, "verilator_coverage_bin";
+        }
+        # Fall back to dbg version if opt can't be found
+        push @basenames, "verilator_coverage_bin_dbg";
+    }
+
+    for my $basename (@basenames) {
+        # Use VERILATOR_ROOT if defined, else assume verilator_bin is in the search path
+        if (defined($ENV{VERILATOR_ROOT})) {
+            my $dir = $ENV{VERILATOR_ROOT};
+            if (bin_exists("$dir/bin/$basename")) {  # From a "make install" into VERILATOR_ROOT
+                return "$dir/bin/$basename";
+            } elsif (bin_exists("$dir/$basename")) {
+                return "$dir/$basename";  # From pointing to kit directory
+            }
+        } else {
+            if (bin_exists("$RealBin/$basename")) {
+                return "$RealBin/$basename";  # From path/to/verilator with verilator_bin installed
+            }
+            # Note we don't look under bin/$basename which would be right if running
+            # in the kit dir. Running that would likely break, since
+            # VERILATOR_ROOT wouldn't be set and Verilator won't find internal files.
+        }
+    }
+    if (defined($ENV{VERILATOR_ROOT})) {
+        warn "%Error: verilator_coverage: VERILATOR_ROOT set but could not find coverage binary.\n";
+        warn "%Error: VERILATOR_ROOT=$ENV{VERILATOR_ROOT}\n";
+        exit 1;
+    }
+
+    # Find in path
+    return $basenames[0];
+}
+
+sub bin_exists {
+    my $path = shift;
+    return -x "$path" || -x "$path.exe";
+}
+
+#######################################################################
+#######################################################################
+# Utilities
+
+sub run {
+    # Run command, check errors
+    my $command = shift;
+    $! = undef;  # Cleanup -x
+    print "\t$command\n" if $Debug >= 3;
+    system($command);
+    my $status = $?;
+    if ($status) {
+        if ($! =~ /no such file or directory/i) {
+            warn "%Error: verilator_coverage: Misinstalled, or VERILATOR_ROOT might need to be in environment\n";
+        }
+        if ($Debug) {  # For easy rerunning
+            warn "%Error: export VERILATOR_ROOT=" . ($ENV{VERILATOR_ROOT} || "") . "\n";
+            warn "%Error: $command\n";
+        }
+        my $signal = ($status & 127);
+        if ($signal) {
+            if ($signal == 4  # SIGILL
+                || $signal == 8  # SIGFPA
+                || $signal == 11) {  # SIGSEGV
+                warn "%Error: Verilator_coverage internal fault, sorry.\n" if !$Debug;
+            } elsif ($signal == 6) {  # SIGABRT
+                warn "%Error: Verilator_coverage aborted.\n" if !$Debug;
+            } else {
+                warn "%Error: Verilator_coverage threw signal $signal.\n" if !$Debug;
+            }
+        }
+        if ($status != 256 || $Debug) {  # i.e. not normal exit(1)
+            warn "%Error: Command Failed $command\n";
+        }
+        exit $! if $!;  # errno
+        exit $? >> 8 if $? >> 8;  # pass along child exit code
+        exit 128 + $signal;  # last resort
+    }
+}
+
+#######################################################################
+#######################################################################
+package main;
+__END__
+
+=pod
+
+=head1 NAME
+
+verilator_coverage - Verilator coverage analyzer
+
+=head1 SYNOPSIS
+
+    verilator_coverage --help
+    verilator_coverage --version
+
+    verilator_coverage --annotate <obj>
+
+    verilator_coverage --report summary,hier <datafiles>...
+
+    verilator_coverage --report hier <datafiles>...
+
+    verilator_coverage  -write merged.dat <datafiles>...
+
+    verilator_coverage  -write-info merged.info <datafiles>...
+
+Verilator_coverage processes Verilated model-generated coverage reports.
+
+For documentation see
+L<https://verilator.org/guide/latest/exe_verilator_coverage.html>.
+
+=head1 ARGUMENT SUMMARY
+
+    <filename>    Specify input data filename, default "coverage.dat"
+    --annotate <output_dir>       Directory name for source annotation.
+    --annotate-all                All files should be shown.
+    --annotate-min <count>        Minimum occurrence count for uncovered.
+    --annotate-points             Annotates info from each coverage point.
+    --debug                       Enable debugging with the debug executable.
+    --debugi <level>              Set debug level using the debug executable.
+    --filter-type <regex>         Keep only records of given coverage type.
+    --help                        Displays this message and version and exits.
+    --include-reset-arcs          Include reset arcs in FSM arc summaries.
+    --levels <depth>              Limit displayed hierarchy report depth.
+    --rank                        Compute relative importance of tests.
+    --report <kind>[,<kind>...]   Generate reports: summary, hier, or hierarchy.
+    --unlink                      With --write, unlink all inputs
+    --version                     Displays program version and exits.
+    --write <filename>            Write aggregate coverage results.
+    --write-info <filename.info>  Write lcov .info.
+
+    +libext+<ext>+<ext>...        Extensions for Verilog files.
+    +define+<var>+<value>         Defines the given variable.
+    -D<var>=<value>               Defines the given variable.
+    +incdir+<dir>                 Add directory for finding include files.
+    -I<dir>                       Add directory for finding include files.
+    -y <dir>                      Specifies module search directory.
+
+=head1 DISTRIBUTION
+
+The latest version is available from L<https://verilator.org>.
+
+Copyright 2003-2026 by Wilson Snyder. This program is free software; you
+can redistribute it and/or modify the Verilator internals under the terms
+of either the GNU Lesser General Public License Version 3 or the Perl
+Artistic License Version 2.0.
+
+SPDX-FileCopyrightText: 2003-2026 Wilson Snyder
+SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+=head1 SEE ALSO
+
+C<verilator>, C<lcov>
+
+L<verilator_coverage --help> which is the source for this document.
+
+and L<https://verilator.org/guide/latest/exe_verilator_coverage.html> for
+detailed documentation.
+
+=cut
+
+######################################################################

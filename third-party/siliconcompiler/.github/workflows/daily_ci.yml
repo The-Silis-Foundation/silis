@@ -1,0 +1,462 @@
+name: 'Daily CI Tests'
+
+on:
+  workflow_dispatch:
+    inputs:
+      rungallery:
+        type: boolean
+        default: false
+        description: run entire gallery
+      splits:
+        type: number
+        default: 4
+        description: number of parallel test jobs per python version
+  workflow_call:
+    inputs:
+      splits:
+        type: number
+        default: 4
+        description: number of parallel test jobs per python version
+  schedule:
+    - cron: '0 8 * * *'
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: daily-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege; also the ceiling for the reusable workflows called below,
+# which have no way to ask for more than the caller was granted.
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  docker_image:
+    uses: ./.github/workflows/docker_image.yml
+    with:
+      tool: 'tools'
+      sc_version: ${{ github.ref }}
+
+  cache:
+    name: Generate cache
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+
+          python3 -m pip install -e .[test]
+          python3 -m pip install -r ./examples/requirements.txt
+
+      - name: Gather cache
+        run: |
+          . .venv/bin/activate
+          python3 .github/workflows/bin/generate_cache.py
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: scpackage-daily-cache
+          path: .sc/cache
+          retention-days: 1
+
+  # The test suite is split across runners by measured duration rather than run
+  # with xdist inside one runner. The runners are 2 physical cores, so N xdist
+  # workers oversubscribe them: detailed routing in test_py_padring measured 4x
+  # slower in CI than locally, and only 1.66x of that was the thread cap the
+  # limit_cpus fixture applies -- the rest was workers competing for cores. One
+  # test at a time per runner gives each the whole machine.
+  test_setup:
+    name: Test split setup
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.groups.outputs.groups }}
+      splits: ${{ steps.groups.outputs.splits }}
+      pythons: ${{ steps.groups.outputs.pythons }}
+    steps:
+      - id: groups
+        run: |
+          splits=${{ inputs.splits || 4 }}
+          echo "splits=$splits" >> $GITHUB_OUTPUT
+          echo "groups=$(seq 1 $splits | jq -sc '.')" >> $GITHUB_OUTPUT
+
+          # Both the test matrix and the per-version durations store fan out
+          # over this, so the supported versions are listed in one place. A
+          # version added to only one of the two would silently never get its
+          # durations stored, and would count-split forever.
+          echo 'pythons=["3.10","3.11","3.12","3.13","3.14"]' >> $GITHUB_OUTPUT
+
+  daily_tests_job:
+    needs: [cache, docker_image, test_setup]
+    timeout-minutes: 150
+    runs-on: ubuntu-24.04 # Match ubuntu version with container
+    container:
+      image: ${{ needs.docker_image.outputs.sc_tool }}
+
+    env:
+      SCTESTCACHE: ${{ github.workspace }}/.sc/cache/
+
+    name: 'All tests (${{ matrix.python-version }}, ${{ matrix.group }}/${{ needs.test_setup.outputs.splits }})'
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(needs.test_setup.outputs.pythons) }}
+        group: ${{ fromJson(needs.test_setup.outputs.groups) }}
+    steps:
+      - name: Checkout SiliconCompiler
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set tools and permissions for caching
+        run: |
+          chown -R root: ~
+          ln -s $RUNNER_TOOL_CACHE /opt/hostedtoolcache
+          echo "LD_LIBRARY_PATH_BACKUP=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        id: setup-python
+        env:
+          AGENT_TOOLSDIRECTORY: ${{ runner.tool_cache }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Restore cache
+        uses: actions/download-artifact@v8
+        with:
+          name: scpackage-daily-cache
+          path: ${{ env.SCTESTCACHE }}
+
+      # Balances the groups by last run's measured times. Missing on the first
+      # run, where pytest-split falls back to splitting by test count.
+      #
+      # path must stay relative, and identical to the save step in
+      # store_durations. actions/cache hashes the path input into the cache
+      # version, and this job runs in a container where store_durations does
+      # not: an absolute ${{ github.workspace }} resolves to /__w/... here and
+      # /home/runner/work/... there, two versions that can never match. That
+      # missed on every run for weeks without reporting anything worse than
+      # "Cache not found", because a miss is not an error.
+      - name: Restore test durations
+        uses: actions/cache/restore@v6
+        with:
+          path: test_durations.json
+          key: eda-test-durations-py${{ matrix.python-version }}-${{ github.run_id }}
+          restore-keys: eda-test-durations-py${{ matrix.python-version }}-
+
+      - name: Setup tests
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          export LD_LIBRARY_PATH="${{ env.LD_LIBRARY_PATH_BACKUP }}"
+          echo $LD_LIBRARY_PATH
+          ${{ steps.setup-python.outputs.python-path }} -m venv .venv
+          source .venv/bin/activate
+          python3 --version
+
+          python3 -m pip install --upgrade pip
+
+          python3 -m pip install .[test,cocotb,dashboard,server,s3]
+          python3 -m pip install -r ./examples/requirements.txt
+
+      - name: Start slurm
+        run: |
+          export LD_LIBRARY_PATH="${{ env.LD_LIBRARY_PATH_BACKUP }}"
+          echo $LD_LIBRARY_PATH
+          /start_slurm.sh
+
+      - name: Run tests
+        run: |
+          export LD_LIBRARY_PATH="${{ env.LD_LIBRARY_PATH_BACKUP }}"
+          echo $LD_LIBRARY_PATH
+          source .venv/bin/activate
+
+          # change running directory
+          mkdir testrun
+          cd testrun
+
+          # least_duration, not the default duration_based_chunks: the default
+          # chunks the suite in collection order, which lands padring, aes and
+          # mlir_hls in one group (measured 98min vs 10min for the lightest).
+          # least_duration bin-packs largest-first and separates them.
+          pytest $GITHUB_WORKSPACE -m "not docker" --durations=0 --clean \
+            --splits ${{ needs.test_setup.outputs.splits }} --group ${{ matrix.group }} \
+            --splitting-algorithm least_duration \
+            --store-durations --clean-durations \
+            --durations-path "$GITHUB_WORKSPACE/test_durations.json"
+
+      - name: Upload test durations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-durations-${{ matrix.python-version }}-${{ matrix.group }}
+          path: ${{ github.workspace }}/test_durations.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # --clean-durations leaves each group holding only the tests it ran, so a
+  # version's groups have to be merged back together to balance its next run.
+  #
+  # Per python version, not one merged set for all of them: a merge across
+  # versions is last-writer-wins per test, so a test that is version-gated --
+  # skipped, or collected under a different id -- contributes whichever
+  # version's number happened to sort last to every other version's split. Each
+  # version balancing on its own measurements also lets genuinely
+  # version-dependent timings land where they belong.
+  store_durations:
+    name: 'Store test durations (${{ matrix.python-version }})'
+    needs: [daily_tests_job, test_setup]
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(needs.test_setup.outputs.pythons) }}
+
+    env:
+      PYTHON_VERSION: ${{ matrix.python-version }}
+
+    steps:
+      - name: Download duration artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-durations-${{ matrix.python-version }}-*
+
+      - name: Merge durations
+        id: merge
+        run: |
+          shopt -s nullglob
+          files=("test-durations-${PYTHON_VERSION}"-*/test_durations.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            # Every group died before writing durations. Leave the previous
+            # run's cache in place rather than failing the job.
+            echo "merged=false" >> $GITHUB_OUTPUT
+            echo "No duration artifacts to merge."
+            exit 0
+          fi
+          jq -s 'add' "${files[@]}" > "$GITHUB_WORKSPACE/test_durations.json"
+          echo "merged=true" >> $GITHUB_OUTPUT
+          echo "Merged ${#files[@]} duration file(s), $(jq 'length' "$GITHUB_WORKSPACE/test_durations.json") tests."
+
+      # Relative, to hash to the same cache version as the restore step in the
+      # containerized test job -- see the comment there.
+      - name: Save test durations
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: test_durations.json
+          key: eda-test-durations-py${{ matrix.python-version }}-${{ github.run_id }}
+
+      # Named so it does not match the test-durations-<version>-* download
+      # pattern above, which would otherwise re-merge it into itself on a job
+      # re-run.
+      - name: Upload merged durations
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: merged-test-durations-${{ matrix.python-version }}
+          path: ${{ github.workspace }}/test_durations.json
+          retention-days: 14
+
+      - name: Summarize durations
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          DURATIONS: ${{ github.workspace }}/test_durations.json
+          SPLITS: ${{ needs.test_setup.outputs.splits }}
+        run: |
+          python3 <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+
+          durations = json.load(open(os.environ["DURATIONS"]))
+          splits = int(os.environ["SPLITS"])
+          python_version = os.environ["PYTHON_VERSION"]
+          ranked = sorted(durations.items(), key=lambda kv: -kv[1])
+          total = sum(durations.values())
+
+          print(f"## Test durations (python {python_version})\n")
+          print(f"{len(durations)} tests timed, {total / 60:.1f} min total. Full data "
+                f"in the `merged-test-durations-{python_version}` artifact.\n")
+
+          print(f"### Slowest 25\n")
+          print("| duration | test |")
+          print("| --- | --- |")
+          for name, seconds in ranked[:25]:
+              print(f"| {seconds:.1f}s | `{name}` |")
+
+          # Mirrors the least_duration algorithm the run itself uses: walk
+          # largest-first, assign to the lightest group. Covers only timed
+          # tests, so it is a projection of the next run's balance rather
+          # than a replay of this one.
+          groups = [[0.0, 0] for _ in range(splits)]
+          for _, seconds in ranked:
+              light = min(groups, key=lambda g: g[0])
+              light[0] += seconds
+              light[1] += 1
+
+          print(f"\n### Projected balance at {splits} splits\n")
+          print("| group | tests | total |")
+          print("| --- | --- | --- |")
+          for index, (seconds, count) in enumerate(groups, start=1):
+              print(f"| {index} | {count} | {seconds / 60:.1f} min |")
+          spread = max(g[0] for g in groups) - min(g[0] for g in groups)
+          print(f"\nSpread between heaviest and lightest group: {spread / 60:.1f} min.")
+          PY
+
+  # End-to-end check of the remote path: a real sc-server, backed by a real
+  # slurm cluster, both from setup/server/. The suite's own slurm coverage runs
+  # against a single container with no server in front of it, so nothing else
+  # exercises client -> sc-server -> slurm -> compute node, nor proves that a
+  # finished artifact makes it back to the client.
+  remote_server:
+    name: 'Remote server (slurm) demos'
+    needs: [cache, docker_image]
+    # Generous: the job pulls a multi-GB base image and builds on top of it
+    # before either demo starts, and a 2-core runner routes the ASIC design a
+    # good deal slower than a workstation does.
+    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout SiliconCompiler
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The client only submits and collects; the tools run on the compute node
+      # inside the stack, so this does not need the EDA tools.
+      - name: Install SiliconCompiler
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python3 -m pip install --upgrade pip
+          python3 -m pip install .
+
+      - name: Fetch package cache
+        uses: actions/download-artifact@v8
+        with:
+          name: scpackage-daily-cache
+          path: sc-cache
+
+      # Built on the same image the rest of the suite runs against, rather
+      # than whatever the compose default points at, so a slurm or tool change
+      # is exercised here on the day it lands.
+      - name: Start the cluster
+        working-directory: setup/server
+        env:
+          SC_TOOLS_IMAGE: ${{ needs.docker_image.outputs.sc_tool }}
+        run: |
+          echo "building on $SC_TOOLS_IMAGE"
+          docker compose up -d --build --wait
+
+          # --wait only means the containers are running. A runner registers
+          # itself a moment later (slurmd -Z), and a job submitted before that
+          # would sit pending, so wait for the node rather than the container.
+          for _ in $(seq 1 60); do
+            if docker compose exec -T scserver sinfo -h -o '%T' | grep -qx idle; then
+              docker compose exec -T scserver sinfo
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::no compute node registered"
+          docker compose exec -T scserver sinfo || true
+          docker compose logs --tail 100
+          exit 1
+
+      # Seed both caches from the same artifact, because client and server are
+      # separate here.
+      #
+      # sc-server keeps its cache on the shared mount (<nfsmount>/cache), which
+      # every compute node reads, so seeding it there is what stops each node
+      # downloading the PDK again. It is copied in rather than bind-mounted, so
+      # the committed compose file stays free of host paths.
+      #
+      # The client's is ~/.sc/cache, which has no environment override, so the
+      # files have to be put where it will look.
+      - name: Seed the package caches
+        run: |
+          compose="docker compose -f setup/server/docker-compose.yml"
+
+          mkdir -p ~/.sc/cache
+          cp -a sc-cache/. ~/.sc/cache/
+          du -sh ~/.sc/cache
+
+          $compose exec -T scserver mkdir -p /sc_server/cache
+          docker cp sc-cache/. "$($compose ps -q scserver)":/sc_server/cache/
+          $compose exec -T scserver du -sh /sc_server/cache
+
+      - name: Point the client at the cluster
+        run: |
+          . .venv/bin/activate
+          creds=$(python3 -c \
+            'from siliconcompiler import utils; print(utils.default_credentials_file())')
+          mkdir -p "$(dirname "$creds")"
+          echo '{"address": "localhost", "port": 8080}' > "$creds"
+          curl -sf -m 30 -X POST http://localhost:8080/check_server/ -d '{}'
+
+      # Both demos, because they exercise different halves: the ASIC flow ends
+      # in a klayout stream, the FPGA flow in a genfasm bitstream.
+      - name: Run the ASIC demo
+        run: |
+          . .venv/bin/activate
+          mkdir -p asic && cd asic
+          python3 -m siliconcompiler.demos.asic_demo -remote
+
+      - name: Run the FPGA demo
+        run: |
+          . .venv/bin/activate
+          mkdir -p fpga && cd fpga
+          python3 -m siliconcompiler.demos.fpga_demo -remote
+
+      # The point of the whole job: the artifact came back to the client, not
+      # merely that the run reported success.
+      - name: Check the artifacts came back
+        run: |
+          set -e
+          gds=$(find asic/build -name '*.gds.gz' -size +1k | head -1)
+          fasm=$(find fpga/build -name '*.fasm' -size +0 | head -1)
+          [ -n "$gds" ] || { echo "::error::no GDS returned from the ASIC demo"; \
+            find asic/build -name 'outputs' -prune -o -type f -print | tail -20; exit 1; }
+          [ -n "$fasm" ] || { echo "::error::no bitstream returned from the FPGA demo"; \
+            find fpga/build -name 'outputs' -prune -o -type f -print | tail -20; exit 1; }
+          echo "GDS:      $gds ($(stat -c%s "$gds") bytes)"
+          echo "bitstream: $fasm ($(stat -c%s "$fasm") bytes)"
+
+      - name: Cluster logs
+        if: failure()
+        working-directory: setup/server
+        run: |
+          docker compose ps -a
+          docker compose logs --tail 200
+
+      - name: Stop the cluster
+        if: always()
+        working-directory: setup/server
+        run: docker compose down -v
+
+  # The design matrix is .github/workflows/config/gallery_designs.json, read
+  # from this repo at sc-ref. Not fail-fast: one failing design would cancel
+  # the rest and hide their results.
+  gallery:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.rungallery }}
+    uses: siliconcompiler/scgallery/.github/workflows/run-designs.yml@main
+    with:
+      sc-ref: ${{ github.ref }}
+      concurrency: 30
+      fail-fast: false

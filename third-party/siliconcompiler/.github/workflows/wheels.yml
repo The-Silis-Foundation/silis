@@ -1,0 +1,203 @@
+name: Wheels
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+  release:
+    types:
+      - published
+
+# Ensures Surelog/wheels are compatible with macOS 10.15+
+env:
+  MACOSX_DEPLOYMENT_TARGET: "10.15"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege by default; the publish job raises itself to what
+# trusted publishing and the release upload need.
+permissions:
+  contents: read
+
+jobs:
+  klayout_cache:
+    name: Cache kLayout
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: klayout version
+        id: version
+        shell: bash
+        run: |
+          echo "version=$(python3 siliconcompiler/toolscripts/_tools.py --tool klayout --field version)" >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: |
+            klayout/*
+          key: klayout-${{ steps.version.outputs.version }}
+          enableCrossOsArchive: true
+
+      - name: Download
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p klayout
+          wget -O klayout/klayout.deb "https://www.klayout.org/downloads/Ubuntu-22/klayout_${{ steps.version.outputs.version }}-1_amd64.deb"
+          wget -O klayout/klayout.zip "https://www.klayout.org/downloads/Windows/klayout-${{ steps.version.outputs.version }}-win64.zip"
+
+  build_wheel:
+    name: Wheel siliconcompiler
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - uses: hynek/build-and-inspect-python-package@v2
+
+  test_wheel:
+    needs: [build_wheel, klayout_cache]
+    name: Test wheels on ${{ matrix.platform.os }} ${{ matrix.platform.arch}} ${{ matrix.python-version }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        platform:
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: macos-latest
+            arch: arm64
+          - os: windows-latest
+            arch: x86_64
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        path: sc
+        fetch-depth: 0
+
+    - uses: actions/cache@v6
+      if: matrix.platform.os != 'macos-latest'
+      id: cache
+      with:
+        path: |
+          klayout/*
+        key: klayout-${{ needs.klayout_cache.outputs.version }}
+        fail-on-cache-miss: true
+        enableCrossOsArchive: true
+
+    - name: Setup env (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y graphviz wget xvfb
+        sudo apt-get install -y ./klayout/klayout.deb
+
+    - name: Setup env (Windows)
+      if: matrix.platform.os == 'windows-latest'
+      run: |
+        choco install -y graphviz
+        7z x klayout/klayout.zip
+        xcopy /E klayout-${{ needs.klayout_cache.outputs.version }}-win64 "C:\Program Files (x86)\KLayout\"
+
+    - name: Setup env (macOS)
+      if: matrix.platform.os == 'macos-latest'
+      run: |
+        # aws/tap comes pre-tapped on the GitHub runner and is untrusted,
+        # which makes every brew command emit a tap-trust warning. SC does
+        # not use it, so drop it rather than weakening trust checks.
+        brew untap aws/tap || true
+        # || true is needed to avoid failure on brew link error with python3.12
+        brew install graphviz || true
+        # klayout cask is Qt-Cocoa and requires a WindowServer session;
+        # GitHub-hosted macOS runners don't have one, so screenshot tasks
+        # hang even with -z (no-gui). Skip klayout install/tests on macOS.
+
+    - name: Setup python
+      id: python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: Packages
+        path: dist
+
+    - name: Install SC (non-windows)
+      if: matrix.platform.os != 'windows-latest'
+      run: |
+        ${{ steps.python.outputs.python-path }} -m venv .venv
+        . .venv/bin/activate
+        python3 --version
+        python3 -m pip install --upgrade pip
+        wheel=$(find dist -name "*.whl")
+        python3 -m pip install "$wheel"[test]
+
+    - name: Run pytest (non-windows)
+      if: matrix.platform.os != 'windows-latest'
+      run: |
+        . .venv/bin/activate
+        pytest sc/tests/ -m "not eda and not docker" -n logical
+
+    - name: Run klayout pytest (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        . .venv/bin/activate
+        pytest sc/tests/utils/test_showtools.py -k "klayout" -n logical
+
+    - name: Install SC (windows)
+      if: matrix.platform.os == 'windows-latest'
+      run: |
+        ${{ steps.python.outputs.python-path }} -m venv .venv
+        .venv/Scripts/activate
+        python3 --version
+        python3 -m pip install --upgrade pip
+        $wheel = Get-ChildItem -Path  dist\*.whl | % { $_.FullName }
+        $install = -join($wheel, "[test]")
+        python3 -m pip install $install
+
+    - name: Run pytest (windows)
+      if: matrix.platform.os == 'windows-latest'
+      run: |
+        $ErrorActionPreference = "Stop"
+        .venv/Scripts/activate
+        pytest sc/tests/ -m "not eda and not docker" -n logical
+        if ($LASTEXITCODE -ne 0) {
+          exit $LASTEXITCODE
+        }
+        pytest sc/tests/utils/test_showtools.py -k "klayout" -n logical
+        if ($LASTEXITCODE -ne 0) {
+          exit $LASTEXITCODE
+        }
+
+  publish:
+    needs: [build_wheel, test_wheel]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published' && !contains(github.event.release.body, 'NOPUBLISH')
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: Packages
+        path: dist
+
+    - uses: pypa/gh-action-pypi-publish@v1.14.2
+
+    - name: Add wheels to GitHub release artifacts
+      uses: softprops/action-gh-release@v3
+      with:
+        files: dist/*.whl

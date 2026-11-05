@@ -1,0 +1,117 @@
+// -*- mode: C++; c-file-style: "cc-mode" -*-
+//*************************************************************************
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of either the GNU Lesser General Public License Version 3
+// or the Perl Artistic License Version 2.0.
+// SPDX-FileCopyrightText: 2013-2026 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//*************************************************************************
+
+#ifndef TEST_CHECK_H_
+#define TEST_CHECK_H_
+
+#include "sv_vpi_user.h"
+#include "vpi_user.h"
+
+#include <iostream>
+#include <string>
+
+extern int errors;
+
+#ifdef TEST_VERBOSE
+static const bool verbose = true;
+#else
+static const bool verbose = false;
+#endif
+
+//======================================================================
+
+inline std::string testCheckLabel(const std::string& label) {
+    return label.empty() ? "" : label + ": ";
+}
+
+// Use cout to avoid issues with %d/%lx etc
+#define TEST_CHECK_LABEL(label, got, exp, test) \
+    do { \
+        if (!(test)) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << ": " \
+                      << testCheckLabel(label) << "GOT = " << (got) << "   EXP = " << (exp) \
+                      << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+#define TEST_CHECK(got, exp, test) TEST_CHECK_LABEL("", got, exp, test)
+
+#define TEST_CHECK_EQ_LABEL(label, got, exp) TEST_CHECK_LABEL(label, got, exp, ((got) == (exp)))
+#define TEST_CHECK_EQ(got, exp) TEST_CHECK_EQ_LABEL("", got, exp);
+#define TEST_CHECK_NE(got, exp) TEST_CHECK(got, exp, ((got) != (exp)));
+#define TEST_CHECK_CSTR(got, exp) TEST_CHECK(got, exp, 0 == std::strcmp((got), (exp)));
+
+#define TEST_CHECK_HEX_EQ(got, exp) \
+    do { \
+        if ((got) != (exp)) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << std::hex \
+                      << ": GOT=" << (got) << "   EXP=" << (exp) << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+#define TEST_CHECK_HEX_NE(got, exp) \
+    do { \
+        if ((got) == (exp)) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << std::hex \
+                      << ": GOT=" << (got) << "   EXP!=" << (exp) << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+#define TEST_CHECK_Z(got) \
+    do { \
+        if ((got)) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << std::hex \
+                      << ": GOT!= NULL   EXP=NULL" << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+#define TEST_CHECK_NZ_LABEL(label, got) \
+    do { \
+        if (!(got)) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << std::hex \
+                      << ": " << testCheckLabel(label) << "GOT= NULL   EXP!=NULL" << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+#define TEST_CHECK_NZ(got) TEST_CHECK_NZ_LABEL("", got)
+
+#define TEST_CHECK_REAL_EQ(got, exp, delta) \
+    do { \
+        if (std::fabs(got - exp) > delta) { \
+            std::cout << std::dec << "%Error: " << __FILE__ << ":" << __LINE__ << std::showpoint \
+                      << ": GOT=" << (got) << "   EXP=" << (exp) << " +/- " << (delta) \
+                      << std::endl; \
+            ++errors; \
+        } \
+    } while (0)
+
+inline bool _test_check_error() {
+    t_vpi_error_info errorInfo{};
+    const PLI_INT32 gotError = vpi_chk_error(&errorInfo);
+    if (gotError) vpi_printf((PLI_BYTE8*)"vpi_chk_error: %s\n", errorInfo.message);
+    return gotError;
+}
+
+#define TEST_CHECK_ERROR(expectError) TEST_CHECK_HEX_EQ(_test_check_error(), expectError)
+
+//======================================================================
+
+#define TEST_VERBOSE_PRINTF(format, ...) \
+    do { \
+        if (verbose) printf(format, ##__VA_ARGS__); \
+    } while (0)
+
+#endif  // Guard

@@ -1,0 +1,50 @@
+{
+  "PDN-0178": {
+    "tool": "OpenROAD",
+    "stage": "PDN / pdngen",
+    "severity": "WARNING",
+    "summary": "Remaining channel on metal layer for supply nets",
+    "root_cause": "Standard cell row fragmentation, illegal cut_rows or manual row destruction, or missing pitch alignment leaves an un-routable followpin channel between placed macros or voltage domain boundaries.",
+    "remedy": "Ensure row continuity across voltage regions; eliminate row pruning that creates dead gaps inside domains; align domain/macro boundaries to site row heights (e.g. 2.72µm in Sky130)."
+  },
+  "PDN-0179": {
+    "tool": "OpenROAD",
+    "stage": "PDN / pdngen",
+    "severity": "ERROR",
+    "summary": "Unable to repair all channels",
+    "root_cause": "OpenROAD's pdngen channel repair mechanism could not bridge or close residual gaps in standard cell followpin rails (met1) across rows or macro halos.",
+    "remedy": "Check floorplan row definition: avoid destroying row segments inside active voltage domains or between macro edges where followpin rails are expected."
+  },
+  "PDN-0209": {
+    "tool": "OpenROAD",
+    "stage": "PDN / pdngen",
+    "severity": "WARNING",
+    "summary": "Power switch already exists",
+    "root_cause": "Power switch definition or instance has already been declared in UPF or previous PDN script invocation.",
+    "remedy": "Ensure idempotence before defining power switches or calling define_power_switch_cell."
+  },
+  "UPF-0019": {
+    "tool": "OpenROAD",
+    "stage": "UPF / read_upf",
+    "severity": "ERROR",
+    "summary": "Duplicate power domain definition",
+    "root_cause": "Calling create_power_domain on an existing power domain without idempotence guards.",
+    "remedy": "Use the OpenROAD UPF compatibility shim layer to check if domain already exists before calling create_power_domain."
+  },
+  "GPL-0302": {
+    "tool": "OpenROAD",
+    "stage": "Placement / global_placement",
+    "severity": "ERROR",
+    "summary": "Core area or density overflow",
+    "root_cause": "Standard cell area exceeds available core area, or target density is set unachievably high (>0.85).",
+    "remedy": "Expand core bounds, adjust core margins, or lower target density."
+  },
+  "DPL-0036": {
+    "tool": "OpenROAD",
+    "stage": "Placement / detailed_placement",
+    "severity": "ERROR",
+    "summary": "Detailed placement legalization failure",
+    "root_cause": "Cell overlap or unplaced instances that cannot be legalized due to local routing congestion or narrow macro corridors.",
+    "remedy": "Increase macro channel spacing to at least 15-20 tracks; verify macro halos are non-overlapping."
+  }
+}

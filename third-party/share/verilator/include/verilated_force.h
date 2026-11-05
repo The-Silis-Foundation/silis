@@ -1,0 +1,379 @@
+// -*- mode: C++; c-file-style: "cc-mode" -*-
+//*************************************************************************
+//
+// Code available from: https://verilator.org
+//
+// Copyright 2026-2026 by Wilson Snyder. This program is free software; you can
+// redistribute it and/or modify it under the terms of either the GNU
+// Lesser General Public License Version 3 or the Perl Artistic License
+// Version 2.0.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//*************************************************************************
+///
+/// \file
+/// \brief Verilator: Runtime support for force/release statements
+///
+/// This file provides runtime data structures for efficient dynamic
+/// resolution of force/release statements. A sorted list of active
+/// forces is maintained that can be efficiently queried and modified
+/// at runtime.
+///
+//*************************************************************************
+
+#ifndef VERILATOR_VERILATED_FORCE_H_
+#define VERILATOR_VERILATED_FORCE_H_
+
+#include "verilatedos.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <type_traits>
+#include <vector>
+
+template <typename T>
+using VlForceBaseType = typename std::remove_cv<typename std::remove_reference<T>::type>::type;
+
+// VlForceRead - Helper functions to read a forced value
+//
+// These functions combine original value with forced values based on
+// VlForceVec entries.
+// This achieves O(k) complexity where k = number of active forces.
+
+template <typename T>
+struct VlForceTypeInfo final {
+    using Type = VlForceBaseType<T>;
+    static constexpr bool bitwise
+        = std::is_integral<Type>::value || std::is_enum<Type>::value || VlIsVlWide<Type>::value;
+    static constexpr bool unpackedArray = false;
+};
+
+template <typename T>
+struct VlForceArrayIndexer final {
+    static constexpr std::size_t size = 1;
+
+    static T& elem(T& value, std::size_t) { return value; }
+};
+
+template <typename T, std::size_t N>
+struct VlForceArrayIndexer<VlUnpacked<T, N>> final {
+    static constexpr std::size_t size = N * VlForceArrayIndexer<T>::size;
+
+    static auto& elem(VlUnpacked<T, N>& array, std::size_t index) {
+        constexpr std::size_t subSize = VlForceArrayIndexer<T>::size;
+        return VlForceArrayIndexer<T>::elem(array[index / subSize], index % subSize);
+    }
+};
+
+template <typename T, std::size_t N>
+struct VlForceTypeInfo<VlUnpacked<T, N>> final {
+    using Type = VlUnpacked<T, N>;
+    static constexpr bool bitwise = false;
+    static constexpr bool unpackedArray = true;
+};
+
+template <typename T, bool = std::is_enum<T>::value>
+struct VlForceStorageTypeOf final {
+    using type = typename std::make_unsigned<T>::type;
+};
+
+template <typename T>
+struct VlForceStorageTypeOf<T, true> final {
+    using type = typename std::make_unsigned<typename std::underlying_type<T>::type>::type;
+};
+
+template <typename T>
+using VlForceStorageType = typename VlForceStorageTypeOf<VlForceBaseType<T>>::type;
+
+//=============================================================================
+// VlForceVec - Vector of active force entries for a signal
+//
+// This class maintains a sorted vector of non-overlapping force entries.
+// When a new force is added, it removes or trims existing entries that
+// overlap with the new range.
+//
+// The generated code will:
+// 1. Use addForce/release to update the active forces
+// 2. Call a generated read function that iterates entries and evaluates RHS
+
+class VlForceVec final {
+private:
+    struct Entry final {
+        int m_lsb;  // Inclusive lower bit for scalar path or element index for unpacked
+        int m_msb;  // Inclusive upper bit for scalar path or element index for unpacked
+        int m_rhsLsb;  // Destination index that maps to RHS index 0
+        const void* m_rhsDatap;  // Pointer to RHS storage
+        int m_bitLsb = 0;  // Bit's LSB
+        int m_bitMsb = 0;  // Bit's MSB
+        int m_elemWidth = 0;  // Element width
+    };
+
+    std::vector<Entry> m_entries;  // Sorted by msb, non-overlapping
+
+    std::vector<Entry>::iterator trimEntries(int lsb, int msb) {
+        auto it = std::lower_bound(m_entries.begin(), m_entries.end(), lsb,
+                                   [](const Entry& e, int bit) { return e.m_msb < bit; });
+        while (it != m_entries.end() && it->m_lsb <= msb) {
+            if (it->m_lsb < lsb && it->m_msb > msb) {
+                const Entry right{msb + 1, it->m_msb, it->m_rhsLsb, it->m_rhsDatap};
+                it->m_msb = lsb - 1;
+                return m_entries.insert(++it, right);
+            }
+            if (it->m_lsb < lsb) {
+                it->m_msb = lsb - 1;
+                ++it;
+                continue;
+            }
+            if (it->m_msb > msb) {
+                it->m_lsb = msb + 1;
+                return it;
+            }
+            it = m_entries.erase(it);
+        }
+        return it;
+    }
+
+    std::size_t trimElementBitRange(int elem, int bitLsb, int bitMsb) {
+        auto it = std::lower_bound(m_entries.begin(), m_entries.end(), elem,
+                                   [](const Entry& e, int idx) { return e.m_msb < idx; });
+        while (it != m_entries.end() && it->m_lsb <= elem) {
+            if (it->m_elemWidth == 0 || it->m_bitMsb < bitLsb || it->m_bitLsb > bitMsb) {
+                ++it;
+                continue;
+            }
+            if (it->m_bitLsb < bitLsb && it->m_bitMsb > bitMsb) {
+                Entry high = *it;
+                high.m_bitLsb = bitMsb + 1;
+                it->m_bitMsb = bitLsb - 1;
+                m_entries.insert(it + 1, high);
+                break;
+            }
+            if (it->m_bitLsb < bitLsb) {
+                it->m_bitMsb = bitLsb - 1;
+                ++it;
+                continue;
+            }
+            if (it->m_bitMsb > bitMsb) {
+                it->m_bitLsb = bitMsb + 1;
+                break;
+            }
+            it = m_entries.erase(it);
+        }
+        auto ins = std::lower_bound(m_entries.begin(), m_entries.end(), elem,
+                                    [](const Entry& e, int idx) { return e.m_msb < idx; });
+        while (ins != m_entries.end() && ins->m_lsb <= elem
+               && (ins->m_elemWidth == 0 || ins->m_bitLsb <= bitLsb)) {
+            ++ins;
+        }
+        return static_cast<std::size_t>(ins - m_entries.begin());
+    }
+
+    static QData extractRhsChunk(const Entry& entry, int rhsLsb, int width) {
+        assert(width > 0 && width <= VL_QUADSIZE);
+        assert(rhsLsb >= 0);
+
+        const QData mask = static_cast<QData>(VL_MASK_Q(width));
+        const int rhsWidth = entry.m_msb - entry.m_rhsLsb + 1;
+        if (rhsWidth <= VL_QUADSIZE) {
+            const QData rhsVal = static_cast<QData>(*static_cast<const QData*>(entry.m_rhsDatap));
+            return (rhsVal >> rhsLsb) & mask;
+        }
+
+        WDataInP rhswp = WDataInP::external(static_cast<const EData*>(entry.m_rhsDatap));
+        return VL_SEL_QWII(rhsWidth, rhswp, rhsLsb, width) & mask;
+    }
+
+    template <typename T>
+    static T applyBits(T cur, const Entry& entry, int lsb, int width, int rhsLsb) {
+        const T lowMask = static_cast<T>(VL_MASK_Q(width));
+        const T mask = static_cast<T>(lowMask << lsb);
+        const T rhsBits = static_cast<T>(
+            (static_cast<T>(extractRhsChunk(entry, rhsLsb, width)) & lowMask) << lsb);
+        return static_cast<T>((cur & ~mask) | (rhsBits & mask));
+    }
+
+    static void applyEntry(WDataOutP reswp, const Entry& entry, int entryLsb, int entryMsb,
+                           int lsbOffset) {
+        const int resLsb = entryLsb - lsbOffset;
+        const int resMsb = entryMsb - lsbOffset;
+        const int lword = VL_BITWORD_E(resLsb);
+        const int hword = VL_BITWORD_E(resMsb);
+        for (int word = lword; word <= hword; ++word) {
+            const int wordLsb = word * VL_EDATASIZE;
+            const int segLsb = std::max(resLsb, wordLsb);
+            const int segMsb = std::min(resMsb, wordLsb + VL_EDATASIZE - 1);
+            const int segWidth = segMsb - segLsb + 1;
+            const int bitOffset = segLsb - wordLsb;
+            const int rhsLsb = lsbOffset + segLsb - entry.m_rhsLsb;
+            reswp[word] = applyBits(reswp[word], entry, bitOffset, segWidth, rhsLsb);
+        }
+    }
+
+    template <typename T>
+    static typename std::enable_if<!VlIsVlWide<T>::value && VlForceTypeInfo<T>::bitwise, T>::type
+    applyEntry(T result, const Entry& entry) {
+        using U = VlForceStorageType<T>;
+        const int width = entry.m_msb - entry.m_lsb + 1;
+        const int bits = static_cast<int>(sizeof(U) * 8);
+        const int rhsLsb = entry.m_lsb - entry.m_rhsLsb;
+        const QData rhsChunk = extractRhsChunk(entry, rhsLsb, width);
+        if (width >= bits) return static_cast<T>(static_cast<U>(rhsChunk));
+        return static_cast<T>(
+            applyBits(static_cast<U>(result), entry, entry.m_lsb, width, rhsLsb));
+    }
+
+    template <typename T>
+    static typename std::enable_if<!VlForceTypeInfo<T>::bitwise, T>::type
+    applyEntry(T result, const Entry& entry) {
+        static_cast<void>(result);
+        return *static_cast<const VlForceBaseType<T>*>(entry.m_rhsDatap);
+    }
+
+    template <typename Elem>
+    static typename std::enable_if<!VlIsVlWide<Elem>::value, Elem>::type
+    blendElem(Elem cur, const Entry& e) {
+        const Entry bitEntry{e.m_bitLsb, e.m_bitMsb, e.m_rhsLsb, e.m_rhsDatap, 0, 0, 0};
+        return applyEntry(cur, bitEntry);
+    }
+
+    template <typename Elem>
+    static typename std::enable_if<VlIsVlWide<Elem>::value, Elem>::type blendElem(Elem cur,
+                                                                                  const Entry& e) {
+        Elem res = cur;
+        const Entry bitEntry{e.m_bitLsb, e.m_bitMsb, e.m_rhsLsb, e.m_rhsDatap, 0, 0, 0};
+        applyEntry(res, bitEntry, e.m_bitLsb, e.m_bitMsb, 0);
+        return res;
+    }
+
+    template <typename T>
+    typename std::enable_if<VlIsVlWide<T>::value>::type applyEntries(T& val) const {
+        for (const auto& entry : m_entries) {
+            applyEntry(val, entry, entry.m_lsb, entry.m_msb, 0);
+        }
+    }
+
+    template <typename T>
+    typename std::enable_if<!VlIsVlWide<T>::value>::type applyEntries(T& val) const {
+        for (const auto& entry : m_entries) val = applyEntry(val, entry);
+    }
+
+    void readSel(int lbits, WDataInP valp, WDataOutP reswp, int lsb, int width) const {
+        VL_SEL_WWII(width, lbits, reswp, valp, lsb, width);
+        const int msb = lsb + width - 1;
+        auto it = std::lower_bound(m_entries.begin(), m_entries.end(), lsb,
+                                   [](const Entry& e, int bit) { return e.m_msb < bit; });
+        while (it != m_entries.end() && it->m_lsb <= msb) {
+            applyEntry(reswp, *it, std::max(it->m_lsb, lsb), std::min(it->m_msb, msb), lsb);
+            ++it;
+        }
+    }
+
+public:
+    VlForceVec() = default;
+
+    template <typename T>
+    T read(const T& val) const {
+        T result = val;
+        if VL_CONSTEXPR_CXX17 (VlForceTypeInfo<T>::unpackedArray) {
+            // Handling the case of a nested flattened array using recursion
+            using ElemRef
+                = decltype(VlForceArrayIndexer<T>::elem(result, static_cast<std::size_t>(0)));
+            using Elem = VlForceBaseType<ElemRef>;
+            for (const auto& entry : m_entries) {
+                const int startIdx = entry.m_lsb;
+                const int endIdx = entry.m_msb;
+                for (int idx = startIdx; idx <= endIdx; idx++) {
+                    const std::size_t uidx = static_cast<std::size_t>(idx);
+                    Elem& dst = VlForceArrayIndexer<T>::elem(result, uidx);
+                    if (entry.m_elemWidth == 0) {
+                        const Elem* const rhsBasep = static_cast<const Elem*>(entry.m_rhsDatap);
+                        const int rhsIndex = idx - entry.m_rhsLsb;
+                        dst = rhsBasep[rhsIndex];
+                    } else {
+                        dst = blendElem<Elem>(dst, entry);
+                    }
+                }
+            }
+            return result;
+        }
+        applyEntries(result);
+        return result;
+    }
+
+    template <typename T>
+    T readIndex(const T origVal, int index) const {
+        if (m_entries.empty()) return origVal;
+
+        T result = origVal;
+        for (auto it = std::lower_bound(m_entries.begin(), m_entries.end(), index,
+                                        [](const Entry& e, int idx) { return e.m_msb < idx; });
+             it != m_entries.end() && it->m_lsb <= index; ++it) {
+            if (it->m_elemWidth == 0) {
+                const int rhsIndex = index - it->m_rhsLsb;
+                result = static_cast<const T*>(it->m_rhsDatap)[rhsIndex];
+            } else {
+                result = blendElem<T>(result, *it);
+            }
+        }
+        return result;
+    }
+
+    IData readSelI(int lbits, WDataInP valp, int lsb, int width) const {
+        IData result;
+        readSel(lbits, valp, WDataOutP::external(reinterpret_cast<EData*>(&result)), lsb, width);
+        result &= VL_MASK_I(width);
+        return result;
+    }
+
+    QData readSelQ(int lbits, WDataInP valp, int lsb, int width) const {
+        QData result;
+        readSel(lbits, valp, WDataOutP::external(reinterpret_cast<EData*>(&result)), lsb, width);
+        result &= VL_MASK_Q(width);
+        return result;
+    }
+
+    template <std::size_t N_Words>
+    VlWide<N_Words> readSelW(int lbits, WDataInP valp, int lsb, int width) const {
+        VlWide<N_Words> result;
+        readSel(lbits, valp, result, lsb, width);
+        result[N_Words - 1] &= VL_MASK_E(width);
+        return result;
+    }
+
+    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb) {
+        assert(lsb <= msb);
+        assert(rhsDatap);
+        assert(rhsLsb <= lsb);
+
+        auto it = trimEntries(lsb, msb);
+        m_entries.insert(it, {lsb, msb, rhsLsb, rhsDatap});
+    }
+
+    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int bitLsb, int bitMsb,
+                  int elemWidth) {
+        assert(lsb == msb);
+        assert(rhsDatap);
+        assert(elemWidth > 0);
+        assert(0 <= bitLsb && bitLsb <= bitMsb && bitMsb < elemWidth);
+        const std::size_t at = trimElementBitRange(lsb, bitLsb, bitMsb);
+        m_entries.insert(m_entries.begin() + at,
+                         Entry{lsb, msb, rhsLsb, rhsDatap, bitLsb, bitMsb, elemWidth});
+    }
+
+    void release(int lsb, int msb) {
+        assert(lsb <= msb);
+        trimEntries(lsb, msb);
+    }
+
+    void release(int lsb, int msb, int bitLsb, int bitMsb) {
+        assert(lsb == msb);
+        assert(bitLsb <= bitMsb);
+        trimElementBitRange(lsb, bitLsb, bitMsb);
+    }
+
+    void touch() {}
+};
+
+#endif  // guard

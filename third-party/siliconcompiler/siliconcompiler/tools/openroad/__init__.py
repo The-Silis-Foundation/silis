@@ -1,0 +1,761 @@
+'''
+OpenROAD is an automated physical design platform for
+integrated circuit design with a complete set of features
+needed to translate a synthesized netlist to a tapeout ready
+GDSII.
+
+Documentation: https://openroad.readthedocs.io/en/latest/
+
+Sources: https://github.com/The-OpenROAD-Project/OpenROAD
+
+Installation: https://github.com/The-OpenROAD-Project/OpenROAD
+'''
+from typing import List, Union, Optional
+
+from siliconcompiler import StdCellLibrary
+from siliconcompiler import PDK
+from siliconcompiler.asic import ASICTask
+
+
+class OpenROADPDK(PDK):
+    """
+    Schema for defining technology-specific parameters for the OpenROAD tool.
+
+    This class extends the base PDK to manage various settings related
+    to physical design, such as routing layers, pin layers, and global
+    routing derating factors, specifically for the OpenROAD tool.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.define_tool_parameter("openroad", "rclayer_signal", "str",
+                                   "The name of the signal layer to be used for RC extraction.")
+        self.define_tool_parameter("openroad", "rclayer_clock", "str",
+                                   "The name of the clock layer to be used for RC extraction.")
+        self.define_tool_parameter("openroad", "rclayer", "{(str,<via,routing>,str,float,float)}",
+                                   "Per-layer resistance and capacitance used to estimate "
+                                   "parasitics before extraction (applied via set_layer_rc). "
+                                   "Each tuple is (pexcorner, layertype, layer, resistance, "
+                                   "capacitance), where layertype is 'routing' or 'via'. "
+                                   "Resistance is ohm/um for a minimum-width routing layer or "
+                                   "ohm/cut for a via. Capacitance is F/um for a minimum-width "
+                                   "routing layer and is ignored for vias.")
+        self.define_tool_parameter("openroad", "rccorrection",
+                                   "{(str,str,float<0.0..>,float<0.0..>)}",
+                                   "Per-layer multiplicative correction applied to the estimated "
+                                   "parasitics (the 'rclayer' values) before set_layer_rc. Each "
+                                   "tuple is (pexcorner, layer, res_factor, cap_factor); an "
+                                   "unprescribed factor is recorded as None and applied as 1.0 "
+                                   "(no correction) at runtime, and the "
+                                   "cap_factor is ignored for via layers. Layer names are unique "
+                                   "across routing and via layers, so no layer type is needed. "
+                                   "These factors close the gap between OpenROAD's pre-route "
+                                   "estimate and signoff extraction and are calibrated from a "
+                                   "survey of routed designs; see the pex_calibration example. "
+                                   "They do not change the physical 'rclayer' model, only the "
+                                   "estimation applied on top of it.")
+
+        self.define_tool_parameter("openroad", "pin_layer_horizontal", "[str]",
+                                   "A list of layers designated for horizontal pins.")
+        self.define_tool_parameter("openroad", "pin_layer_vertical", "[str]",
+                                   "A list of layers designated for vertical pins.")
+
+        self.define_tool_parameter("openroad", "globalroutingderating", "{(str,float)}",
+                                   "A set of layer-specific derating factors for global routing.")
+
+        self.define_tool_parameter("openroad", "rcx_maxlayer", "str",
+                                   "Max layer to generate an OpenRCX extraction bench for.")
+
+        self.define_tool_parameter("openroad", "drt_process_node", "str",
+                                   "Detailed routing node name")
+        self.define_tool_parameter("openroad", "drt_disable_via_gen", "bool",
+                                   "true/false, when true turns off via generation in detailed "
+                                   "router and only uses the specified tech vias")
+        self.define_tool_parameter("openroad", "drt_repair_pdn_vias", "str",
+                                   "Via layer to repair after detailed routing")
+        self.define_tool_parameter("openroad", "drt_via_in_pin_layers", "(str,str)",
+                                   "Tuple of layers for vias in pin layers")
+
+    def set_openroad_rclayers(self, signal: str = None, clock: str = None):
+        """
+        Sets the signal and/or clock layers for RC extraction.
+
+        Args:
+            signal (str, optional): The name of the signal layer. Defaults to None.
+            clock (str, optional): The name of the clock layer. Defaults to None.
+        """
+        if signal:
+            self.set("tool", "openroad", "rclayer_signal", signal)
+        if clock:
+            self.set("tool", "openroad", "rclayer_clock", clock)
+
+    def add_openroad_rclayer(self, corner: str, layertype: str, layer: str,
+                             resistance: float, capacitance: Optional[float] = None,
+                             clobber: bool = False):
+        """
+        Adds a per-layer parasitic estimate used to seed ``set_layer_rc`` for a PEX corner.
+
+        These values drive pre-route parasitic estimation; they are not the
+        signoff extraction model.
+
+        Args:
+            corner (str): Name of the PEX corner the values apply to.
+            layertype (str): Either "routing" or "via".
+            layer (str): Name of the routing or via (cut) layer.
+            resistance (float): Resistance, in ohm/um for a minimum-width routing
+                layer or ohm/cut for a via.
+            capacitance (float, optional): Capacitance in F/um for a minimum-width
+                routing layer. Not applicable to vias (forced to None).
+            clobber (bool, optional): If True, replaces the existing rclayer set
+                instead of adding to it. Defaults to False.
+        """
+        if layertype == "via":
+            capacitance = None  # Capacitance is not applicable for via layers
+
+        if clobber:
+            self.set("tool", "openroad", "rclayer",
+                     (corner, layertype, layer, resistance, capacitance))
+        else:
+            self.add("tool", "openroad", "rclayer",
+                     (corner, layertype, layer, resistance, capacitance))
+
+    def add_openroad_rccorrection(self, corner: str, layer: str,
+                                  res_factor: Optional[float] = None,
+                                  cap_factor: Optional[float] = None,
+                                  clobber: bool = False):
+        """
+        Adds a per-layer correction factor applied to the estimated parasitics.
+
+        The factors multiply the physical ``rclayer`` resistance/capacitance
+        before ``set_layer_rc`` is called, closing the gap between OpenROAD's
+        pre-route estimate and signoff extraction. They do not modify the
+        physical ``rclayer`` model. A factor left as ``None`` is recorded as
+        ``None`` (the caller's value is not altered) and applied as 1.0 (no
+        correction) at runtime, so calibrating capacitance only (the common case)
+        leaves resistance untouched, and the default state is identical to
+        running without any correction. The layer is identified by name only
+        (names are unique across routing and via layers); ``cap_factor`` is
+        ignored for via layers. Calibrate these from a survey of routed designs;
+        see the "Calibrating the parasitic estimate (PEX)" tutorial
+        (``pex_calibration``).
+
+        Args:
+            corner (str): Name of the PEX corner the factors apply to.
+            layer (str): Name of the routing or via (cut) layer.
+            res_factor (float, optional): Multiplier applied to the estimated
+                resistance. Defaults to None (not prescribed; applied as 1.0).
+            cap_factor (float, optional): Multiplier applied to the estimated
+                capacitance. Ignored for via layers. Defaults to None (not
+                prescribed; applied as 1.0).
+            clobber (bool, optional): If True, replaces the entire rccorrection
+                set instead of adding to it. Defaults to False.
+        """
+        # An unprescribed factor is recorded as None (not coerced) so the stored
+        # value reflects exactly what the caller passed; sc_setup_pex applies a
+        # None/empty factor as 1.0 (no correction). Tuple serialization preserves
+        # interior None positions, so a partially-prescribed factor round-trips.
+        entry = (corner, layer, res_factor, cap_factor)
+
+        if clobber:
+            self.set("tool", "openroad", "rccorrection", entry)
+        else:
+            self.add("tool", "openroad", "rccorrection", entry)
+
+    def unset_openroad_rclayer(self):
+        """
+        Unsets all per-layer parasitic estimate values.
+
+        Clears the entire ``rclayer`` set (the companion to
+        :meth:`unset_openroad_rccorrection`), which is the natural reset before
+        re-seeding a freshly calibrated model.
+        """
+        self.unset("tool", "openroad", "rclayer")
+
+    def unset_openroad_rccorrection(self):
+        """
+        Unsets all per-layer parasitic correction factors.
+        """
+        self.unset("tool", "openroad", "rccorrection")
+
+    def unset_openroad_globalroutingderating(self):
+        """
+        Unsets the global routing derating parameter.
+        """
+        self.unset("tool", "openroad", "globalroutingderating")
+
+    def set_openroad_globalroutingderating(self, layer: str, derating: float,
+                                           clobber: bool = False):
+        """
+        Sets a global routing derating factor for a specific layer.
+
+        Args:
+            layer (str): The name of the layer.
+            derating (float): The derating factor to apply.
+            clobber (bool, optional): If True, overwrites the existing derating factor for the
+                                      layer.
+                                      If False, adds a new derating factor. Defaults to False.
+        """
+        if clobber:
+            return self.set("tool", "openroad", "globalroutingderating", (layer, derating))
+        else:
+            return self.add("tool", "openroad", "globalroutingderating", (layer, derating))
+
+    def add_openroad_pinlayers(self,
+                               horizontal: Union[str, List[str]] = None,
+                               vertical: Union[str, List[str]] = None,
+                               clobber: bool = False):
+        """
+        Adds horizontal and/or vertical pin layers.
+
+        Args:
+            horizontal (Union[str, List[str]], optional): The horizontal pin layer(s) to add.
+                    Defaults to None.
+            vertical (Union[str, List[str]], optional): The vertical pin layer(s) to add.
+                Defaults to None.
+            clobber (bool, optional): If True, overwrites the existing lists. Defaults to False.
+        """
+        if clobber:
+            if horizontal:
+                self.set("tool", "openroad", "pin_layer_horizontal", horizontal)
+            if vertical:
+                self.set("tool", "openroad", "pin_layer_vertical", vertical)
+        else:
+            if horizontal:
+                self.add("tool", "openroad", "pin_layer_horizontal", horizontal)
+            if vertical:
+                self.add("tool", "openroad", "pin_layer_vertical", vertical)
+
+    def set_openroad_rcxmaxlayer(self, layer: str):
+        """
+        Sets the maximum layer for OpenRCX extraction bench generation.
+
+        This parameter defines the highest routing layer to be considered during
+        RC extraction.
+
+        Args:
+            layer (str): The name of the top-most layer to be used for RC extraction.
+        """
+        self.set("tool", "openroad", "rcx_maxlayer", layer)
+
+    def set_openroad_processnode(self, node: str):
+        """Sets the detailed routing process node name.
+
+        Args:
+            node (str): The name of the process node.
+        """
+        self.set("tool", "openroad", "drt_process_node", node)
+
+    def set_openroad_detailedroutedisableviagen(self, value: bool):
+        """Enables or disables automatic via generation in the detailed router.
+
+        When set to True, the router will only use vias explicitly defined in the
+        technology LEF, rather than generating new ones.
+
+        Args:
+            value (bool): The boolean value to set. True disables via generation.
+        """
+        self.set("tool", "openroad", "drt_disable_via_gen", value)
+
+    def set_openroad_detailedrouteviarepair(self, layer: str):
+        """Specifies the via layer to repair after detailed routing.
+
+        This is used to fix issues on a specific via layer in the power delivery
+        network (PDN) post-routing.
+
+        Args:
+            layer (str): The name of the via layer to repair.
+        """
+        self.set("tool", "openroad", "drt_repair_pdn_vias", layer)
+
+    def set_openroad_detailedrouteviainpinlayers(self, layer1: str, layer2: str):
+        """Sets the via layers used in pin layers during detailed routing.
+
+        Args:
+            layer1 (str): The first layer for vias in pin layers.
+            layer2 (str): The second layer for vias in pin layers.
+        """
+        self.set("tool", "openroad", "drt_via_in_pin_layers", (layer1, layer2))
+
+
+class OpenROADStdCellLibrary(StdCellLibrary):
+    """
+    Schema for defining standard cell library parameters for the OpenROAD tool.
+
+    This class extends the base StdCellLibrary to manage various settings
+    related to physical design, such as tie cells, placement settings, routing,
+    and power grid configuration, specifically for the OpenROAD tool.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.define_tool_parameter("openroad", "tiehigh_cell", "(str,str)",
+                                   "A tuple specifying the tie-high cell name and its output port.")
+        self.define_tool_parameter("openroad", "tielow_cell", "(str,str)",
+                                   "A tuple specifying the tie-low cell name and its output port.")
+
+        self.define_tool_parameter("openroad", "place_density", "float<0.0..1.0>",
+                                   "The target placement density for the design.")
+
+        self.define_tool_parameter("openroad", "global_cell_padding", "int<0..>",
+                                   "Padding to be applied to cells during global placement.",
+                                   defvalue=0)
+        self.define_tool_parameter("openroad", "detailed_cell_padding", "int<0..>",
+                                   "Padding to be applied to cells during detailed placement.",
+                                   defvalue=0)
+
+        self.define_tool_parameter("openroad", "macro_placement_halo", "(float,float)",
+                                   "A tuple for the X and Y dimensions of the halo around macros "
+                                   "during placement.")
+
+        self.define_tool_parameter("openroad", "tracks", "file",
+                                   "The file containing track definitions for routing.")
+        self.define_tool_parameter("openroad", "tapcells", "file",
+                                   "The file containing tap cell definitions.")
+        self.define_tool_parameter("openroad", "global_connect_fileset", "{str}",
+                                   "A list of global connect files.")
+        self.define_tool_parameter("openroad", "power_grid_fileset", "{str}",
+                                   "A list of power grid files.")
+
+        self.define_tool_parameter("openroad", "scan_chain_cells", "{str}",
+                                   "A list of cells used for scan chain insertion.")
+        self.define_tool_parameter("openroad", "multibit_ff_cells", "{str}",
+                                   "A list of multibit flip-flop cells.")
+
+    def set_openroad_tiehigh_cell(self, cell: str, output_port: str):
+        """
+        Sets the tie-high cell and its output port.
+
+        Args:
+            cell (str): The name of the tie-high cell.
+            output_port (str): The name of the output port.
+        """
+        self.set("tool", "openroad", "tiehigh_cell", (cell, output_port))
+
+    def set_openroad_tielow_cell(self, cell: str, output_port: str):
+        """
+        Sets the tie-low cell and its output port.
+
+        Args:
+            cell (str): The name of the tie-low cell.
+            output_port (str): The name of the output port.
+        """
+        self.set("tool", "openroad", "tielow_cell", (cell, output_port))
+
+    def set_openroad_placement_density(self, density: float):
+        """
+        Sets the target placement density.
+
+        Args:
+            density (float): The target placement density, a value between 0.0 and 1.0.
+        """
+        self.set("tool", "openroad", "place_density", density)
+
+    def set_openroad_cell_padding(self, global_place: int, detailed_place: int):
+        """
+        Sets the cell padding for both global and detailed placement.
+
+        Args:
+            global_place (int): Padding for global placement.
+            detailed_place (int): Padding for detailed placement.
+        """
+        self.set("tool", "openroad", "global_cell_padding", global_place)
+        self.set("tool", "openroad", "detailed_cell_padding", detailed_place)
+
+    def set_openroad_macro_placement_halo(self, x: float, y: float):
+        """
+        Sets the halo dimensions for macro placement.
+
+        Args:
+            x (float): The halo dimension in the x-direction.
+            y (float): The halo dimension in the y-direction.
+        """
+        self.set("tool", "openroad", "macro_placement_halo", (x, y))
+
+    def set_openroad_tracks_file(self, file: str, dataroot: str = None):
+        """
+        Sets the file for track definitions.
+
+        Args:
+            file (str): The path to the tracks file.
+            dataroot (str, optional): The data root directory. Defaults to the active package.
+        """
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            self.set("tool", "openroad", "tracks", file)
+
+    def set_openroad_tapcells_file(self, file: str, dataroot: str = None):
+        """
+        Sets the file for tap cell definitions.
+
+        Args:
+            file (str): The path to the tap cells file.
+            dataroot (str, optional): The data root directory. Defaults to the active package.
+        """
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            self.set("tool", "openroad", "tapcells", file)
+
+    def add_openroad_globalconnectfileset(self, fileset: Union[str, List[str]] = None,
+                                          clobber: bool = False):
+        """Configures the global connect fileset for the OpenROAD tool.
+
+        This method defines the fileset used for global pin connections
+        (e.g., tying power/ground pins) in the OpenROAD flow.
+
+        Args:
+            fileset (Union[str, List[str]]): The name of the fileset to use.
+                If not provided, the active fileset is used.
+            clobber (bool, optional): If True, overwrites any existing
+                configuration. If False, adds to it. Defaults to False.
+        """
+        if not fileset:
+            fileset = self._get_active("fileset")
+
+        self._assert_fileset(fileset)
+
+        if clobber:
+            self.set("tool", "openroad", "global_connect_fileset", fileset)
+        else:
+            self.add("tool", "openroad", "global_connect_fileset", fileset)
+
+    def add_openroad_powergridfileset(self, fileset: Union[str, List[str]] = None,
+                                      clobber: bool = False):
+        """Configures the power grid definition fileset for the OpenROAD tool.
+
+        This method defines the fileset used for generating the power grid
+        (e.g., PDN configuration files) in the OpenROAD flow.
+
+        Args:
+            fileset (Union[str, List[str]]): The name of the fileset to use.
+                If not provided, the active fileset is used.
+            clobber (bool, optional): If True, overwrites any existing
+                configuration. If False, adds to it. Defaults to False.
+        """
+        if not fileset:
+            fileset = self._get_active("fileset")
+
+        self._assert_fileset(fileset)
+
+        if clobber:
+            self.set("tool", "openroad", "power_grid_fileset", fileset)
+        else:
+            self.add("tool", "openroad", "power_grid_fileset", fileset)
+
+    def add_openroad_scan_chain_cells(self, cells: Union[str, List[str]], clobber: bool = False):
+        """
+        Adds scan chain cells to the list.
+
+        Args:
+            cells (Union[str, List[str]]): A cell name or a list of cell names.
+            clobber (bool, optional): If True, overwrites existing values. Defaults to False.
+        """
+        if clobber:
+            self.set("tool", "openroad", "scan_chain_cells", cells)
+        else:
+            self.add("tool", "openroad", "scan_chain_cells", cells)
+
+    def add_openroad_multibit_flipflops(self, cells: Union[str, List[str]], clobber: bool = False):
+        """
+        Adds multibit flip-flop cells to the list.
+
+        Args:
+            cells (Union[str, List[str]]): A cell name or a list of cell names.
+            clobber (bool, optional): If True, overwrites existing values. Defaults to False.
+        """
+        if clobber:
+            self.set("tool", "openroad", "multibit_ff_cells", cells)
+        else:
+            self.add("tool", "openroad", "multibit_ff_cells", cells)
+
+
+class OpenROADTask(ASICTask):
+    """
+    Base class for tasks involving the OpenROAD EDA tool chain.
+
+    This class provides common functionality for configuring OpenROAD execution,
+    such as setting up debug levels for internal tools.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("debug_level", "{(str,str,int<0..>)}",
+                           'list of "tool key level" to enable debugging of OpenROAD')
+
+    def add_openroad_debuglevel(self, tool: str, category: str, level: int,
+                                step: Optional[str] = None, index: Optional[str] = None,
+                                clobber: bool = False) -> None:
+        """
+        Configures the debug logging level for a specific OpenROAD tool and category.
+
+        Args:
+            tool: The name of the OpenROAD tool (e.g., "GRT", "PSM").
+            category: The specific debug category or keyword within the tool.
+            level: The integer verbosity level for the debug output.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing debug level configuration.
+                     If False, appends this configuration to the existing list.
+        """
+        if clobber:
+            self.set("var", "debug_level", (tool, category, level), step=step, index=index)
+        else:
+            self.add("var", "debug_level", (tool, category, level), step=step, index=index)
+
+    def tool(self):
+        return "openroad"
+
+    def _get_openrcx_filesets(self, corner: str) -> List[str]:
+        """Return the PDK filesets carrying an OpenRCX deck for ``corner``."""
+        if not self.pdk.valid("pdk", "pexmodelfileset", "openroad", corner):
+            return []
+        return [fileset for fileset in self.pdk.get("pdk", "pexmodelfileset", "openroad", corner)
+                if self.pdk.get("fileset", fileset, "file", "openrcx")]
+
+    def _has_openrcx(self) -> bool:
+        """Check whether the PDK ships an OpenRCX extraction deck."""
+        if not self.pdk.valid("pdk", "pexmodelfileset", "openroad"):
+            return False
+        for corner in self.pdk.getkeys("pdk", "pexmodelfileset", "openroad"):
+            if self._get_openrcx_filesets(corner):
+                return True
+        return False
+
+    def _get_delaymodel(self) -> Optional[str]:
+        """Return :keypath:`ASIC,asic,delaymodel`, rejecting what OpenSTA cannot read.
+
+        The ``(corner, delaymodel)`` key a library groups its timing filesets under
+        is free-form, so a target can name a model that is not a flavor of Liberty
+        at all (a compiled binary model, ECSM, ...). Reading such a fileset would
+        hand OpenSTA files it cannot parse, so reject the model here instead.
+
+        An unset delay model is passed through untouched; :meth:`.ASIC._check_manifest`
+        is what reports that, and with a better message than this can give.
+
+        Raises:
+            ValueError: if the delay model is set to anything but ``nldm`` or ``ccs``.
+        """
+        delaymodel = self.project.get("asic", "delaymodel")
+        if delaymodel is not None and delaymodel not in ("nldm", "ccs"):
+            raise ValueError(f"{delaymodel} is not a supported delay model, "
+                             "supported delay models are: nldm, ccs")
+        return delaymodel
+
+    def setup(self):
+        super().setup()
+
+        self.set_exe("openroad", vswitch="-version", format="tcl")
+        self.add_version(">=24Q3-2011")
+
+        self.set_dataroot("openroad-ref", "python://siliconcompiler/tools/openroad")
+        with self.active_dataroot("openroad-ref"):
+            self.set_refdir("scripts")
+
+        self.add_regex("warnings", r'^\[WARNING|^Warning')
+        self.add_regex("errors", r'^\[ERROR')
+
+        if self.project.option.get_nodisplay():
+            # Tells QT to use the offscreen platform if nodisplay is used
+            self.set_environmentalvariable("QT_QPA_PLATFORM", "offscreen")
+
+        if self.get("var", "debug_level"):
+            self.add_required_key("var", "debug_level")
+
+    def parse_version(self, stdout):
+        # stdout will be in one of the following forms:
+        # - 1 08de3b46c71e329a10aa4e753dcfeba2ddf54ddd
+        # - 1 v2.0-880-gd1c7001ad
+        # - v2.0-1862-g0d785bd84
+        # - 26Q1-1234-gabcdef0
+
+        # strip off the "1" prefix if it's there
+        version = stdout.split()[-1]
+
+        pieces = version.split('-')
+        if len(pieces) > 1:
+            # return pieces joined by '-' (preserving the hash in the new version style)
+            return '-'.join(pieces)
+        else:
+            return pieces[0]
+
+    def normalize_version(self, version):
+        if version.startswith('v'):
+            # Return fake version matching old versions
+            version = version[1:].split('-')
+            if len(version) > 1:
+                if int(version[1]) >= 27801:
+                    # 26Q1 is v2.0-27801
+                    return f"26.1.{int(version[1])-27801}"
+                elif int(version[1]) >= 15587:
+                    # 24Q3 is v2.0-15587
+                    return f"24.3.{int(version[1])-15587}"
+
+                # Convert v2.0-1234 to 2.0.1234
+                return version[0] + '.' + version[1]
+            return version[0]
+        elif len(version) > 3 and version[2] == 'Q':
+            # Convert 26Q1-1234 to 26.1.1234
+            year = version[0:2]
+            quarter = version[3]
+            build = version[5:] if len(version) > 5 else '0'
+            build = build.split('-')[0]  # Remove any trailing hash
+            return f"{year}.{quarter}.{build}"
+        else:
+            return '0'
+
+    def add_debuglevel(self, tool, category, level, clobber=False):
+        if clobber:
+            self.set("var", "debug_level", (tool, category, level))
+        else:
+            self.add("var", "debug_level", (tool, category, level))
+
+    def unset_debuglevel(self):
+        self.unset("var", "debug_level")
+
+    def runtime_options(self):
+        options = super().runtime_options()
+        options.append("-no_init")
+        options.extend(["-threads", self.get_threads()])
+
+        options.extend(["-metrics", "reports/metrics.json"])
+
+        if not self.has_breakpoint():
+            options.append("-exit")
+
+        return options
+
+    def replay_modes(self, args):
+        # -exit would close the window, web server or prompt as soon as the step ends
+        args = [arg for arg in args if arg not in ("-exit", "-gui", "-web")]
+        return {"gui": [*args, "-gui"], "web": [*args, "-web"], "shell": args}
+
+    @classmethod
+    def make_docs(cls):
+        from siliconcompiler import Flowgraph, Design, ASIC
+        from siliconcompiler.scheduler import SchedulerNode
+        from siliconcompiler.targets import freepdk45_demo
+        design = Design("<design>")
+        with design.active_fileset("docs"):
+            design.set_topmodule("top")
+        proj = ASIC(design)
+        proj.add_fileset("docs")
+        freepdk45_demo(proj)
+        flow = Flowgraph("docsflow")
+        flow.node("<step>", cls(), index="<index>")
+        proj.set_flow(flow)
+
+        node = SchedulerNode(proj, "<step>", "<index>")
+        node.setup()
+        return node.task
+
+
+class OpenROADFillParameter(OpenROADTask):
+    """
+    Mixin class for tasks that insert metal fill.
+
+    The PDK ships its metal fill rules as a file of filetype ``fill`` in a
+    fileset registered under ``pdk, fill, runsetfileset, openroad, <name>``.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("fin_add_fill", "bool",
+                           "true/false, when true enables adding fill, "
+                           "if enabled by the PDK, to the design", defvalue=False)
+        self.add_parameter("fill_name", "str",
+                           "name of the metal fill deck to use, this is only required when "
+                           "the PDK ships more than one deck")
+
+    def set_openroad_addfill(self, enable: bool,
+                             step: Optional[str] = None, index: Optional[Union[int, str]] = None):
+        """
+        Enables or disables adding fill to the design.
+
+        Args:
+            enable (bool): True to enable fill, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "fin_add_fill", enable, step=step, index=index)
+
+    def set_openroad_fillname(self, name: str,
+                              step: Optional[str] = None,
+                              index: Optional[Union[int, str]] = None):
+        """
+        Sets the name of the metal fill deck to use.
+
+        Args:
+            name (str): The name of the metal fill deck.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "fill_name", name, step=step, index=index)
+
+    def _get_fill_decks(self) -> List[str]:
+        """Return the names of the PDK metal fill decks that carry a fill file."""
+        if not self.pdk.valid("pdk", "fill", "runsetfileset", "openroad"):
+            return []
+
+        decks = []
+        for name in self.pdk.getkeys("pdk", "fill", "runsetfileset", "openroad"):
+            for fileset in self.pdk.get("pdk", "fill", "runsetfileset", "openroad", name):
+                if self.pdk.has_file(fileset=fileset, filetype="fill"):
+                    decks.append(name)
+                    break
+        return decks
+
+    def _resolve_fill_deck(self) -> Optional[str]:
+        """
+        Determine which metal fill deck to use.
+
+        A PDK that ships exactly one deck needs no configuration. When it ships
+        more than one, ``fill_name`` selects between them.
+
+        Raises:
+            ValueError: If the PDK ships several decks and none was selected, or
+                        if the selected deck does not exist.
+
+        Returns:
+            The deck name, or None if the PDK ships no metal fill rules.
+        """
+        decks = self._get_fill_decks()
+
+        name = self.get("var", "fill_name")
+        if name:
+            if name not in decks:
+                raise ValueError(f"{name} is not a metal fill deck provided by "
+                                 f"{self.pdk.name}, available decks are: "
+                                 f"{', '.join(sorted(decks)) if decks else 'none'}")
+            return name
+
+        if len(decks) > 1:
+            raise ValueError(f"{self.pdk.name} provides more than one metal fill deck, "
+                             f"select one with fill_name: {', '.join(sorted(decks))}")
+
+        return decks[0] if decks else None
+
+    def _setup_fill_deck(self) -> bool:
+        """
+        Declare the PDK metal fill deck required so it is hashed (cache) and
+        copied (remote runs), and record the resolved deck name for the script.
+
+        Returns:
+            True if metal fill rules are available.
+        """
+        name = self._resolve_fill_deck()
+
+        if name:
+            self.set("var", "fill_name", name)
+            self.add_required_key("var", "fill_name")
+            self.add_required_key(
+                self.pdk, "pdk", "fill", "runsetfileset", "openroad", name)
+            for fileset in self.pdk.get("pdk", "fill", "runsetfileset", "openroad", name):
+                if self.pdk.has_file(fileset=fileset, filetype="fill"):
+                    self.add_required_key(self.pdk, "fileset", fileset, "file", "fill")
+            return True
+
+        # Deprecated: PDKs used to register the fill rules in the OpenROAD APR tech
+        # fileset. Keep reading that until those PDKs move to the fill runset section.
+        found = False
+        for fileset in self.pdk.get("pdk", "aprtechfileset", "openroad"):
+            if self.pdk.has_file(fileset=fileset, filetype="fill"):
+                self.add_required_key(self.pdk, "fileset", fileset, "file", "fill")
+                found = True
+        return found

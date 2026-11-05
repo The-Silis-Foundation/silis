@@ -1,0 +1,51 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2013 Alex Solomatnikov
+// SPDX-License-Identifier: CC0-1.0
+
+//bug595
+
+module t (
+    input clk
+);
+
+  logic [6-1:0] foo;
+  initial foo = 20;
+
+  dut #(
+      .W(6)
+  ) udut (
+      .clk(clk),
+      .foo(foo - 16)
+  );
+endmodule
+
+module dut #(
+    parameter W = 1
+) (
+    input logic clk,
+    input logic [W-1:0] foo
+);
+
+  genvar i;
+  generate
+    for (i = 0; i < W; i++) begin
+      suba ua (
+          .clk(clk),
+          .foo(foo[i])
+      );
+    end
+  endgenerate
+endmodule
+
+module suba (
+    input logic clk,
+    input logic foo
+);
+
+  always @(posedge clk) begin
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

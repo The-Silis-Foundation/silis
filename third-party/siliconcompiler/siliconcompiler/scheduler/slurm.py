@@ -1,0 +1,511 @@
+import json
+import os
+import shlex
+import shutil
+import stat
+import warnings
+import subprocess
+import uuid
+import time
+
+import os.path
+
+from pathlib import PurePath
+from typing import List, Set, Tuple, Union, Final
+
+from siliconcompiler import utils, sc_open
+from siliconcompiler.utils.paths import jobdir, cachedir as cachedir_path
+from siliconcompiler.scheduler import SchedulerNode
+from siliconcompiler.utils.logging import SCBlankLoggerFormatter
+from siliconcompiler.utils.multiprocessing import MPManager
+from siliconcompiler.utils.settings import Setting, SettingsCategory
+
+
+SHAREDPATHS = Setting("scheduler-slurm", "sharedpaths", "[str]", [],
+                      "path prefixes every Slurm node can read, so files under them "
+                      "are not copied")
+SLURM_SETTINGS = SettingsCategory(SHAREDPATHS.category, SHAREDPATHS)
+
+
+class SlurmSchedulerNode(SchedulerNode):
+    """A SchedulerNode implementation for running tasks on a Slurm cluster.
+
+    This class extends the base SchedulerNode to handle the specifics of
+    submitting a compilation step as a job to a Slurm workload manager.
+    It prepares a run script, a manifest, and uses the 'srun' command
+    to execute the step on a compute node.
+    """
+    __OPTIONS: Final[str] = SLURM_SETTINGS.name
+
+    _MAX_FS_DELAY = 2
+    _FS_DWELL = 0.1
+
+    # Bound on a single scancel call: an unresponsive controller must not stall
+    # the caller, which is a server shutting down or answering a cancel request.
+    _CANCEL_TIMEOUT = 10
+
+    # Bound on a single sinfo call, for the same reason: this one runs before a
+    # node is submitted, so a wedged controller would otherwise hang the run
+    # before any work starts.
+    _SINFO_TIMEOUT = 10
+
+    def __init__(self, project, step, index, replay=False):
+        """Initializes a SlurmSchedulerNode.
+
+        Args:
+            project (Project): The parent project object.
+            step (str): The step name in the flowgraph.
+            index (str): The index for the step.
+            replay (bool): If True, sets up the node to replay a previous run.
+        """
+        super().__init__(project, step, index, replay=replay)
+
+        # Get the temporary UID associated with this job run.
+        self.__job_hash = project.get('record', 'remoteid')
+        if not self.__job_hash:
+            # Generate a new uuid since it was not set
+            self.__job_hash = uuid.uuid4().hex
+
+    @property
+    def jobhash(self):
+        """str: A unique hash identifying the entire job run."""
+        return self.__job_hash
+
+    @staticmethod
+    def init(project):
+        """
+        A static pre-processing hook for the Slurm scheduler.
+
+        This method ensures that the Slurm environment is available and loads
+        any existing user configuration for the scheduler.
+
+        Args:
+            project (Project): The project object to perform pre-processing on.
+        """
+        SlurmSchedulerNode.assert_slurm()
+
+    @staticmethod
+    def _set_user_config(tag: str, value: Union[List[str], str]) -> None:
+        """
+        Sets a specific value in the user configuration map, and saves it.
+
+        It is saved as it is set, in a transaction of its own: a change left
+        unsaved would be dropped by the next transaction on the settings file,
+        such as the one :meth:`.OptionSchema.write_defaults` runs (see
+        :meth:`.SettingsManager.transaction`).
+
+        Args:
+            tag (str): The configuration key to update.
+            value (Union[List[str], str]): The value to assign to the key.
+
+        Raises:
+            TimeoutError: if the settings file's lock is not had in time.
+            ValueError: if the settings file is malformed; it is left as it is.
+        """
+        settings = MPManager.get_settings()
+        with settings.transaction():
+            settings.set(SlurmSchedulerNode.__OPTIONS, tag, value)
+
+    @staticmethod
+    def _write_user_config() -> None:
+        """
+        Deprecated, and does nothing: :meth:`_set_user_config` saves as it sets.
+
+        It used to save the whole in-memory settings, which after a change saved
+        that way would only put a stale copy back over whatever another process
+        had written since.
+        """
+        warnings.warn("SlurmSchedulerNode._write_user_config is deprecated and does nothing: "
+                      "_set_user_config saves as it sets",
+                      DeprecationWarning, stacklevel=2)
+
+    @property
+    def is_local(self):
+        """bool: Returns False, as this node executes on a remote cluster."""
+        return False
+
+    @staticmethod
+    def get_configuration_directory(project):
+        """Gets the directory for storing Slurm-related configuration files.
+
+        Args:
+            project (Project): The project object.
+
+        Returns:
+            str: The path to the configuration directory.
+        """
+
+        return os.path.join(jobdir(project), 'sc_configs')
+
+    @staticmethod
+    def get_job_name(jobhash, step, index):
+        """Generates a unique job name for a Slurm job.
+
+        Args:
+            jobhash (str): The unique hash for the entire run.
+            step (str): The step name of the node.
+            index (str): The index of the node.
+
+        Returns:
+            str: A unique job name string.
+        """
+        return f'{jobhash}_{step}_{index}'
+
+    @staticmethod
+    def get_runtime_file_name(jobhash, step, index, ext):
+        """Generates a standardized filename for runtime files.
+
+        Args:
+            jobhash (str): The unique hash for the entire run.
+            step (str): The step name of the node.
+            index (str): The index of the node.
+            ext (str): The file extension.
+
+        Returns:
+            str: A standardized filename.
+        """
+        return f"{SlurmSchedulerNode.get_job_name(jobhash, step, index)}.{ext}"
+
+    @staticmethod
+    def get_slurm_partition() -> str:
+        """Determines which Slurm partition to submit to by querying the cluster.
+
+        Returns:
+            str: The cluster's default partition, or the first partition it
+                reports if none is marked as the default.
+
+        Raises:
+            RuntimeError: If the partitions cannot be read from slurm.
+        """
+        partitions = SlurmSchedulerNode.__get_partitions_text()
+        if not partitions:
+            partitions = SlurmSchedulerNode.__get_partitions_json()
+
+        if not partitions:
+            raise RuntimeError('Unable to determine partitions in slurm')
+
+        # sinfo suffixes the default partition with '*'. Prefer it: submitting to
+        # whichever partition happens to be listed first is arbitrary.
+        for partition in partitions:
+            if partition.endswith('*'):
+                return partition[:-1]
+
+        return partitions[0]
+
+    @staticmethod
+    def __get_partitions_text() -> List[str]:
+        """Lists the cluster's partitions from plain sinfo output.
+
+        This is preferred over --json because its shape has not changed across
+        any Slurm release: '%P' has always meant "partition name, with '*'
+        appended to the default", and the default is what this is after.
+
+        Returns:
+            List[str]: Partition names, the default suffixed with '*'. Empty if
+                sinfo failed, or did not answer within _SINFO_TIMEOUT.
+        """
+        try:
+            partitions = subprocess.run(['sinfo', '--noheader', '--format', '%P'],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                        timeout=SlurmSchedulerNode._SINFO_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return []
+
+        if partitions.returncode != 0:
+            return []
+
+        names = []
+        for line in partitions.stdout.decode(errors='replace').splitlines():
+            name = line.strip()
+            if name and name not in names:
+                names.append(name)
+
+        return names
+
+    @staticmethod
+    def __get_partitions_json() -> List[str]:
+        """Lists the cluster's partitions from 'sinfo --json'.
+
+        Accepts both schemas slurm has emitted: 22.05 returned a top-level
+        "nodes" list whose records carried a "partitions" list of names, and
+        23.02 onwards return a top-level "sinfo" list whose records carry a
+        single "partition" object.
+
+        Neither schema says which partition is the default -- the partition
+        flags are not serialized before data_parser v0.0.45 -- so this only
+        lists them, and is a fallback for when the text output above is
+        unreadable.
+
+        Returns:
+            List[str]: Partition names, in the order sinfo reported them. Empty
+                if sinfo failed, or did not answer within _SINFO_TIMEOUT.
+        """
+        try:
+            partitions = subprocess.run(['sinfo', '--json'],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL,
+                                        timeout=SlurmSchedulerNode._SINFO_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return []
+
+        if partitions.returncode != 0:
+            return []
+
+        try:
+            sinfo = json.loads(partitions.stdout.decode(errors='replace'))
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(sinfo, dict):
+            return []
+
+        names = []
+        for record in sinfo.get('sinfo', sinfo.get('nodes', [])):
+            if not isinstance(record, dict):
+                continue
+
+            partition = record.get('partition')
+            if isinstance(partition, dict):
+                found = [partition.get('name')]
+            elif isinstance(partition, str):
+                found = [partition]
+            else:
+                found = record.get('partitions', [])
+                if isinstance(found, str):
+                    found = [found]
+
+            if not isinstance(found, list):
+                continue
+
+            for name in found:
+                if isinstance(name, str) and name and name not in names:
+                    names.append(name)
+
+        return names
+
+    @staticmethod
+    def assert_slurm() -> None:
+        """
+        Check if slurm is installed and throw error when not installed.
+        """
+        if shutil.which('sinfo') is None:
+            raise RuntimeError('slurm is not available or installed on this machine')
+
+    @staticmethod
+    def cancel_nodes(jobhash: str, nodes: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """Cancels the slurm jobs submitted for a set of nodes.
+
+        Nodes are addressed by the job name :meth:`get_job_name` gave them at
+        submission, so a caller only needs to know which nodes it wants stopped.
+        A node that has already finished has no slurm job left to cancel, which
+        scancel reports as success.
+
+        Args:
+            jobhash (str): The unique hash for the entire run.
+            nodes (list of tuple): The (step, index) pairs to cancel.
+
+        Returns:
+            list of tuple: The nodes scancel accepted. Empty if scancel is not
+                available on this machine, and a node whose scancel failed or
+                did not return in time is left out.
+        """
+
+        if shutil.which('scancel') is None:
+            return []
+
+        canceled = []
+        for step, index in nodes:
+            job_name = SlurmSchedulerNode.get_job_name(jobhash, step, index)
+            try:
+                result = subprocess.run(['scancel', '--name', job_name],
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL,
+                                        timeout=SlurmSchedulerNode._CANCEL_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                # Nothing is known about this node's job now, so do not claim it
+                # was canceled -- but the remaining nodes still deserve a try.
+                continue
+            if result.returncode != 0:
+                # scancel said no. Reporting that as canceled would have the
+                # caller end this node's local waiter for a job that is still
+                # running on the cluster, with nothing left watching it.
+                continue
+            canceled.append((step, index))
+
+        return canceled
+
+    def cancel(self) -> None:
+        """Cancels the slurm job submitted for this node.
+
+        The node's process is about to be ended, but the work is not in it: the
+        task is on a compute node, and the process being ended is only waiting
+        for it. Killing the waiter is also what makes the job unreachable, so
+        this runs first.
+
+        A node whose job has already finished has nothing left to cancel, which
+        scancel reports as success.
+        """
+        if not SlurmSchedulerNode.cancel_nodes(self.jobhash, [(self.step, self.index)]):
+            # Either scancel is not on this machine or it did not come back in
+            # time. Both leave a job running that was asked to stop, and neither
+            # is something this process can do anything further about.
+            self.logger.warning(f"Unable to cancel slurm job for {self.step}/{self.index}")
+
+    def collect_keys(self) -> Set[Tuple[str, ...]]:
+        """The required path keys with a file outside the cluster's shared
+        paths: those have to be collected, since the compute node cannot reach
+        them. None where the whole filesystem is shared.
+
+        A file an earlier run collected counts as outside them, even when the
+        collection is on a shared path: a collection is rebuilt from the keys
+        it is given, so it only keeps that file if its key is named again."""
+        sharedprefix: List[str] = SHAREDPATHS.get()
+
+        if "/" in sharedprefix:
+            # Entire filesystem is shared so no need to check
+            return set()
+
+        if not sharedprefix:
+            # Nothing is shared, so everything has to be copied
+            return self.get_required_path_keys()
+
+        def is_shared(path: str) -> bool:
+            # By directory, so /nfs covers /nfs/tools and not /nfsdata
+            path = PurePath(path)
+            if self.collection_dir and path.is_relative_to(self.collection_dir):
+                return False
+            return any(path.is_relative_to(shared) for shared in sharedprefix)
+
+        keys = set()
+        for key in self.get_required_path_keys():
+            check_step, check_index = self.step, self.index
+            if self.project.get(*key, field='pernode').is_never():
+                check_step, check_index = None, None
+
+            paths = self.project.find_files(*key, missing_ok=True,
+                                            step=check_step, index=check_index)
+            if not isinstance(paths, list):
+                paths = [paths]
+            paths = [str(path) for path in paths if path]
+
+            if not all(is_shared(path) for path in paths):
+                # A file outside the shared paths has to be copied.
+                keys.add(key)
+        return keys
+
+    def run(self):
+        """
+        Runs the node's task as a job on a Slurm cluster.
+
+        This method prepares all necessary files (manifest, run script),
+        constructs an 'srun' command, and submits the job. It then blocks
+        until the job completes on the compute node.
+        """
+
+        self._init_run_logger()
+
+        # Determine which cluster parititon to use.
+        partition = self.project.option.scheduler.get_queue(step=self.step, index=self.index)
+        if not partition:
+            partition = SlurmSchedulerNode.get_slurm_partition()
+
+        # Write out the current schema for the compute node to pick up.
+        cfg_dir = SlurmSchedulerNode.get_configuration_directory(self.project)
+        os.makedirs(cfg_dir, exist_ok=True)
+
+        cfg_file = os.path.join(cfg_dir, SlurmSchedulerNode.get_runtime_file_name(
+            self.__job_hash, self.step, self.index, "pkg.json"))
+        log_file = os.path.join(cfg_dir, SlurmSchedulerNode.get_runtime_file_name(
+            self.__job_hash, self.step, self.index, "log"))
+        script_file = os.path.join(cfg_dir, SlurmSchedulerNode.get_runtime_file_name(
+            self.__job_hash, self.step, self.index, "sh"))
+
+        # Remove scheduler as this is now a local run
+        self.project.option.scheduler.set_name(None, step=self.step, index=self.index)
+        self.project.write_manifest(cfg_file)
+
+        # Allow user-defined compute node execution script if it already exists on the filesystem.
+        # Otherwise, create a minimal script to run the task using the SiliconCompiler CLI.
+        if not os.path.isfile(script_file):
+            with open(script_file, 'w') as sf:
+                sf.write(utils.get_file_template('slurm/run.sh').render(
+                    cfg_file=shlex.quote(cfg_file),
+                    build_dir=shlex.quote(self.project.option.get_builddir()),
+                    step=shlex.quote(self.step),
+                    index=shlex.quote(self.index),
+                    cachedir=shlex.quote(cachedir_path(self.project))
+                ))
+
+        # This is Python for: `chmod +x [script_path]`
+        os.chmod(script_file,
+                 os.stat(script_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        schedule_cmd = ['srun',
+                        '--partition', partition,
+                        '--chdir', self.project_cwd,
+                        '--job-name', SlurmSchedulerNode.get_job_name(self.__job_hash,
+                                                                      self.step, self.index),
+                        '--output', log_file]
+
+        # Only delay the starting time if the 'defer' Schema option is specified.
+        defer_time = self.project.option.scheduler.get_defer(step=self.step, index=self.index)
+        if defer_time:
+            schedule_cmd.extend(['--begin', defer_time])
+
+        # Forward additional user options
+        options = self.project.option.scheduler.get_options(step=self.step, index=self.index)
+        if options:
+            schedule_cmd.extend(options)
+
+        schedule_cmd.append(script_file)
+
+        self.logger.debug(f"Executing slurm command: {shlex.join(schedule_cmd)}")
+
+        # Run the 'srun' command, and track its output.
+        step_result = subprocess.Popen(schedule_cmd,
+                                       stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT)
+
+        # Wait for the subprocess call to complete. It should already be done,
+        # as it has closed its output stream. But if we don't call '.wait()',
+        # the '.returncode' value will not be set correctly.
+        step_result.wait()
+
+        # Attempt to list dir to trigger network FS to update
+        try:
+            os.listdir(os.path.dirname(log_file))
+        except:  # noqa E722
+            pass
+
+        # Print the log to logger
+        if os.path.exists(log_file):
+            org_formatter = self.project._logger_console.formatter
+            try:
+                self.project._logger_console.setFormatter(SCBlankLoggerFormatter())
+                with sc_open(log_file) as log:
+                    for line in log.readlines():
+                        self.logger.info(line.rstrip())
+            finally:
+                self.project._logger_console.setFormatter(org_formatter)
+
+        if step_result.returncode != 0:
+            self.logger.error(f"Slurm exited with a non-zero code ({step_result.returncode}).")
+            if os.path.exists(log_file):
+                self.logger.error(f"Node log file: {log_file}")
+            self.halt()
+
+        # Wait for manifest to propagate through network filesystem
+        start = time.time()
+        elapsed = 0
+        manifest_path = self.get_manifest()
+        while not os.path.exists(manifest_path) and elapsed <= SlurmSchedulerNode._MAX_FS_DELAY:
+            os.listdir(os.path.dirname(manifest_path))
+            elapsed = time.time() - start
+            time.sleep(SlurmSchedulerNode._FS_DWELL)
+        if not os.path.exists(manifest_path):
+            self.logger.error(f"Manifest was not created on time: {manifest_path}")
+
+    def check_required_paths(self) -> bool:
+        return True

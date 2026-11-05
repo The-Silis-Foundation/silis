@@ -1,0 +1,313 @@
+from typing import Union, List, Optional
+
+from siliconcompiler.tools.openroad._apr import APRTask
+from siliconcompiler.tools.openroad._apr import OpenROADSTAParameter, OpenROADPPLParameter
+
+
+class InitFloorplanTask(APRTask,
+                        OpenROADSTAParameter,
+                        OpenROADPPLParameter):
+    """
+    Perform floorplanning and initial pin placements.
+
+    This task handles the initialization of the floorplan, including macro placement
+    snapping strategies, cleaning up synthesis artifacts (buffers/dead logic),
+    and defining padring or bumpmap configurations.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("ifp_snap_strategy", "<none,site,grid>",
+                           "Snapping strategy to use when placing macros.", defvalue="site")
+        self.add_parameter("assert_all_pins_placed", "bool",
+                           "assert that all pins are placed", defvalue=False)
+
+        self.add_parameter("padringfileset", "[str]", "filesets to generate a padring")
+        self.add_parameter("bumpmapfileset", "[str]", "filesets to generate a bumpmap")
+
+        self.add_parameter("placementblockage", "[((float,float),(float,float))]",
+                           "Placement blockage coordinates", units="um")
+        self.add_parameter("routingblockage", "[(str,(float,float),(float,float))]",
+                           "Routing blockage coordinates", units="um")
+
+        self.set_dataroot("sc-common", "python://siliconcompiler/tools/_common")
+        self.add_parameter(
+            "sc_pin_constraints_tcl",
+            "file",
+            "TCL file defining pin constraints for use with OpenROAD.",
+            "tcl/sc_pin_constraints.tcl",
+            dataroot="sc-common")
+
+    def add_openroad_placementblockage(self, x0: float, y0: float, x1: float, y1: float,
+                                       step: Optional[str] = None, index: Optional[str] = None,
+                                       clobber: bool = False):
+        """
+        Adds a placement blockage defined by the coordinates of its lower-left (x0, y0)
+        and upper-right (x1, y1) corners.
+
+        Args:
+            x0: X-coordinate of the lower-left corner of the blockage.
+            y0: Y-coordinate of the lower-left corner of the blockage.
+            x1: X-coordinate of the upper-right corner of the blockage.
+            y1: Y-coordinate of the upper-right corner of the blockage.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing placement blockage list.
+                     If False, appends to the existing list.
+        """
+        if clobber:
+            self.set("var", "placementblockage", ((x0, y0), (x1, y1)), step=step, index=index)
+        else:
+            self.add("var", "placementblockage", ((x0, y0), (x1, y1)), step=step, index=index)
+
+    def add_openroad_routingblockage(self, layer: str, x0: float, y0: float, x1: float, y1: float,
+                                     step: Optional[str] = None, index: Optional[str] = None,
+                                     clobber: bool = False):
+        """
+        Adds a routing blockage defined by the coordinates of its lower-left (x0, y0)
+        and upper-right (x1, y1) corners.
+
+        Args:
+            layer: The routing layer to which this blockage applies.
+            x0: X-coordinate of the lower-left corner of the blockage.
+            y0: Y-coordinate of the lower-left corner of the blockage.
+            x1: X-coordinate of the upper-right corner of the blockage.
+            y1: Y-coordinate of the upper-right corner of the blockage.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing routing blockage list.
+                     If False, appends to the existing list.
+        """
+        if clobber:
+            self.set("var", "routingblockage", (layer, (x0, y0), (x1, y1)), step=step, index=index)
+        else:
+            self.add("var", "routingblockage", (layer, (x0, y0), (x1, y1)), step=step, index=index)
+
+    def set_openroad_snapstrategy(self, snap: str,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the snapping strategy for macro placement.
+
+        Args:
+            snap: The snapping mode. Options are typically 'none', 'site', or 'grid'.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "ifp_snap_strategy", snap, step=step, index=index)
+
+    def set_openroad_removebuffers(self, enable: bool,
+                                   step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the removal of buffers inserted during synthesis.
+
+        Args:
+            enable: True to remove synthesis buffers, False to keep them.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        import warnings
+        warnings.warn("set_openroad_removebuffers is deprecated in init_floorplan. "
+                      "Use cleanup_synth instead.",
+                      DeprecationWarning, stacklevel=2)
+
+    def set_openroad_removedeadlogic(self, enable: bool,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the removal of logic that does not drive a primary output.
+
+        Args:
+            enable: True to remove dead logic, False to keep it.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        import warnings
+        warnings.warn("set_openroad_removedeadlogic is deprecated in init_floorplan. "
+                      "Use cleanup_synth instead.",
+                      DeprecationWarning, stacklevel=2)
+
+    def add_openroad_padringfileset(self, fileset: Union[str, List[str]],
+                                    step: Optional[str] = None, index: Optional[str] = None,
+                                    clobber: bool = False):
+        """
+        Adds fileset(s) used to generate the I/O pad ring.
+
+        Args:
+            fileset: A string name or list of names representing the padring filesets.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing padring fileset list.
+                     If False, appends to the existing list.
+        """
+        if clobber:
+            self.set("var", "padringfileset", fileset, step=step, index=index)
+        else:
+            self.add("var", "padringfileset", fileset, step=step, index=index)
+
+    def add_openroad_bumpmapfileset(self, fileset: Union[str, List[str]],
+                                    step: Optional[str] = None, index: Optional[str] = None,
+                                    clobber: bool = False):
+        """
+        Adds fileset(s) used to generate the bump map for flip-chip or 3D designs.
+
+        Args:
+            fileset: A string name or list of names representing the bumpmap filesets.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing bumpmap fileset list.
+                     If False, appends to the existing list.
+        """
+        if clobber:
+            self.set("var", "bumpmapfileset", fileset, step=step, index=index)
+        else:
+            self.add("var", "bumpmapfileset", fileset, step=step, index=index)
+
+    def set_openroad_assertallpinsplaced(self, enable: bool,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables an assertion that all pins are placed after floorplanning.
+
+        Args:
+            enable: True to assert that all pins are placed, False to disable this assertion.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "assert_all_pins_placed", enable, step=step, index=index)
+
+    def task(self):
+        return "init_floorplan"
+
+    def setup(self):
+        super().setup()
+
+        self.set_script("apr/sc_init_floorplan.tcl")
+
+        self._set_reports([
+            'check_setup',
+            'setup',
+            'unconstrained',
+            'power',
+            'floating_nets',
+            'overdriven_nets',
+            "logicdepth",
+            'design_stats',
+            'scenarios',
+
+            # Images
+            'snapshot',
+            'placement_view',
+            'routing_view',
+            'markers_view'
+        ])
+
+        self.add_required_key("var", "ifp_snap_strategy")
+        self.add_required_key("var", "assert_all_pins_placed")
+        if self.get("var", "placementblockage"):
+            self.add_required_key("var", "placementblockage")
+        if self.get("var", "routingblockage"):
+            self.add_required_key("var", "routingblockage")
+
+        # sc_init_floorplan.tcl reads the padring/bumpmap files from the design's
+        # filesets, resolving aliases and depfilesets; mirror that here so the
+        # files are hashed (cache) and copied (remote runs).
+        if self.get("var", "padringfileset"):
+            self.add_required_key("var", "padringfileset")
+
+            for fs_lib, fs in self.project.get_filesets(library=self.project.design,
+                                                        filesets=self.get("var",
+                                                                          "padringfileset")):
+                if fs_lib.has_file(fileset=fs, filetype="tcl"):
+                    self.add_required_key(fs_lib, "fileset", fs, "file", "tcl")
+
+        if f"{self.design_topmodule}.bmap" in self.get_files_from_input_nodes():
+            self.add_input_file(ext="bmap")
+
+        if self.get("var", "bumpmapfileset"):
+            self.add_required_key("var", "bumpmapfileset")
+
+            for fs_lib, fs in self.project.get_filesets(library=self.project.design,
+                                                        filesets=self.get("var",
+                                                                          "bumpmapfileset")):
+                if fs_lib.has_file(fileset=fs, filetype="bmap"):
+                    self.add_required_key(fs_lib, "fileset", fs, "file", "bmap")
+
+        # sc_init_floorplan.tcl seeds the floorplan from a design DEF when one is
+        # present in the active filesets; declare it required so it is hashed and copied.
+        floorplan_def = False
+        for lib, fileset in self.project.get_filesets():
+            if lib.has_file(fileset=fileset, filetype="def"):
+                self.add_required_key(lib, "fileset", fileset, "file", "def")
+                floorplan_def = True
+
+        # Mark requires for components, pin, and floorplan placements
+        for component in self.project.constraint.component.get_component().values():
+            if component.get_placement(step=self.step, index=self.index) is not None:
+                self.add_required_key(component, "placement")
+                self.add_required_key(component, "rotation")
+            if component.get_halo(step=self.step, index=self.index) is not None:
+                self.add_required_key(component, "halo")
+            if component.get_partname(step=self.step, index=self.index):
+                self.add_required_key(component, "partname")
+
+        if self.project.constraint.pin.get_pinconstraint():
+            self.add_required_key("var", "sc_pin_constraints_tcl")
+
+        for pin in self.project.constraint.pin.get_pinconstraint().values():
+            if pin.get_placement(step=self.step, index=self.index) is not None:
+                self.add_required_key(pin, "placement")
+            if pin.get_layer(step=self.step, index=self.index) is not None:
+                self.add_required_key(pin, "layer")
+            if pin.get_side(step=self.step, index=self.index) is not None:
+                self.add_required_key(pin, "side")
+            if pin.get_order(step=self.step, index=self.index) is not None:
+                self.add_required_key(pin, "order")
+            if pin.get_shape(step=self.step, index=self.index) is not None:
+                self.add_required_key(pin, "shape")
+                self.add_required_key(pin, "width")
+                if pin.get_shape(step=self.step, index=self.index) != "square":
+                    self.add_required_key(pin, "length")
+
+        # The die/core geometry and site come from the DEF when one is provided, so the
+        # area/site floorplanning keys are only required when initializing from scratch.
+        if not floorplan_def:
+            self.add_required_key(self.mainlib, "asic", "site")
+
+            area = self.project.constraint.area
+
+            floorplan_areas = area.calc_floorplan_areas(step=self.step, index=self.index)
+            if not floorplan_areas and self.get("var", "padringfileset"):
+                # A padring is drawn at absolute coordinates, so it only lines up with a
+                # die the script was told the size of. Sizing from utilization and aspect
+                # ratio picks that size after the fact, which would place the ring
+                # somewhere other than the die edge. Requiring the areas that were not
+                # set fails the node with the keypaths that have to be filled in.
+                self.logger.warning("A padring needs an explicit die and core area, "
+                                    "sizing the floorplan from the density and aspect "
+                                    "ratio would not line the ring up with the die")
+                self.add_required_key(area, "diearea")
+                self.add_required_key(area, "corearea")
+            elif floorplan_areas:
+                # sc_init_floorplan.tcl needs both an explicit die and core area, so record
+                # the area that was derived from the core margin.
+                diearea, corearea = floorplan_areas
+
+                from_coremargin = False
+                if not area.get_diearea(step=self.step, index=self.index):
+                    area.set_diearea(diearea, step=self.step, index=self.index)
+                    from_coremargin = True
+                if not area.get_corearea(step=self.step, index=self.index):
+                    area.set_corearea(corearea, step=self.step, index=self.index)
+                    from_coremargin = True
+
+                self.add_required_key(area, "diearea")
+                self.add_required_key(area, "corearea")
+                if from_coremargin:
+                    # One of the areas was computed from the core margin, so a change to
+                    # the margin has to invalidate this node.
+                    self.add_required_key(area, "coremargin")
+            else:
+                self.add_required_key(area, "aspectratio")
+                self.add_required_key(area, "density")
+                self.add_required_key(area, "coremargin")
+
+        if self.mainlib.get("tool", "openroad", "tracks"):
+            self.add_required_key(self.mainlib, "tool", "openroad", "tracks")

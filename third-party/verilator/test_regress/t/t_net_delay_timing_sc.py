@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('simulator')
+test.top_filename = "t/t_net_delay.v"
+test.main_time_multiplier = 2
+
+if re.search(r'clang', test.cxx_version):
+    test.skip("Known clang bug on ubuntu-26.04")
+
+test.compile(verilator_flags2=["--sc --exe --timing --timescale 10ps/1ps"])
+
+test.execute()
+
+test.passes()

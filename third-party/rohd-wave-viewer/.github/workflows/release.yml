@@ -1,0 +1,179 @@
+name: Release Checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package or dependency-ordered package set to validate
+        required: true
+        type: choice
+        default: dart_wellen
+        options:
+          - dart_wellen
+          - rohd_wave_viewer
+          - both
+      run_tests:
+        description: Repeat the complete local-equivalent test suites
+        required: true
+        type: boolean
+        default: false
+      run_pana:
+        description: Run the isolated hosted-dependency and Pana gate
+        required: true
+        type: boolean
+        default: false
+      publish_bundle:
+        description: Publish the verified bridge bundle at its pinned GitHub release URL
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  release-checks:
+    name: Prepare ${{ inputs.package || 'dart_wellen' }}
+    permissions:
+      contents: read
+    timeout-minutes: 120
+    runs-on: ${{ github.repository_owner == 'intel' && 'intel-ubuntu-latest' || 'ubuntu-latest' }}
+    steps:
+      - name: Checkout complete source history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          cache: true
+
+      - name: Verify Flutter and Dart on PATH
+        run: bash scripts/verify_flutter_version.sh
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Test bridge artifact installation and publication
+        run: |
+          python3 tool/test/bridge_artifacts_test.py
+          node --test tool/test/publish_bridge_artifacts_test.cjs
+
+      - name: Verify bridge artifact publication repository
+        run: node tool/gh_actions/verify_bridge_artifact_publication_url.cjs "${{ github.repository }}"
+
+      - name: Install native build tools
+        run: tool/gh_actions/install_build_tools.sh
+
+      - name: Install Rust toolchain
+        run: tool/gh_actions/install_rust_1_92.sh
+
+      - name: Install WASM tools
+        run: tool/gh_actions/install_wasm_tools.sh
+
+      - name: Install project dependencies
+        run: tool/gh_actions/install_dependencies.sh
+
+      - name: Setup Chrome for optional browser tests
+        if: ${{ inputs.run_tests }}
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Install optional Pana gate
+        if: ${{ inputs.run_pana }}
+        run: tool/gh_actions/install_pana.sh
+
+      - name: Prepare selected release packages
+        env:
+          BROWSER_TEST_PLATFORM: chrome_ci
+          CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
+          RELEASE_PACKAGE: ${{ inputs.package || 'dart_wellen' }}
+          RUN_TESTS: ${{ inputs.run_tests }}
+          RUN_PANA: ${{ inputs.run_pana }}
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ "$RUN_TESTS" == 'true' ]]; then
+            arguments+=(--run-tests)
+          fi
+          if [[ "$RUN_PANA" == 'true' ]]; then
+            arguments+=(--run-pana)
+          fi
+          case "$RELEASE_PACKAGE" in
+            dart_wellen|rohd_wave_viewer)
+              arguments+=("$RELEASE_PACKAGE")
+              ;;
+            both)
+              arguments+=(dart_wellen rohd_wave_viewer)
+              ;;
+            *)
+              echo "Unsupported release package selection: $RELEASE_PACKAGE" >&2
+              exit 2
+              ;;
+          esac
+          tool/prepare_release.sh "${arguments[@]}"
+
+      - name: Upload pinned consumer bundle for explicit release publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: dart-wellen-consumer-artifacts
+          path: |
+            build/dart_wellen-*-web.tar.gz
+            packages/dart_wellen/tool/bridge_artifacts.build.json
+          if-no-files-found: error
+
+  publish-bridge-bundle:
+    name: Publish pinned bridge bundle
+    needs: release-checks
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_bundle }}
+    permissions:
+      contents: write
+    concurrency:
+      group: dart-wellen-release-publication
+      cancel-in-progress: false
+    timeout-minutes: 10
+    runs-on: ${{ github.repository_owner == 'intel' && 'intel-ubuntu-latest' || 'ubuntu-latest' }}
+    steps:
+      - name: Checkout verified source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download verified consumer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dart-wellen-consumer-artifacts
+          path: ${{ runner.temp }}/dart-wellen-consumer-artifacts
+
+      - name: Publish immutable bridge release asset
+        uses: actions/github-script@v7
+        env:
+          BRIDGE_ARTIFACT_DIRECTORY: ${{ runner.temp }}/dart-wellen-consumer-artifacts
+        with:
+          script: |
+            const path = require('node:path');
+            const publish = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              'tool/gh_actions/publish_bridge_artifacts.cjs',
+            ));
+            const result = await publish({
+              github,
+              context,
+              workspace: process.env.GITHUB_WORKSPACE,
+              artifactDirectory: process.env.BRIDGE_ARTIFACT_DIRECTORY,
+            });
+            core.info(result.alreadyPresent
+              ? 'Existing archive and checksum metadata match this tested build; no upload needed.'
+              : 'Uploaded the verified bundle without rebuilding.');
+            await core.summary
+              .addHeading('Pinned dart_wellen bridge bundle')
+              .addLink('Download verified bundle', result.assetUrl)
+              .addRaw(`\n\nSHA-256: \`${result.sha256}\`\n`)
+              .write();

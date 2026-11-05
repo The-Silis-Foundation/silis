@@ -1,0 +1,22 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2014 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define CHECK  text \
+  multiline
+
+Hello in t_preproc_psl.v
+
+`ifdef NEVER
+  not
+`else
+    yes
+`endif
+
+Multi `CHECK line
+
+// Did we end up right?
+Line: `__LINE__

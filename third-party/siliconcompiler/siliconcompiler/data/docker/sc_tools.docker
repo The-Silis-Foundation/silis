@@ -1,0 +1,116 @@
+# Copyright (C) 2023-2026 Zero ASIC
+
+# Gather every tool's prefix and package list in a throwaway stage, so the
+# shipping image below takes them in a single COPY each.
+#
+# Doing it per tool -- a COPY plus its own "apt-get install" for all 27 -- cost
+# about 1.6GB on disk. Not in the layer content, which is the same either way,
+# but in what the layers occupy once unpacked: each apt transaction re-resolves
+# and rewrites the same base packages, and a file written in one layer and
+# rewritten in another is stored twice. It also meant 27 sequential apt
+# transactions at build time instead of one.
+FROM ubuntu:24.04 AS assemble
+
+ARG SC_PREFIX=/sc_tools
+
+{% for tool in tools %}
+COPY --from={{ tool }} $SC_PREFIX $SC_PREFIX
+# Read straight from the tool image, so the prefix COPY above cannot overwrite
+# one tool's apt.txt with the next one's.
+COPY --from={{ tool }} $SC_PREFIX/apt.txt /apt/{{ loop.index }}.txt
+{% endfor %}
+
+# One deduplicated list, and no stray apt.txt left in the prefix.
+RUN cat /apt/*.txt | sort -u > /apt.txt && \
+    rm -rf /apt $SC_PREFIX/apt.txt
+
+FROM ubuntu:24.04
+
+LABEL org.opencontainers.image.source="https://github.com/siliconcompiler/siliconcompiler"
+LABEL org.opencontainers.image.description="SiliconCompiler container with all supported OpenSource tools"
+
+ARG SC_PREFIX=/sc_tools
+ARG SC_BUILD=/sc_build
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
+# Ensure we only install the required tools to keep images small
+RUN echo "APT::Install-Recommends \"false\";" >> /etc/apt/apt.conf
+RUN echo "APT::Install-Suggests \"false\";" >> /etc/apt/apt.conf
+
+# Install minimum tools needed by SC and support scripts.
+# zstd is needed by actions/cache: it hashes the compression method into the
+# cache version, so without the zstd binary here a cache saved by a job on the
+# runner (which has zstd) never matches on restore inside this container.
+RUN apt-get update && \
+    apt-get install -y sudo \
+                       git \
+                       python3 python3-pip \
+                       xvfb \
+                       zstd \
+                       munge libmunge-dev build-essential libmariadb-dev lbzip2 libjson-c-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Ensure we use https instead of git@github.com since that causes failures
+RUN git config --global url."https://github.com/".insteadOf git@github.com:
+
+COPY --from=assemble $SC_PREFIX $SC_PREFIX
+COPY --from=assemble /apt.txt /apt.txt
+RUN apt-get update && \
+    xargs -a /apt.txt apt-get install --ignore-missing -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /apt.txt
+
+# Execute scripts needed by tools
+RUN find $SC_PREFIX -name "*.sh" -maxdepth 1 -exec {} \;
+RUN rm -f $SC_PREFIX/*.sh
+
+{% if skip_build|length > 0 %}
+# Install tools without build
+RUN mkdir -p $SC_BUILD
+WORKDIR $SC_BUILD
+
+# Copy in support scripts
+COPY _tools.py $SC_BUILD/..
+COPY _tools.json $SC_BUILD/..
+COPY _prereqs.sh $SC_BUILD/..
+
+{% for tool in skip_build %}
+COPY install-{{ tool }}.sh $SC_BUILD
+RUN apt-get update && \
+    chmod +x $SC_BUILD/install-{{ tool }}.sh && \
+    $SC_BUILD/install-{{ tool }}.sh && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf $SC_BUILD/deps
+{% endfor %}
+{% endif %}
+
+{% if slurm_version is defined %}
+######################
+# Install slurm
+######################
+RUN mv $SC_PREFIX/slurm_cfg/start_slurm.sh /
+RUN chmod +x /start_slurm.sh
+{% endif %}
+
+######################
+# Setup running env
+######################
+
+# Cleanup builds
+WORKDIR /
+RUN rm -rf $SC_BUILD
+
+# Setup work environment
+RUN mkdir -p /sc_work
+WORKDIR /sc_work
+
+ENV SC_PREFIX=$SC_PREFIX
+ENV PATH="$SC_PREFIX/bin:$SC_PREFIX/sbin:$PATH"
+ENV LD_LIBRARY_PATH="$SC_PREFIX/lib:$SC_PREFIX/lib64"
+
+# headless options for GUI
+ENV QT_QPA_PLATFORM="offscreen"

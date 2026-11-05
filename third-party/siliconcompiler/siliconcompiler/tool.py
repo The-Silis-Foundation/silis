@@ -1,0 +1,4217 @@
+import contextlib
+import copy
+import csv
+import json
+import logging
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+try:
+    # 'resource' is not available on Windows, so we handle its absence gracefully.
+    import resource
+except ModuleNotFoundError:
+    resource = None
+
+try:
+    # 'pty' is not available on Windows.
+    import pty
+except ModuleNotFoundError:
+    pty = None
+
+import os.path
+
+from typing import Any, List, Dict, Tuple, Union, Optional, Set, TextIO, Type, TypeVar, \
+    TYPE_CHECKING
+from pathlib import Path
+
+from siliconcompiler.schema import BaseSchema, NamedSchema, DocsSchema, LazyLoad
+from siliconcompiler.schema import EditableSchema, Parameter, PerNode, Scope
+from siliconcompiler.schema.parametertype import NodeType
+from siliconcompiler.schema.utils import trim
+
+from siliconcompiler import utils, NodeStatus, Flowgraph
+from siliconcompiler import sc_open
+from siliconcompiler.utils import paths
+from siliconcompiler.utils.logging import SC_LOG, SC_LOGERROR, SC_CONSOLE_FORCE
+from siliconcompiler.utils.multiprocessing import MPManager, forking
+from siliconcompiler.utils.settings import KeyedSettingsCategory, Setting
+
+from siliconcompiler.schema_support.pathschema import PathSchema
+from siliconcompiler.schema_support.record import RecordTool, RecordSchema
+from siliconcompiler.schema_support.metric import MetricSchema
+from siliconcompiler.flowgraph import RuntimeFlowgraph
+
+if TYPE_CHECKING:
+    from siliconcompiler.scheduler import SchedulerNode
+    from siliconcompiler import Project, Design
+
+TTask = TypeVar('TTask', bound='Task')
+TOpenTask = TypeVar('TOpenTask', bound='OpenTask')
+
+#: Key marking an :class:`OpenTask` registry category as fully populated.
+#:
+#: The registry cannot use "the category is non-empty" as its populated test.
+#: :func:`~siliconcompiler.utils.showtools.showtasks` writes into the
+#: ``OpenTask``, ``ShowTask`` and ``ScreenshotTask`` categories alike, so
+#: populating any one of them leaves the other two non-empty but missing
+#: everything :meth:`OpenTask._OpenTask__populate_tasks` would have found by
+#: recursing subclasses -- every task class not hard-coded in ``showtools``.
+#: A subsequent populate of those categories then returned early believing they
+#: were ready, and the tasks it never registered stayed invisible for the life
+#: of the process.
+#:
+#: Other threads are kept out by holding the category (see
+#: :meth:`~siliconcompiler.utils.settings.SettingsManager.lock_category`), but
+#: the marker is what a *forked child* has to go on: it inherits whatever the
+#: registry held at the instant of the fork, with no lock left to wait on.
+#:
+#: The leading underscores keep the marker out of the task namespace: task keys
+#: are written as ``"<module>/<class>"``, so no task can ever collide with it.
+#: :meth:`OpenTask.get_task` filters it back out when it enumerates a category.
+_TASKS_POPULATED: str = "__populated__"
+
+
+class TaskError(Exception):
+    '''Error indicating that task execution cannot continue and should be terminated.'''
+    pass
+
+
+class TaskTimeout(TaskError):
+    '''Error indicating a timeout has occurred during task execution.
+
+    Args:
+        timeout (float): The execution time in seconds at which the timeout occurred.
+    '''
+
+    def __init__(self, *args, timeout=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timeout = timeout
+
+
+class TaskOutOfMemoryError(TaskError):
+    '''Error indicating that a task has run out of memory during execution.
+
+    Args:
+        memory_percent (float): The percentage of system memory usage at the time of the error.
+        available_mb (float): The available system memory in megabytes at the time of the error.
+    '''
+
+    def __init__(self, *args, memory_percent=None, available_mb=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.memory_percent = memory_percent
+        self.available_mb = available_mb
+
+
+class TaskExecutableNotFound(TaskError):
+    '''Error indicating that the required tool executable could not be found.'''
+    pass
+
+
+class TaskExecutableNotReceived(TaskExecutableNotFound):
+    '''Error indicating that the tool executable was not received from a previous step.
+
+    This exception is raised specifically when a task expects to receive an executable
+    from an upstream task but no executable file was provided.
+    '''
+    pass
+
+
+class TaskSkip(TaskError):
+    """
+    Error raised to indicate that the current task should be skipped.
+
+    This exception is only intended to be used within the `setup()` and
+    `pre_process()` methods of a Task.
+    """
+
+    def __init__(self, why: str, *args):
+        super().__init__(why, *args)
+        self.__why = why
+
+    @property
+    def why(self):
+        """str: The reason why the task is being skipped."""
+        return self.__why
+
+
+def _split_file_lines(buffer: str) -> Tuple[str, str]:
+    """Split a stream buffer at the last newline, holding back the remainder.
+
+    Used when writing the merged log. Unlike :func:`_split_io_lines` this only
+    ever breaks on ``\n``, so a progress bar redrawing with bare ``\r`` keeps
+    the single-line shape the tool wrote. Holding the trailing partial back
+    means a line is never cut in half, nor glued to a line from the other
+    stream, when the two are interleaved at drain granularity.
+    """
+    end = buffer.rfind("\n")
+    if end < 0:
+        return "", buffer
+    return buffer[:end + 1], buffer[end + 1:]
+
+
+def _split_io_lines(buffer: str) -> Tuple[List[str], str]:
+    """Split a stream buffer into complete lines plus a trailing partial.
+
+    Treats ``\\n``, ``\\r``, and ``\\r\\n`` as line terminators so that tools
+    that use carriage returns to redraw progress emit one log record per
+    frame. A trailing ``\\r`` at end-of-buffer is held back as partial in
+    case the next read begins with ``\\n`` (so ``\\r\\n`` is never split).
+    """
+    lines: List[str] = []
+    start = 0
+    i = 0
+    n = len(buffer)
+    while i < n:
+        c = buffer[i]
+        if c == '\n':
+            lines.append(buffer[start:i])
+            i += 1
+            start = i
+        elif c == '\r':
+            if i + 1 >= n:
+                # Trailing \r -- defer in case next read starts with \n.
+                break
+            lines.append(buffer[start:i])
+            if buffer[i + 1] == '\n':
+                i += 2
+            else:
+                i += 1
+            start = i
+        else:
+            i += 1
+    return lines, buffer[start:]
+
+
+def _run_breakpoint(exe: str, cmdlist: List[str], log_path: str) -> int:
+    """Run an executable interactively in a pseudo-terminal.
+
+    Used for breakpoint sessions where the user needs to interact with the
+    tool (e.g. tclreadline-driven shells). Compared to ``pty.spawn`` this
+    helper additionally:
+
+      * Propagates the parent terminal's window size (``TIOCSWINSZ``) to the
+        child PTY so readline-based shells wrap and redraw lines correctly.
+      * Forwards ``SIGWINCH`` so resizing the outer terminal during the
+        session updates the child's view of the window size.
+      * Puts the parent stdin into raw mode (restored on exit) so signals,
+        arrow keys, and tab-completion pass through to the child unmolested.
+      * Tees output to ``log_path`` as a faithful byte-for-byte recording
+        (including ANSI/control sequences). View it with ``cat`` or
+        ``less -R`` to see the rendered form. Stateless filtering would
+        be lossy for in-place line edits (history recall, completion),
+        so the log keeps the raw stream and lets the renderer interpret
+        it.
+      * Returns the exit code (decoded from waitpid status), not the raw
+        wait status.
+
+    NOTE: This path intentionally bypasses the memory, timeout, and nice
+    handling that the standard subprocess path provides. Interactive
+    sessions are expected to be supervised by the user, so SC does not
+    impose its own resource limits on them.
+
+    Returns the child's exit code. ``128 + signum`` for signal exits, per
+    ``os.waitstatus_to_exitcode`` semantics.
+    """
+    if pty is None:
+        raise RuntimeError("pty module is not available on this platform")
+
+    # POSIX-only modules -- kept inside the function since this is the only
+    # place they're used and they're not importable on Windows.
+    import select
+    import signal
+    import termios
+    import tty
+    import fcntl
+
+    # Open the controlling terminal directly. We deliberately do NOT route
+    # through ``sys.stdin``/``sys.stdout`` here.
+    #
+    # Why: when this code runs inside a multiprocessing worker, Python's
+    # ``_close_stdin`` reassigns ``sys.stdin`` to wrap a freshly opened
+    # ``/dev/null`` fd (see CPython multiprocessing/process.py and
+    # multiprocessing/util.py). Crucially, ``sys.stdin.close()`` does NOT
+    # close the underlying fd 0 because the Python stdio wrappers are
+    # built with ``closefd=False`` -- so fd 0 stays attached to the user's
+    # real terminal, but ``sys.stdin.fileno()`` now returns the /dev/null
+    # fd (typically 3). Reading from that path gives instant EOF and
+    # silently breaks Enter/Tab/arrow forwarding. This is also why the
+    # original ``pty.spawn`` implementation worked: it referenced
+    # ``STDIN_FILENO`` (= 0) directly, bypassing the redirected
+    # ``sys.stdin``.
+    #
+    # ``/dev/tty`` is preferred because it always refers to the calling
+    # process's controlling terminal regardless of any fd redirection.
+    # If that's unavailable (CI, daemons, no controlling terminal) we
+    # fall back to fd 0 directly, which mirrors what pty.spawn did.
+    # O_CLOEXEC ensures the child of pty.fork() (and the tool we exec
+    # into it) does not inherit a backdoor handle to the real
+    # controlling terminal. Without it, the executed tool could bypass
+    # our PTY isolation and write/read directly to the user's terminal,
+    # defeating the log capture and raw-mode plumbing.
+    tty_fd = -1
+    try:
+        tty_fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY | os.O_CLOEXEC)
+    except OSError:
+        tty_fd = -1
+
+    with forking():
+        pid, master_fd = pty.fork()
+    if pid == 0:
+        # Child: replace ourselves with the target binary. argv[0] is set to
+        # ``exe`` so diagnostic output identifies the tool by its real name.
+        try:
+            os.execvp(exe, [exe, *cmdlist])
+        except Exception:
+            os._exit(127)
+
+    def _safe_fileno(stream):
+        # ``stream.fileno()`` can raise io.UnsupportedOperation when the
+        # stream is a pseudofile (e.g. captured stdin under pytest, or
+        # redirected I/O in some embeddings).
+        if stream is None:
+            return -1
+        try:
+            return stream.fileno()
+        except Exception:
+            return -1
+
+    # Fallback chain when /dev/tty is unavailable:
+    #   1. fd 0 / fd 1 directly -- matches what ``pty.spawn`` did and works
+    #      around the multiprocessing-worker case where ``sys.stdin`` has
+    #      been reassigned to wrap a /dev/null fd while fd 0 itself still
+    #      points at the real terminal.
+    #   2. ``sys.stdin.fileno()`` / ``sys.stdout.fileno()`` -- covers
+    #      embedded environments that genuinely reassign fd 0/1.
+    if tty_fd >= 0:
+        parent_in = parent_out = tty_fd
+    else:
+        parent_in = 0 if os.isatty(0) else _safe_fileno(sys.stdin)
+        parent_out = 1 if os.isatty(1) else _safe_fileno(sys.stdout)
+    # ``parent_is_tty`` gates the operations that *only make sense* when the
+    # parent's stdin is a real terminal: querying its window size and
+    # listening for SIGWINCH. The TIOCGWINSZ ioctl fails with ENOTTY on a
+    # pipe or regular file, and SIGWINCH is delivered by the kernel only
+    # when a terminal actually resizes -- so attempting either against a
+    # non-TTY would just produce errors with no upside.
+    #
+    # NOTE: this flag does NOT gate stdin forwarding or raw-mode setup.
+    # Those run whenever we have any stdin fd at all, with the calls
+    # wrapped in try/except -- see below for why that matters for tab
+    # completion and arrow keys.
+    parent_is_tty = parent_in >= 0 and os.isatty(parent_in)
+
+    def _push_winsize(*_args):
+        # Skip silently for non-TTY parents: ioctl would fail with ENOTTY.
+        if not parent_is_tty:
+            return
+        try:
+            size = fcntl.ioctl(parent_in, termios.TIOCGWINSZ, b'\x00' * 8)
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, size)
+        except OSError:
+            pass
+
+    # Push the initial window size so readline-based shells (tclreadline,
+    # GNU readline, ...) wrap and redraw lines using the real terminal
+    # geometry instead of the kernel's 80x24 default for a fresh PTY.
+    _push_winsize()
+
+    old_winch = None
+    if parent_is_tty:
+        # Re-push winsize whenever the user resizes the outer terminal so
+        # the child's view stays in sync for the rest of the session.
+        # Saved handler is restored in the finally block below.
+        try:
+            old_winch = signal.signal(signal.SIGWINCH, _push_winsize)
+        except (ValueError, OSError):
+            old_winch = None
+
+    # Apply raw mode opportunistically whenever we have an stdin fd. Without
+    # raw mode the parent terminal stays line-disciplined, which means the
+    # user has to press Enter before any keystroke reaches the child -- fatal
+    # for tab completion, arrow-key history, and tclreadline-style editing.
+    # ``setraw`` on a non-TTY fd raises termios.error and is silently
+    # ignored, mirroring ``pty.spawn``'s behaviour.
+    old_attrs = None
+    if parent_in >= 0:
+        try:
+            old_attrs = termios.tcgetattr(parent_in)
+            tty.setraw(parent_in)
+        except (termios.error, OSError):
+            old_attrs = None
+
+    # Always forward parent stdin when we have a valid fd. ``pty.spawn``
+    # does the same -- gating this on ``isatty`` would silently break
+    # interactive sessions whose stdin is a real TTY but reports otherwise
+    # (e.g. inherited through a multiprocessing worker on some setups).
+    readable = [master_fd]
+    if parent_in >= 0:
+        readable.append(parent_in)
+
+    def _write_all(fd, data):
+        # ``os.write`` is a thin wrapper over ``write(2)`` and can return
+        # fewer bytes than requested, especially on PTYs whose line-
+        # discipline buffer is partly full. Loop until the whole buffer
+        # is consumed. Returns True on full write, False if any byte
+        # couldn't be written; caller decides how to react.
+        written = 0
+        n = len(data)
+        while written < n:
+            try:
+                chunk = os.write(fd, data[written:])
+            except InterruptedError:
+                continue
+            except OSError:
+                return False
+            if chunk == 0:
+                # No progress -- treat as failure rather than spin.
+                return False
+            written += chunk
+        return True
+
+    # ``log_writer`` is opened inside the try block so that an open()
+    # failure (disk full, permission denied, ...) can't bypass the
+    # cleanup that restores raw-mode termios state, the SIGWINCH
+    # handler, and closes master_fd / tty_fd. Without this, a failed
+    # open would leave the user's terminal stuck in raw mode.
+    #
+    # The outer try/finally guarantees ``os.waitpid`` runs even if the
+    # log open/close raises -- the child of pty.fork() must always be
+    # reaped, otherwise it lingers as a zombie.
+    log_writer = None
+    status = None
+    try:
+        try:
+            log_writer = open(log_path, 'wb')
+            while True:
+                try:
+                    rlist, _, _ = select.select(readable, [], [])
+                except (InterruptedError, OSError):
+                    continue
+
+                if master_fd in rlist:
+                    try:
+                        data = os.read(master_fd, 4096)
+                    except OSError:
+                        data = b''
+                    if not data:
+                        break
+                    if parent_out >= 0:
+                        # Best-effort: failures writing to the user's
+                        # terminal are ignored (matches prior behaviour).
+                        _write_all(parent_out, data)
+                    try:
+                        log_writer.write(data)
+                        log_writer.flush()
+                    except OSError:
+                        pass
+
+                if parent_in in rlist:
+                    try:
+                        data = os.read(parent_in, 4096)
+                    except OSError:
+                        data = b''
+                    if not data:
+                        readable.remove(parent_in)
+                        continue
+                    if not _write_all(master_fd, data):
+                        # Child PTY closed / errored -- exit the loop and
+                        # let the cleanup + waitpid path run.
+                        break
+        finally:
+            if old_attrs is not None:
+                try:
+                    termios.tcsetattr(parent_in, termios.TCSADRAIN, old_attrs)
+                except termios.error:
+                    pass
+            if old_winch is not None:
+                try:
+                    signal.signal(signal.SIGWINCH, old_winch)
+                except (ValueError, OSError):
+                    pass
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            if tty_fd >= 0:
+                try:
+                    os.close(tty_fd)
+                except OSError:
+                    pass
+            if log_writer is not None:
+                # Swallow close-time I/O errors so the inner finally
+                # can't propagate and skip the waitpid below.
+                try:
+                    log_writer.close()
+                except OSError:
+                    pass
+    finally:
+        try:
+            _, status = os.waitpid(pid, 0)
+        except OSError:
+            status = None
+
+    if status is None:
+        return 1
+    return os.waitstatus_to_exitcode(status)
+
+
+class Task(NamedSchema, PathSchema, DocsSchema):
+    """
+    A schema class that defines the parameters and methods for a single task
+    in a compilation flow.
+
+    This class provides the framework for setting up, running, and post-processing
+    a tool. It includes methods for managing executables, versions, runtime
+    arguments, and file I/O.
+    """
+    # Regex for parsing version check strings like ">=1.2.3"
+    __parse_version_check_str = r"""
+        (?P<operator>(==|!=|<=|>=|<|>|~=))
+        \s*
+        (?P<version>
+            [^,;\s)]* # Since this is a "legacy" specifier, and the version
+                      # string can be just about anything, we match everything
+                      # except for whitespace, a semi-colon for marker support,
+                      # a closing paren since versions can be enclosed in
+                      # them, and a comma since it's a version separator.
+        )
+        """
+    __parse_version_check = re.compile(
+        r"^\s*" + __parse_version_check_str + r"\s*$",
+        re.VERBOSE | re.IGNORECASE)
+
+    __IO_POLL_INTERVAL: float = 0.1
+    __MEM_POLL_INTERVAL: float = 0.5
+    __MEMORY_WARN_LIMIT: int = 90
+    __MEMORY_KILL_LIMIT_MB: int = 256
+
+    def __init__(self):
+        super().__init__()
+
+        self.__schema_task()
+
+        self.__set_runtime(None)
+
+    @classmethod
+    def _getdict_type(cls) -> str:
+        """Returns the metadata for getdict."""
+        return Task.__name__
+
+    def _from_dict(self, manifest: Dict,
+                   keypath: Union[List[str], Tuple[str, ...]],
+                   version: Optional[Tuple[int, ...]] = None,
+                   lazyload: LazyLoad = LazyLoad.ON) \
+            -> Tuple[Set[Tuple[str, ...]], Set[Tuple[str, ...]]]:
+        """
+        Populates the schema from a dictionary, dynamically adding 'var'
+        parameters found in the manifest that are not already defined.
+        """
+        if not lazyload.is_enforced and "var" in manifest:
+            # Collect existing and manifest var keys
+            var_keys = [k[0] for k in self.allkeys("var")]
+            manifest_keys = set(manifest["var"].keys())
+
+            # Add new vars found in the manifest to the schema
+            edit = EditableSchema(self)
+            for var in sorted(manifest_keys.difference(var_keys)):
+                edit.insert("var", var,
+                            Parameter.from_dict(
+                                manifest["var"][var],
+                                keypath=tuple([*keypath, var]),
+                                version=version))
+                del manifest["var"][var]
+
+            if not manifest["var"]:
+                del manifest["var"]
+
+        return super()._from_dict(manifest, keypath, version=version, lazyload=lazyload)
+
+    @contextlib.contextmanager
+    def runtime(self, node: "SchedulerNode",
+                step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                relpath: Optional[str] = None):
+        """
+        A context manager to set the runtime information for a task.
+
+        This method creates a temporary copy of the task object with runtime
+        information (like the current step, index, and working directories)
+        populated from a SchedulerNode. This allows methods within the context
+        to access runtime-specific configuration and paths.
+
+        Args:
+            node (SchedulerNode): The scheduler node for this runtime context.
+        """
+        from siliconcompiler.scheduler import SchedulerNode
+        if node and not isinstance(node, SchedulerNode):
+            raise TypeError("node must be a scheduler node")
+
+        obj_copy = copy.copy(self)
+        obj_copy.__set_runtime(node, step=step, index=index, relpath=relpath)
+        yield obj_copy
+
+    def __set_runtime(self, node: Optional["SchedulerNode"],
+                      step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                      relpath: Optional[str] = None) -> None:
+        """
+        Private helper to set the runtime information for executing a task.
+
+        Args:
+            node (SchedulerNode): The scheduler node for this runtime.
+        """
+        self.__node: Optional["SchedulerNode"] = node
+        self.__schema_full: Optional["Project"] = None
+        self.__logger: Optional[logging.Logger] = None
+        self.__design_name: Optional[str] = None
+        self.__design_top: Optional[str] = None
+        self.__relpath: Optional[str] = relpath
+        self.__jobdir: Optional[str] = None
+        self.__step: Optional[str] = None
+        self.__index: Optional[str] = None
+        if node:
+            if step is not None or index is not None:
+                raise RuntimeError("step and index cannot be provided with node")
+
+            self.__schema_full = node.project
+            self.__logger = node.project.logger
+            self.__design_name = node.name
+            self.__design_top = node.topmodule
+            self.__jobdir = node.workdir
+
+            self.__step = node.step
+            self.__index = node.index
+        else:
+            self.__step = step
+            if isinstance(index, int):
+                index = str(index)
+            self.__index = index
+
+        self.__schema_record: Optional[RecordSchema] = None
+        self.__schema_metric: Optional[MetricSchema] = None
+        self.__schema_flow: Optional[Flowgraph] = None
+        self.__schema_flow_runtime: Optional[RuntimeFlowgraph] = None
+        self.__io_runtime_flow: Optional[RuntimeFlowgraph] = None
+        if self.__schema_full:
+            self.__schema_record = self.__schema_full.get("record", field="schema")
+            self.__schema_metric = self.__schema_full.get("metric", field="schema")
+
+            if not self.__step:
+                self.__step = self.__schema_full.get('arg', 'step')
+            if not self.__index:
+                self.__index = self.__schema_full.get('arg', 'index')
+
+            if not self.__step or not self.__index:
+                raise RuntimeError("step or index not specified")
+
+            flow = self.__schema_full.option.get_flow()
+            if not flow:
+                raise RuntimeError("flow not specified")
+            self.__schema_flow = self.__schema_full.get_flow(flow)
+
+            self.__schema_flow_runtime = RuntimeFlowgraph(
+                self.__schema_flow,
+                from_steps=set([step for step, _ in self.__schema_flow.get_entry_nodes()]),
+                prune_nodes=self.__schema_full.option.get_prune())
+
+            # Runtime view honoring option.from / option.to / option.prune,
+            # i.e. the subset of nodes that will actually run this invocation.
+            # Used by IO validation to distinguish running upstreams (whose
+            # outputs come from declared task outputs) from non-running ones
+            # (whose outputs must already exist on disk).
+            self.__io_runtime_flow = RuntimeFlowgraph.from_project(self.__schema_full)
+
+    @property
+    def design_name(self) -> str:
+        """str: The name of the design."""
+        return self.__design_name
+
+    @property
+    def design_topmodule(self) -> str:
+        """str: The top module of the design for the current node."""
+        return self.__design_top
+
+    @property
+    def node(self) -> "SchedulerNode":
+        """SchedulerNode: The scheduler node for the current runtime."""
+        return self.__node
+
+    @property
+    def step(self) -> str:
+        """str: The step for the current runtime."""
+        return self.__step
+
+    @property
+    def index(self) -> str:
+        """str: The index for the current runtime."""
+        return self.__index
+
+    @property
+    def name(self) -> str:
+        """str: The name of this task."""
+        try:
+            return self.task()
+        except NotImplementedError:
+            return super().name
+
+    def tool(self) -> str:
+        """str: The name of the tool associated with this task."""
+        raise NotImplementedError("tool name must be implemented by the child class")
+
+    def task(self) -> str:
+        """str: The name of this task."""
+        raise NotImplementedError("task name must be implemented by the child class")
+
+    @property
+    def logger(self) -> logging.Logger:
+        """logging.Logger: The logger instance."""
+        return self.__logger
+
+    @property
+    def nodeworkdir(self) -> str:
+        """str: The path to the node's working directory."""
+        return self.__jobdir
+
+    @property
+    def cachedir(self) -> str:
+        """str: The path to this tool's cache directory.
+
+        A place for whatever the tool carries from one run to the next -- a
+        compiler cache, an incremental build directory. Unlike
+        :attr:`nodeworkdir`, which is emptied before every run, this survives,
+        and it is shared by every task of the tool and every design built with
+        it: it holds a tool's own cache, not a node's outputs.
+
+        Nothing is created here and nothing collects it. A driver that wants the
+        directory points its tool at it, usually with an environment variable,
+        and relies on the tool to cap its own size.
+
+        It lives under :keypath:`option,cachedir`, so a container running the
+        task has it mounted and a cluster sharing that option shares the cache.
+        Override this to key the directory by something other than the tool
+        name -- by tool and version, say, or by :meth:`get_digest` where a
+        cached result is only valid for the configuration that produced it::
+
+            @property
+            def cachedir(self):
+                return os.path.join(super().cachedir, self.get_digest(length=16))
+
+        Sharing across designs is the default because that is what a compiler
+        cache wants; a digest is for the caches that cannot.
+        """
+        return os.path.join(paths.toolcachedir(self.project), self.tool())
+
+    @property
+    def schema_record(self) -> RecordSchema:
+        return self.__schema_record
+
+    @property
+    def schema_metric(self) -> MetricSchema:
+        return self.__schema_metric
+
+    @property
+    def project(self) -> "Project":
+        return self.__schema_full
+
+    @property
+    def schema_flow(self) -> Flowgraph:
+        return self.__schema_flow
+
+    @property
+    def schema_flowruntime(self) -> RuntimeFlowgraph:
+        return self.__schema_flow_runtime
+
+    @property
+    def _io_runtime_flow(self) -> RuntimeFlowgraph:
+        """
+        Runtime view of the flow that honors the project's ``from`` / ``to``
+        / ``prune`` options -- i.e. the nodes that will actually run this
+        invocation. Distinct from ``schema_flowruntime`` (which is the full
+        graph minus pruned nodes), used by IO validation so that nodes
+        outside the active run are treated as on-disk dependencies.
+        """
+        return self.__io_runtime_flow
+
+    @property
+    def _remote_toolname(self) -> Optional[str]:
+        """
+        Names the tool that must be installed where this task runs remotely.
+
+        A remote run uses this to choose an environment for the node, such as a
+        container image that holds the tool. The leading underscore does not
+        make it internal: overriding it is how a driver declares what it needs.
+
+        The default, :meth:`tool`, is right for most tasks. That includes a task
+        with no executable that drives its tool's Python package in
+        SiliconCompiler's own process, as the slang tasks do.
+
+        Return ``None`` when the task needs nothing beyond SiliconCompiler
+        itself, as the builtin tasks do.
+
+        This is read from a task that has not been set up and has no project,
+        so return a constant rather than a value computed from the schema.
+
+        Returns:
+            Optional[str]: the tool the node needs, or ``None`` when it needs
+            only SiliconCompiler.
+        """
+        return self.tool()
+
+    @property
+    def _remote_inherits_env(self) -> bool:
+        """
+        Says whether this task runs remotely wherever its input node ran.
+
+        Return ``True`` for a task that runs what an earlier node produced,
+        because the environment that built it is the one most likely to be able
+        to run it. ``exec_input`` does this. Where the node has more than one
+        input, the first is followed. Pair it with :attr:`_remote_toolname`
+        returning ``None``, so the node requires no tool of its own.
+
+        Like :attr:`_remote_toolname`, this is part of the driver contract
+        despite the underscore, and is read from a task that has not been set
+        up and has no project.
+
+        Returns:
+            bool: ``True`` to run where the input node ran. The default,
+            ``False``, places the node by :attr:`_remote_toolname` alone.
+        """
+        return False
+
+    def get_logpath(self, log: str) -> str:
+        """
+        Returns the relative path to a specified log file.
+
+        Args:
+            log (str): The type of log file (e.g., 'exe', 'sc').
+
+        Returns:
+            str: The relative path to the log file from the node's workdir.
+        """
+        return os.path.relpath(self.__node.get_log(log), self.__jobdir)
+
+    def has_breakpoint(self) -> bool:
+        """
+        Checks if a breakpoint is set for this task.
+
+        Returns:
+            bool: True if a breakpoint is active, False otherwise.
+        """
+        return self.project.option.get_breakpoint(step=self.__step, index=self.__index)
+
+    def get_exe(self) -> Optional[str]:
+        """
+        Determines the absolute path for the task's executable.
+
+        Raises:
+            TaskExecutableNotFound: If the executable cannot be found in the system PATH.
+
+        Returns:
+            str: The absolute path to the executable, or None if not specified.
+        """
+
+        exe: Optional[str] = self.get('exe')
+
+        if exe is None:
+            return None
+
+        # Collect PATH from environment variables
+        env = self.get_runtime_environmental_variables(include_path=True)
+
+        fullexe = shutil.which(exe, path=env["PATH"])
+
+        if not fullexe:
+            self._exe_not_found_handler()
+            raise TaskExecutableNotFound(f"{exe} could not be found")
+
+        return fullexe
+
+    def _exe_not_found_handler(self) -> None:
+        """
+        Helper method to provide additional feedback to users for missing executables
+        """
+        tools = {}
+        with open(os.path.join(os.path.dirname(__file__), "toolscripts", "_tools.json")) as f:
+            tools = json.load(f)
+
+        if self.tool() in tools:
+            self.logger.info(f"Missing tool can be installed via: \"sc-install {self.tool()}\"")
+
+    def get_exe_version(self, workdir: Optional[str] = None) -> Optional[str]:
+        """
+        Gets the version of the task's executable by running it with a version switch.
+
+        Raises:
+            TaskExecutableNotFound: If the executable is not found.
+            NotImplementedError: If the `parse_version` method is not implemented.
+
+        Args:
+            workdir (str): The working directory to use for the version check. If None,
+                the current working directory is used.
+
+        Returns:
+            str: The parsed version string.
+        """
+
+        veropt: Optional[List[str]] = self.get('vswitch')
+        if not veropt:
+            return None
+
+        exe = self.get_exe()
+        if not exe:
+            return None
+
+        exe_path, exe_base = os.path.split(exe)
+
+        cmdlist = [exe]
+        cmdlist.extend(veropt)
+
+        self.logger.debug(f'Running {self.tool()}/{self.task()} version check: '
+                          f'{shlex.join(cmdlist)}')
+
+        proc = subprocess.run(cmdlist,
+                              stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT,
+                              universal_newlines=True,
+                              cwd=workdir)
+
+        if proc.returncode != 0:
+            self.logger.warning(f"Version check on '{exe_base}' ended with "
+                                f"code {proc.returncode}")
+
+        try:
+            version = self.parse_version(proc.stdout)
+        except NotImplementedError:
+            raise NotImplementedError(f'{self.tool()}/{self.task()} does not implement '
+                                      'parse_version()')
+        except Exception:
+            self.logger.error(f'{self.tool()}/{self.task()} failed to parse version string: '
+                              f'{proc.stdout}')
+            raise
+
+        self.logger.info(f"Tool '{exe_base}' found with version '{version}' "
+                         f"in directory '{exe_path}'")
+
+        return version
+
+    def check_exe_version(self, reported_version: str) -> bool:
+        """
+        Checks if the reported version of a tool satisfies the requirements
+        specified in the schema.
+
+        Args:
+            reported_version (str): The version string reported by the tool.
+
+        Returns:
+            bool: True if the version is acceptable, False otherwise.
+        """
+
+        spec_sets: Optional[List[str]] = self.get('version')
+        if not spec_sets:
+            # No requirement, so always true
+            return True
+
+        # Imported here rather than at module scope: packaging's version parser
+        # pulls in platform/sysconfig probing and is only needed once a tool
+        # with a version requirement actually reports one.
+        from packaging.version import Version, InvalidVersion
+        from packaging.specifiers import SpecifierSet, InvalidSpecifier
+
+        for spec_set in spec_sets:
+            split_specs = [s.strip() for s in spec_set.split(",") if s.strip()]
+            specs_list = []
+            for spec in split_specs:
+                match = re.match(Task.__parse_version_check, spec)
+                if match is None:
+                    self.logger.warning(f'Invalid version specifier {spec}. '
+                                        f'Defaulting to =={spec}.')
+                    operator = '=='
+                    spec_version = spec
+                else:
+                    operator = match.group('operator')
+                    spec_version = match.group('version')
+                specs_list.append((operator, spec_version))
+
+            try:
+                normalized_version = self.normalize_version(reported_version)
+            except Exception:
+                self.logger.error(f'Unable to normalize version for {self.tool()}/{self.task()}: '
+                                  f'{reported_version}')
+                raise
+
+            try:
+                version = Version(normalized_version)
+            except InvalidVersion:
+                self.logger.error(f'Version {normalized_version} reported by '
+                                  f'{self.tool()}/{self.task()} does not match standard.')
+                return False
+
+            try:
+                normalized_spec_list = [
+                    f'{op}{self.normalize_version(ver)}' for op, ver in specs_list]
+                normalized_specs = ','.join(normalized_spec_list)
+            except Exception:
+                self.logger.error(f'Unable to normalize versions for '
+                                  f'{self.tool()}/{self.task()}: '
+                                  f'{",".join([f"{op}{ver}" for op, ver in specs_list])}')
+                raise
+
+            try:
+                spec_set = SpecifierSet(normalized_specs)
+            except InvalidSpecifier:
+                self.logger.error(f'Version specifier set {normalized_specs} '
+                                  'does not match standard.')
+                return False
+
+            if version in spec_set:
+                return True
+
+        allowedstr = '; '.join(spec_sets)
+        self.logger.error(f"Version check failed for {self.tool()}/{self.task()}. "
+                          "Check installation.")
+        self.logger.error(f"Found version {reported_version}, "
+                          f"did not satisfy any version specifier set {allowedstr}.")
+        return False
+
+    def get_runtime_environmental_variables(self, include_path: bool = True) \
+            -> Dict[str, str]:
+        """
+        Determines the environment variables needed for the task.
+
+        Args:
+            include_path (bool): If True, includes the PATH variable.
+
+        Returns:
+            dict: A dictionary of environment variable names to their values.
+        """
+
+        # Add global environmental vars. A key can be declared without ever being
+        # given a value, which os.environ will not accept, so those are skipped.
+        envvars: Dict[str, str] = {}
+        for env in self.__schema_full.option.getkeys('env'):
+            value = self.__schema_full.option.get_env(env)
+            if value is not None:
+                envvars[env] = value
+
+        # Add tool-specific license server vars
+        for lic_env in self.getkeys('licenseserver'):
+            license_file: List[str] = self.get('licenseserver', lic_env)
+            if license_file:
+                envvars[lic_env] = ':'.join(license_file)
+
+        if include_path:
+            path: Optional[str] = self.find_files("path", missing_ok=True)
+
+            envvars["PATH"] = os.getenv("PATH", os.defpath)
+
+            if path:
+                envvars["PATH"] = path + os.pathsep + envvars["PATH"]
+
+            # Forward additional variables like LD_LIBRARY_PATH
+            for var in ('LD_LIBRARY_PATH',):
+                val = os.getenv(var, None)
+                if val:
+                    envvars[var] = val
+
+        # Add task-specific vars
+        for env in self.getkeys("env"):
+            value = self.get("env", env)
+            if value is not None:
+                envvars[env] = value
+
+        return envvars
+
+    def get_runtime_arguments(self) -> List[str]:
+        """
+        Constructs the command-line arguments needed to run the task.
+
+        Returns:
+            list: A list of command-line arguments.
+        """
+
+        cmdargs = []
+        try:
+            usr_args = self.runtime_options()
+            if usr_args is None:
+                raise RuntimeError("runtime_options() returned None")
+            if not isinstance(usr_args, (list, set, tuple)):
+                raise RuntimeError("runtime_options() must return a list")
+
+            if self.__relpath:
+                args = []
+                for arg in usr_args:
+                    arg = str(arg)
+                    if os.path.isabs(arg) and os.path.exists(arg):
+                        args.append(os.path.relpath(arg, self.__relpath))
+                    else:
+                        args.append(arg)
+            else:
+                args = usr_args
+
+            cmdargs.extend(args)
+        except Exception:
+            self.logger.error(f'Failed to get runtime options for {self.tool()}/{self.task()}')
+            raise
+
+        # Cleanup args
+        cmdargs = [str(arg).strip() for arg in cmdargs]
+
+        return cmdargs
+
+    def generate_replay_script(self, filepath: str, workdir: str, include_path: bool = True) \
+            -> None:
+        """
+        Generates a shell script to replay the task's execution.
+
+        Args:
+            filepath (str): The path to write the replay script to.
+            workdir (str): The path to the run's working directory.
+            include_path (bool): If True, includes PATH information.
+        """
+        replay_opts: Dict[str, Any] = {}
+        replay_opts["quote"] = shlex.quote
+        replay_opts["work_dir"] = workdir
+        replay_opts["exports"] = self.get_runtime_environmental_variables(include_path=include_path)
+
+        replay_opts["executable"] = self.get('exe')
+        replay_opts["step"] = self.__step
+        replay_opts["index"] = self.__index
+        replay_opts["cfg_file"] = f"inputs/{self.__design_name}.pkg.json"
+        replay_opts["node_only"] = 0 if replay_opts["executable"] else 1
+
+        vswitch: Optional[List[str]] = self.get('vswitch')
+        if vswitch:
+            replay_opts["version_flag"] = shlex.join(vswitch)
+
+        # Regex to detect arguments and file paths for formatting
+        arg_test = re.compile(r'^[-+]')
+        file_test = re.compile(r'^[/\.]')
+
+        def format_cmd(args: List[str]) -> List[str]:
+            cmd: List[str] = [replay_opts["executable"]]
+
+            for cmdarg in args:
+                add_new_line = len(cmd) == 1
+
+                if arg_test.match(cmdarg) or file_test.match(cmdarg):
+                    add_new_line = True
+                else:
+                    if not arg_test.match(cmd[-1]):
+                        add_new_line = True
+
+                cmdarg = shlex.quote(cmdarg)
+                if add_new_line:
+                    cmd.append(cmdarg)
+                else:
+                    cmd[-1] += f' {cmdarg}'
+            return cmd
+
+        replay_opts["cmds"] = []
+        replay_opts["modes"] = {}
+        if replay_opts["executable"]:
+            args = self.get_runtime_arguments()
+            replay_opts["cmds"] = format_cmd(args)
+            for mode, mode_args in self.replay_modes(args).items():
+                replay_opts["modes"][mode] = format_cmd(mode_args)
+
+        # Create replay file from template
+        with open(filepath, 'w') as f:
+            f.write(utils.get_file_template("replay/replay.sh.j2").render(replay_opts))
+            f.write("\n")
+
+        os.chmod(filepath, 0o755)
+
+    def setup_work_directory(self, workdir: str, remove_exist: bool = True) -> None:
+        """
+        Creates the runtime directories needed to execute a task.
+
+        Args:
+            workdir (str): The path to the node's working directory.
+            remove_exist (bool): If True, removes the directory if it already exists.
+        """
+
+        # Delete existing directory if requested
+        if os.path.isdir(workdir) and remove_exist:
+            shutil.rmtree(workdir)
+
+        # Create standard subdirectories
+        os.makedirs(workdir, exist_ok=True)
+        os.makedirs(os.path.join(workdir, 'inputs'), exist_ok=True)
+        os.makedirs(os.path.join(workdir, 'outputs'), exist_ok=True)
+        os.makedirs(os.path.join(workdir, 'reports'), exist_ok=True)
+
+    def __write_yaml_manifest(self, fout: TextIO, manifest: BaseSchema) -> None:
+        """Private helper to write a manifest in YAML format."""
+        import yaml
+
+        class YamlIndentDumper(yaml.Dumper):
+            def increase_indent(self, flow=False, indentless=False):
+                return super().increase_indent(flow=flow, indentless=indentless)
+
+        # Emit tuples, such as the (step, index) pairs in the flowgraph, as plain
+        # sequences. The default representer tags them '!!python/tuple', which
+        # only a python reader can load.
+        YamlIndentDumper.add_representer(
+            tuple, lambda dumper, data: dumper.represent_list(list(data)))
+
+        fout.write(yaml.dump(manifest.getdict(), Dumper=YamlIndentDumper,
+                             default_flow_style=False))
+
+    def get_tcl_variables(self, manifest: Optional[BaseSchema] = None) -> Dict[str, str]:
+        """
+        Gets a dictionary of variables to define for the task in a Tcl manifest.
+
+        Args:
+            manifest (BaseSchema, optional): The manifest to retrieve values from.
+
+        Returns:
+            dict: A dictionary of variable names and their Tcl-formatted values.
+        """
+
+        if manifest is None:
+            manifest = self.project
+
+        vars = {
+            "sc_tool": NodeType.to_tcl(self.tool(), "str"),
+            "sc_task": NodeType.to_tcl(self.task(), "str"),
+            "sc_topmodule": NodeType.to_tcl(self.design_topmodule, "str"),
+            "sc_designlib": NodeType.to_tcl(self.design_name, "str")
+        }
+
+        refdir: Parameter = manifest.get("tool", self.tool(), "task", self.task(), "refdir",
+                                         field=None)
+        if refdir.get(step=self.__step, index=self.__index):
+            vars["sc_refdir"] = refdir.gettcl(step=self.__step, index=self.__index)
+
+        return vars
+
+    def __write_tcl_manifest(self, fout: TextIO, manifest: BaseSchema):
+        """Private helper to write a manifest in Tcl format."""
+        template = utils.get_file_template('tcl/manifest.tcl.j2')
+        tcl_set_cmds = []
+        for key in sorted(manifest.allkeys()):
+            # Skip default values
+            if 'default' in key:
+                continue
+
+            param: Parameter = manifest.get(*key, field=None)
+
+            # Create a Tcl dict key string
+            keystr = ' '.join([NodeType.to_tcl(keypart, 'str') for keypart in key])
+
+            valstr = param.gettcl(step=self.__step, index=self.__index)
+            if valstr is None:
+                continue
+
+            tcl_set_cmds.append(f"dict set sc_cfg {keystr} {valstr}")
+
+        if template:
+            fout.write(template.render(manifest_dict='\n'.join(tcl_set_cmds),
+                                       scroot=os.path.abspath(
+                                           os.path.join(os.path.dirname(__file__))),
+                                       toolvars=self.get_tcl_variables(manifest)))
+        else:
+            for cmd in tcl_set_cmds:
+                fout.write(cmd + '\n')
+            fout.write('\n')
+
+    def __write_csv_manifest(self, fout: TextIO, manifest: BaseSchema) -> None:
+        """Private helper to write a manifest in CSV format."""
+        csvwriter = csv.writer(fout)
+        csvwriter.writerow(['Keypath', 'Value'])
+
+        for key in sorted(manifest.allkeys()):
+            keypath = ','.join(key)
+            param: Parameter = manifest.get(*key, field=None)
+            if param.get(field="pernode").is_never():
+                value = param.get()
+            else:
+                value = param.get(step=self.__step, index=self.__index)
+
+            if isinstance(value, (set, list)):
+                for item in value:
+                    csvwriter.writerow([keypath, item])
+            else:
+                csvwriter.writerow([keypath, value])
+
+    def write_task_manifest(self, directory: str, backup: bool = True) -> None:
+        """
+        Writes the manifest needed for the task in the format specified by the tool.
+
+        Args:
+            directory (str): The directory to write the manifest into.
+            backup (bool): If True, backs up an existing manifest.
+        """
+
+        suffix = self.get('format')
+        if not suffix:
+            return
+
+        manifest_path = os.path.join(directory, f"sc_manifest.{suffix}")
+
+        if backup and os.path.exists(manifest_path):
+            shutil.copyfile(manifest_path, f'{manifest_path}.bak')
+
+        # Generate a schema with absolute paths for the manifest
+        schema = self.__abspath_schema()
+
+        if suffix == "json":
+            schema.write_manifest(manifest_path)
+        else:
+            # Pin UTF-8 rather than taking the platform default. A design name
+            # or file path with a non-ASCII character would otherwise fail to
+            # write on any host whose locale is not UTF-8 -- LANG=C in a
+            # minimal container, or a Windows code page -- and it would fail
+            # mid-run, while writing the node's manifest. Python 3.15 makes
+            # UTF-8 the default and hides this; the versions SC supports today
+            # do not.
+            fopen_args = {}
+            if suffix == "csv":
+                fopen_args['newline'] = ''
+            with open(manifest_path, 'w', encoding='UTF-8', **fopen_args) as fout:
+                if suffix == "yaml":
+                    self.__write_yaml_manifest(fout, schema)
+                elif suffix == "tcl":
+                    self.__write_tcl_manifest(fout, schema)
+                elif suffix == "csv":
+                    self.__write_csv_manifest(fout, schema)
+                else:
+                    raise ValueError(f"{manifest_path} is not a recognized path type")
+
+    def __abspath_schema(self) -> "Project":
+        """
+        Private helper to create a copy of the schema with all file/dir paths
+        converted to absolute paths, and its dataroot paths masked: no tool
+        reads one once every path is resolved, and build directories get shared.
+        """
+        root = self.project
+        schema = utils.mask_credentials(root)
+
+        for keypath in root.allkeys():
+            if keypath[0] == "history":
+                # Ignore history as this is not relevant to the task
+                continue
+
+            param = root.get(*keypath, field=None)
+            if not param.is_path:
+                continue
+
+            for value, step, index in param.getvalues():
+                if not value:
+                    continue
+                abspaths = root.find_files(*keypath, missing_ok=True, step=step, index=index)
+                if isinstance(abspaths, (set, list)) and None in abspaths:
+                    schema.set(*keypath, [], step=step, index=index)
+                else:
+                    if self.__relpath:
+                        if isinstance(abspaths, (set, list)):
+                            abspaths = [os.path.relpath(path, self.__relpath) for path in abspaths
+                                        if path]
+                        elif abspaths:
+                            abspaths = os.path.relpath(abspaths, self.__relpath)
+                        else:
+                            abspaths = None
+                    schema.set(*keypath, abspaths, step=step, index=index)
+
+        return schema
+
+    def __get_io_file(self, io_type: str) -> Tuple[str, bool]:
+        """
+        Private helper to get the runtime destination for stdout or stderr.
+
+        Args:
+            io_type (str): The I/O type ('stdout' or 'stderr').
+        """
+        suffix = self.get(io_type, "suffix")
+        destination = self.get(io_type, "destination")
+
+        io_file = None
+        io_log = False
+        if destination == 'log':
+            io_file = f"{self.__step}.{suffix}"
+            io_log = True
+        elif destination == 'output':
+            io_file = os.path.join('outputs', f"{self.__design_top}.{suffix}")
+        elif destination == 'none':
+            io_file = os.devnull
+
+        return io_file, io_log
+
+    def _get_stdio_sidecar(self, io_type: str) -> str:
+        """
+        Private helper for the path a captured stream is written to.
+
+        When stdout and stderr share a log destination each is handed its own
+        hidden file here, and run_task merges them into the log as it reads
+        them. Cleaned up by :meth:`remove_stdio_sidecars` once the node is done.
+
+        Args:
+            io_type (str): The I/O type ('stdout' or 'stderr').
+        """
+        return f".{self.step}.{io_type}"
+
+    def remove_stdio_sidecars(self, workdir: Optional[str] = None) -> None:
+        """
+        Deletes the per-stream capture files.
+
+        Called once the node has finished so it is not left holding a second
+        copy of output already merged into its log. Best effort: the streams
+        are not always split (a non-log destination leaves the tool writing
+        its destination directly), and failing to tidy up is not a node
+        failure.
+
+        Args:
+            workdir (str, optional): Directory holding the files. Defaults to
+                the current directory, which during a run is the node workdir.
+        """
+        for io_type in ("stdout", "stderr"):
+            path = self._get_stdio_sidecar(io_type)
+            if workdir:
+                path = os.path.join(workdir, path)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def __terminate_exe(self, proc: subprocess.Popen) -> None:
+        """
+        Private helper to terminate a subprocess and its children.
+
+        Args:
+            proc (subprocess.Process): The process to terminate.
+        """
+        # Imported here rather than at module scope: psutil costs ~10 ms to
+        # import and is only needed once a run is actually executing.
+        import psutil
+
+        def terminate_process(pid: int, timeout: int = 3) -> None:
+            """Terminates a process and all its (grand+)children.
+            Based on https://psutil.readthedocs.io/en/latest/#psutil.wait_procs and
+            https://psutil.readthedocs.io/en/latest/#kill-process-tree."""
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            children.append(parent)
+            for p in children:
+                try:
+                    p.terminate()
+                except psutil.NoSuchProcess:
+                    pass
+
+            _, alive = psutil.wait_procs(children, timeout=timeout)
+            for p in alive:
+                p.kill()
+
+        timeout = 5
+
+        terminate_process(proc.pid, timeout=timeout)
+        # This is only ever reached because the task is being killed
+        # (timeout/OOM/ctrl-c), so it breaks through quiet: otherwise the
+        # screen shows nothing at all while SC waits out the shutdown.
+        self.logger.info(f'Waiting for {self.tool()}/{self.task()} to exit...',
+                         extra=SC_CONSOLE_FORCE)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if proc.poll() is None:
+                self.logger.warning(f'{self.tool()}/{self.task()} did not exit within '
+                                    f'{timeout} seconds. Terminating...',
+                                    extra=SC_CONSOLE_FORCE)
+                terminate_process(proc.pid, timeout=timeout)
+
+    def __collect_memory(self, pid) -> Optional[int]:
+        import psutil
+
+        try:
+            pproc = psutil.Process(pid)
+            proc_mem_bytes = pproc.memory_full_info().uss
+            for child in pproc.children(recursive=True):
+                proc_mem_bytes += child.memory_full_info().uss
+            return proc_mem_bytes
+        except psutil.Error:
+            # Process may have already terminated or been killed.
+            # Retain existing memory usage statistics in this case.
+            pass
+        except PermissionError:
+            # OS is preventing access to this information so it cannot
+            # be collected
+            pass
+        return None
+
+    def __check_memory_limit(self, warn_limit: int, kill_limit_mb: int) -> int:
+        import psutil
+
+        try:
+            memory_usage = psutil.virtual_memory()
+            available_mb = memory_usage.available / (1024 * 1024)
+            if available_mb < kill_limit_mb:
+                raise TaskOutOfMemoryError(memory_percent=memory_usage.percent,
+                                           available_mb=available_mb)
+            if memory_usage.percent > warn_limit:
+                # About the machine, not the tool: this is the only warning a
+                # user gets before the same check starts killing tasks, so it
+                # is shown even when quiet has muted the console.
+                self.logger.warning(
+                    'Current system memory usage is '
+                    f'{memory_usage.percent:.1f}%',
+                    extra=SC_CONSOLE_FORCE)
+                return int(memory_usage.percent + 1)
+        except psutil.Error:
+            pass
+        except PermissionError:
+            pass
+        return warn_limit
+
+    def run_task(self,
+                 workdir: str,
+                 quiet: bool,
+                 breakpoint: bool,
+                 nice: Optional[int],
+                 timeout: Optional[int]) -> int:
+        """
+        Executes the task's main process.
+
+        This method handles the full lifecycle of running the tool, including
+        setting up the work directory, writing manifests, redirecting I/O,
+        monitoring for timeouts, and recording metrics.
+
+        Args:
+            workdir (str): The path to the node's working directory.
+            quiet (bool): If True, suppresses execution output.
+            breakpoint (bool): If True, attempts to run with a breakpoint.
+            nice (int): The POSIX nice level for the process.
+            timeout (int): The execution timeout in seconds.
+
+        Returns:
+            int: The return code from the execution.
+        """
+
+        max_mem_bytes = 0
+        cpu_start = time.time()
+
+        # Ensure directories are set up
+        self.setup_work_directory(workdir, remove_exist=False)
+
+        # Write task-specific manifest
+        self.write_task_manifest(workdir)
+
+        # Get file I/O destinations
+        stdout_file, is_stdout_log = self.__get_io_file("stdout")
+        stderr_file, is_stderr_log = self.__get_io_file("stderr")
+
+        # Both streams normally land in the same <step>.log. Letting the OS do
+        # that merge -- one shared file description for fd 1 and fd 2 -- is
+        # exactly what makes a line's origin unrecoverable afterwards: there is
+        # no way to split the streams back apart downstream. So hand each one
+        # its own sidecar and do the merging here instead. Reading them
+        # separately is what lets a stderr line be reported as an error while
+        # <step>.log stays the single complete transcript that check_logfile
+        # and the tasks that grep their own log already rely on.
+        #
+        # The cost is ordering: within a stream it is exact, but between them
+        # it is drain order (one poll interval) rather than true write order.
+        merge_file = None
+        if is_stdout_log and is_stderr_log and stdout_file == stderr_file:
+            merge_file = stdout_file
+            stdout_file = self._get_stdio_sidecar("stdout")
+            stderr_file = self._get_stdio_sidecar("stderr")
+        merge_writer = None
+
+        # Tool output is reported at its own levels so a reader can tell it
+        # apart from SiliconCompiler's own messages.
+        def stdout_print(msg):
+            self.logger.log(SC_LOG, msg)
+
+        def stderr_print(msg):
+            self.logger.log(SC_LOGERROR, msg)
+
+        # Buffers carry the trailing partial of each stream across polls so a
+        # single source line written in chunks is logged as one record, not one
+        # record per chunk. The merged log keeps its own pair because it splits
+        # on newlines only -- see _split_file_lines.
+        stdout_partial = [""]
+        stderr_partial = [""]
+        stdout_file_partial = [""]
+        stderr_file_partial = [""]
+
+        def read_stdio(stdout_reader, stderr_reader, flush=False):
+            """Drain both streams to the merged log and the SC logger.
+
+            The merged log is written here, not by the tool, because the two
+            streams no longer share a file description. Draining therefore
+            happens even when quiet: quiet costs console visibility, never log
+            content.
+            """
+            def drain(reader, partial_holder, file_partial_holder, emit):
+                data = reader.read()
+
+                if merge_writer:
+                    buffer = file_partial_holder[0] + data if data \
+                        else file_partial_holder[0]
+                    complete, partial = _split_file_lines(buffer)
+                    if flush and partial:
+                        complete += partial + "\n"
+                        partial = ""
+                    if complete:
+                        merge_writer.write(complete)
+                        merge_writer.flush()
+                    file_partial_holder[0] = partial
+
+                if quiet:
+                    return
+
+                buffer = partial_holder[0] + data if data else partial_holder[0]
+                lines, partial = _split_io_lines(buffer)
+                for line in lines:
+                    emit(line.rstrip())
+                if flush and partial:
+                    emit(partial.rstrip())
+                    partial = ""
+                partial_holder[0] = partial
+
+            if quiet and not merge_writer:
+                return
+
+            if is_stdout_log and stdout_reader:
+                drain(stdout_reader, stdout_partial, stdout_file_partial, stdout_print)
+            if is_stderr_log and stderr_reader:
+                drain(stderr_reader, stderr_partial, stderr_file_partial, stderr_print)
+
+        exe = self.get_exe()
+
+        retcode = 0
+        if not exe:
+            # No executable defined, so call the Python `run()` method
+            try:
+                with open(stdout_file, 'w') as stdout_writer, \
+                     open(stderr_file, 'w') as stderr_writer:
+                    if stderr_file == stdout_file:
+                        stderr_writer.close()
+                        stderr_writer = stdout_writer
+
+                    with contextlib.redirect_stderr(stderr_writer), \
+                         contextlib.redirect_stdout(stdout_writer):
+                        retcode = self.run()
+            except Exception as e:
+                self.logger.error(f'Failed in run() for {self.tool()}/{self.task()}: {e}',
+                                  extra=SC_CONSOLE_FORCE)
+                utils.print_traceback(self.logger, e, force_console=True)
+                raise
+            finally:
+                # run() has returned, so there is nothing to interleave with:
+                # the merged log gets stdout in full, then stderr in full.
+                with contextlib.ExitStack() as stack:
+                    if merge_file:
+                        merge_writer = stack.enter_context(
+                            open(merge_file, 'w', newline=''))
+                    stdout_reader = stack.enter_context(sc_open(stdout_file))
+                    stderr_reader = None
+                    if stdout_file != stderr_file:
+                        stderr_reader = stack.enter_context(sc_open(stderr_file))
+                    read_stdio(stdout_reader, stderr_reader, flush=True)
+
+                if resource:
+                    try:
+                        # Collect peak memory usage of the current process
+                        max_mem_bytes = max(
+                            max_mem_bytes,
+                            1024 * resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+                    except (OSError, ValueError, PermissionError):
+                        pass
+        else:
+            # An executable is defined, run it as a subprocess
+            cmdlist = self.get_runtime_arguments()
+
+            # Record tool options
+            self.schema_record.record_tool(
+                self.step, self.index,
+                cmdlist, RecordTool.ARGS)
+
+            self.logger.info(shlex.join([os.path.basename(exe), *cmdlist]))
+
+            if not pty and breakpoint:
+                breakpoint = False
+
+            if breakpoint and sys.platform in ('darwin', 'linux'):
+                # Interactive PTY session. NOTE: this path is intentionally
+                # supervised by the user, not by SC -- the timeout, memory
+                # limit, and nice settings applied to the standard subprocess
+                # path below are NOT enforced here. See _run_breakpoint for
+                # details on winsize/SIGWINCH/raw-mode handling.
+                retcode = _run_breakpoint(exe, cmdlist, f"{self.step}.log")
+            else:
+                # Standard subprocess execution
+                with contextlib.ExitStack() as stack:
+                    if merge_file:
+                        merge_writer = stack.enter_context(
+                            open(merge_file, 'w', newline=''))
+                    stdout_writer = stack.enter_context(open(stdout_file, 'w'))
+                    # newline='' keeps the reader from folding a progress
+                    # bar's bare \r into \n: _split_io_lines wants to see it,
+                    # and the merged log has to reproduce what the tool wrote.
+                    stdout_reader = stack.enter_context(
+                        open(stdout_file, 'r', errors='replace', newline=''))
+                    stderr_writer = stack.enter_context(open(stderr_file, 'w'))
+                    stderr_reader = stack.enter_context(
+                        open(stderr_file, 'r', errors='replace', newline=''))
+                    if stderr_file == stdout_file:
+                        # Same destination and no split (a non-log destination,
+                        # or /dev/null): let the OS merge them as before.
+                        stderr_writer.close()
+                        stderr_reader.close()
+                        stderr_reader = None
+                        stderr_writer = subprocess.STDOUT
+
+                    preexec_fn = None
+                    if nice is not None and hasattr(os, 'nice'):
+                        def set_task_nice():
+                            os.nice(nice)
+                        preexec_fn = set_task_nice
+
+                    try:
+                        proc = subprocess.Popen([exe, *cmdlist],
+                                                stdin=subprocess.DEVNULL,
+                                                stdout=stdout_writer,
+                                                stderr=stderr_writer,
+                                                preexec_fn=preexec_fn)
+                    except Exception as e:
+                        raise TaskError(f"Unable to start {exe}: {str(e)}")
+
+                    memory_warn_limit = Task.__MEMORY_WARN_LIMIT
+                    next_collection = None
+                    try:
+                        while proc.poll() is None:
+                            curr_time = time.time()
+
+                            # Monitor subprocess memory usage
+                            if next_collection is None or \
+                                    next_collection <= curr_time:
+                                proc_mem_bytes = self.__collect_memory(proc.pid)
+                                if proc_mem_bytes is not None:
+                                    max_mem_bytes = max(max_mem_bytes, proc_mem_bytes)
+                                next_collection = curr_time + Task.__MEM_POLL_INTERVAL
+
+                                memory_warn_limit = self.__check_memory_limit(
+                                    memory_warn_limit, Task.__MEMORY_KILL_LIMIT_MB)
+
+                            read_stdio(stdout_reader, stderr_reader)
+
+                            # Check for timeout
+                            duration = curr_time - cpu_start
+                            if timeout is not None and duration > timeout:
+                                raise TaskTimeout(timeout=duration)
+
+                            time.sleep(Task.__IO_POLL_INTERVAL)
+                    except KeyboardInterrupt:
+                        # Each of these three is the reason the task is about
+                        # to die. Quiet suppresses the tool's chatter, not the
+                        # explanation for a run that stops.
+                        self.logger.info("Received ctrl-c.", extra=SC_CONSOLE_FORCE)
+                        self.__terminate_exe(proc)
+                        raise TaskError
+                    except TaskTimeout as e:
+                        self.logger.error(f'Task timed out after {e.timeout:.1f} seconds',
+                                          extra=SC_CONSOLE_FORCE)
+                        self.__terminate_exe(proc)
+                        raise
+                    except TaskOutOfMemoryError as e:
+                        self.logger.error('Task ran out of memory with '
+                                          f'{e.memory_percent:.1f}% system memory usage '
+                                          f'({e.available_mb:.1f} MB available)',
+                                          extra=SC_CONSOLE_FORCE)
+                        self.__terminate_exe(proc)
+                        raise
+                    finally:
+                        # Drain any remaining I/O, including a buffered trailing
+                        # partial line, so output emitted right before the
+                        # process exits reaches the log. This runs on the normal
+                        # exit path AND after an abnormal termination
+                        # (timeout/OOM/ctrl-c), where the process has already
+                        # been terminated above and its final output would
+                        # otherwise be lost.
+                        read_stdio(stdout_reader, stderr_reader, flush=True)
+
+                    retcode = proc.returncode
+
+        # Record metrics
+        self.schema_record.record_tool(
+            self.step, self.index,
+            retcode, RecordTool.EXITCODE)
+
+        self.schema_metric.record(
+            self.step, self.index,
+            'exetime', time.time() - cpu_start, unit='s')
+        self.schema_metric.record(
+            self.step, self.index,
+            'memory', max_mem_bytes, unit='B')
+
+        return retcode
+
+    def __getstate__(self):
+        """Custom state for pickling, removing runtime info."""
+        state = self.__dict__.copy()
+        for key in list(state.keys()):
+            if key.startswith("_Task__"):
+                del state[key]
+        return state
+
+    def __setstate__(self, state):
+        """Custom state for unpickling, re-initializing runtime info."""
+        self.__dict__ = state
+        self.__set_runtime(None)
+
+    def get_output_files(self) -> Set[str]:
+        """Gets the set of output files defined for this task."""
+        return set(self.get("output"))
+
+    def get_files_from_input_nodes(self) -> Dict[str, List[Tuple[str, str]]]:
+        """
+        Returns a dictionary of files from input nodes, mapped to the node
+        they originated from.
+        """
+        nodes = self.schema_flowruntime.get_nodes()
+        inputs = {}
+        for in_step, in_index in self.schema_flow.get(self.step, self.index, 'input'):
+            if (in_step, in_index) not in nodes:
+                continue
+
+            in_tool = self.schema_flow.get(in_step, in_index, "tool")
+            in_task = self.schema_flow.get(in_step, in_index, "task")
+            task_obj: Task = self.project.get("tool", in_tool, "task", in_task, field="schema")
+
+            if self.schema_record.get('status', step=in_step, index=in_index) == \
+                    NodeStatus.SKIPPED:
+                with task_obj.runtime(self.__node.switch_node(in_step, in_index)) as task:
+                    # Not `nodes`: that name holds this loop's own membership
+                    # guard, and rebinding it here silently dropped every input
+                    # node ordered after a skipped one.
+                    for file, file_nodes in task.get_files_from_input_nodes().items():
+                        inputs.setdefault(file, []).extend(file_nodes)
+                continue
+
+            for output in NamedSchema.get(task_obj, "output", step=in_step, index=in_index):
+                inputs.setdefault(output, []).append((in_step, in_index))
+
+        return inputs
+
+    def _list_upstream_outputs(self, in_step: str, in_index: str,
+                               include_failed: bool = False) -> List[str]:
+        """
+        Returns the file names that an upstream node will provide to this task.
+
+        If the upstream is part of the active IO runtime, its declared output
+        files are returned. Otherwise its on-disk ``outputs/`` directory is
+        scanned (excluding the manifest), since that node will not be re-run.
+
+        A node excluded from the run whose *recorded* status is an error is the
+        one case where that directory is not trusted: whatever it holds is a
+        partial write from the failed attempt, and the node will not be re-run
+        to correct it. Only a positive error status disqualifies it -- an absent
+        or unknown status still reads from disk, because a valid ``outputs/``
+        whose manifest is missing or unreadable is the normal way an older build
+        directory presents itself, and refusing those would fail runs that work
+        today.
+
+        Args:
+            in_step (str): The step name of the upstream node.
+            in_index (str): The index of the upstream node.
+            include_failed (bool): List the directory even when the recorded
+                status is an error. Callers deciding what this node *offered*
+                -- rather than what may be consumed -- need that, so excusing a
+                failure via ``[option,continue]`` still drops its inputs.
+        """
+        if (in_step, in_index) not in set(self._io_runtime_flow.get_nodes()):
+            if not include_failed and NodeStatus.is_error(
+                    self.schema_record.get("status", step=in_step, index=in_index)):
+                self.logger.error(
+                    f'{in_step}/{in_index} is excluded from this run and is recorded as '
+                    f'failed, so {self.step}/{self.index} cannot use its outputs.')
+                return []
+            in_step_out_dir = os.path.join(
+                paths.workdir(self.project, step=in_step, index=in_index), 'outputs')
+            if not os.path.isdir(in_step_out_dir):
+                return []
+            manifest_name = f"{self.project.name}.pkg.json"
+            return [inp for inp in os.listdir(in_step_out_dir) if inp != manifest_name]
+
+        in_tool = self.schema_flow.get(in_step, in_index, "tool")
+        in_task = self.schema_flow.get(in_step, in_index, "task")
+        in_task_class = self.project.get("tool", in_tool, "task", in_task, field="schema")
+        return list(in_task_class.get("output", step=in_step, index=in_index))
+
+    def _is_input_excused(self, in_step: str, in_index: str) -> bool:
+        """
+        Returns True when a failure in ``in_step``/``in_index`` is excused by
+        ``[option,continue]`` set on that node, so this task must proceed
+        without whatever it would have produced.
+
+        An excused branch is **dropped, not traversed**. Unlike a ``SKIPPED``
+        node -- whose own inputs stand in for it -- an excused node supplies
+        nothing at all, so a merge that loses one arm assembles the arms that
+        remain rather than inheriting the dead arm's grandparent.
+
+        The excuse lives with the node that failed, never with the node that
+        consumes it: a task asking this question is asking whether *its input's*
+        failure was sanctioned, not whether its own would be.
+
+        Args:
+            in_step (str): The step name of the upstream node.
+            in_index (str): The index of the upstream node.
+        """
+        if not NodeStatus.is_error(self.schema_record.get("status",
+                                                          step=in_step, index=in_index)):
+            return False
+        return self.project.option.get_continue(step=in_step, index=in_index)
+
+    def _get_required_inputs(self) -> List[str]:
+        """
+        Returns the declared input files this node must actually receive.
+
+        Every entry in ``input`` is required unless the only upstream nodes
+        that could have supplied it had their failure excused by
+        ``[option,continue]`` -- see :meth:`_is_input_excused`. A name that some
+        surviving upstream still provides stays required, so excusing one arm of
+        a builtin-style fan-in (where every arm offers the same file) drops
+        nothing.
+
+        ``input`` is declared once, before the run, when nothing has failed yet;
+        the requirement set can therefore only shrink here, at runtime, against
+        the statuses the run actually produced.
+
+        Returns:
+            list of str: The subset of ``input`` that must be present.
+        """
+        requirements = self.get("input")
+
+        in_nodes = self._io_runtime_flow.get_node_inputs(
+            self.step, self.index, record=self.schema_record)
+        excused = [node for node in in_nodes if self._is_input_excused(*node)]
+        if not excused:
+            return requirements
+
+        # A name is only dropped if every node offering it was excused, so
+        # partition the offers rather than subtracting node by node.
+        dead: Set[str] = set()
+        live: Set[str] = set()
+        for in_step, in_index in in_nodes:
+            offered = dead if (in_step, in_index) in excused else live
+            # include_failed: an excused node is by definition a failed one, and
+            # what it offered is exactly what this node must stop requiring.
+            for inp in self._list_upstream_outputs(in_step, in_index, include_failed=True):
+                offered.add(inp)
+                offered.add(self.compute_input_file_node_name(inp, in_step, in_index))
+
+        dropped = dead.difference(live)
+        for requirement in sorted(dropped.intersection(requirements)):
+            self.logger.warning(f'No longer requiring input {requirement} for '
+                                f'{self.step}/{self.index}: the node producing it was '
+                                'excused by [option,continue]')
+
+        return [requirement for requirement in requirements if requirement not in dropped]
+
+    def _validate_io(self) -> bool:
+        """
+        Validate that this node's required input files will be supplied by
+        upstream nodes (or already exist on disk for nodes outside the runtime
+        view).
+
+        The base implementation enforces standard fan-in semantics: every
+        declared input must be produced by some upstream, and the same input
+        coming from multiple upstreams is flagged. Subclasses with non-standard
+        fan-in (e.g. builtin tasks that pick a single upstream at runtime) may
+        override this.
+
+        Returns:
+            bool: True if requirements are satisfied; False otherwise.
+        """
+        in_nodes = self._io_runtime_flow.get_node_inputs(
+            self.step, self.index, record=self.schema_record)
+        requirements = self.get("input")
+        all_inputs: Set[str] = set()
+        error = False
+
+        for in_step, in_index in in_nodes:
+            for inp in self._list_upstream_outputs(in_step, in_index):
+                node_inp = self.compute_input_file_node_name(inp, in_step, in_index)
+                if node_inp in requirements:
+                    inp = node_inp
+                if inp not in requirements:
+                    continue
+                if inp in all_inputs:
+                    self.logger.error(
+                        f'Invalid flow: {self.step}/{self.index} '
+                        f'receives {inp} from multiple input tasks')
+                    error = True
+                all_inputs.add(inp)
+
+        for requirement in requirements:
+            if requirement not in all_inputs:
+                self.logger.error(
+                    f'Invalid flow: {self.step}/{self.index} will '
+                    f'not receive required input {requirement}.')
+                error = True
+
+        return not error
+
+    def compute_input_file_node_name(self, filename: str, step: str, index: str) -> str:
+        """
+        Generates a unique name for an input file based on its originating node.
+
+        Args:
+            filename (str): The original name of the input file.
+            step (str): The step name of the originating node.
+            index (str): The index of the originating node.
+        """
+        _, file_type = os.path.splitext(filename)
+        if file_type:
+            base = filename
+            total_ext = []
+            while file_type:
+                base, file_type = os.path.splitext(base)
+                total_ext.append(file_type)
+            total_ext.reverse()
+            return f'{base}.{step}{index}{"".join(total_ext)}'
+        else:
+            return f'{filename}.{step}{index}'
+
+    def add_parameter(self, name: str, type: str, help: str, defvalue=None, **kwargs) -> Parameter:
+        """
+        Adds a custom parameter ('var') to the task definition.
+
+        Args:
+            name (str): The name of the parameter.
+            type (str): The schema type of the parameter.
+            help (str): The help string for the parameter.
+            defvalue: The default value for the parameter.
+        """
+        help = trim(help)
+        param = Parameter(
+            type,
+            **kwargs,
+            defvalue=defvalue,
+            scope=Scope.JOB,
+            pernode=PerNode.OPTIONAL,
+            shorthelp=help,
+            help=help
+        )
+        EditableSchema(self).insert("var", name, param)
+        return param
+
+    def add_required_key(self, obj: Union[BaseSchema, str], *key: str,
+                         step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        '''
+        Adds a required keypath to the task driver. If the key is valid relative to the task object
+            the key will be assumed as a task key.
+
+        Args:
+            obj (:class:`BaseSchema` or str): if this is a string it will be considered
+                part of the key, otherwise the keypath to the obj will be prepended to
+                the key
+            key (list of str): required key path
+        '''
+
+        if isinstance(obj, BaseSchema):
+            key = (*obj._keypath, *key)
+        else:
+            key = (obj, *key)
+            if self.valid(*key, check_complete=True):
+                key = (*self._keypath, *key)
+
+        if any([not isinstance(k, str) for k in key]):
+            raise ValueError("key can only contain strings")
+
+        return self.add("require", ",".join(key), step=step, index=index)
+
+    def get_digest_keys(self) -> Set[Tuple[str, ...]]:
+        '''
+        Returns every keypath that configures this task.
+
+        That is the task's own settings -- the command line, the thread count,
+        the scripts and the environment -- together with everything the driver
+        declared through :meth:`add_required_key`. Keypaths are complete: they
+        address the project, not the task, and are returned whether or not they
+        hold a value.
+
+        This is the one definition of what a task consists of:
+        :meth:`get_digest` hashes it, and
+        :meth:`.SchedulerNode.get_check_changed_keys` decides from it whether a
+        node has to run again. A driver that overrides this is answered by both.
+
+        Returns:
+            set of tuple of str: keypaths that configure this task.
+        '''
+
+        keys: Set[Tuple[str, ...]] = set()
+
+        for require in self.get("require"):
+            keys.add(tuple(require.split(",")))
+
+        # Built from tool()/task() rather than from _keypath, the way cachedir
+        # is, so that a task object standing in for the one attached to the
+        # project still names the keys the attached one would.
+        prefix = ("tool", self.tool(), "task", self.task())
+        for key in ("option", "threads", "prescript", "postscript", "refdir", "script"):
+            keys.add((*prefix, key))
+
+        for env_key in self.getkeys("env"):
+            keys.add((*prefix, "env", env_key))
+
+        return keys
+
+    def get_digest(self, length: Optional[int] = None) -> str:
+        '''
+        Returns a digest of this task's configuration, for naming things after it.
+
+        The digest answers *what configuration is this?* -- a value computed from
+        this task alone, which is what it takes to name a directory. It covers
+        the tool and task names, every keypath in :meth:`get_digest_keys`, and
+        the executable and version requirement, and it changes when any of their
+        values change.
+        Two tasks that differ only in a threshold, an effort level or a boolean
+        get different digests, which is the whole point: a cache key that ignored
+        scalars would hand one configuration's results to another.
+
+        It is deliberately cheap and total. Nothing is resolved, downloaded,
+        read or executed, and nothing depends on :keypath:`option,hash`:
+
+        * A path contributes the value **as written** plus its
+          :term:`dataroot` name, never a resolved absolute path -- so the digest
+          is the same on every machine, and a shared cache directory is shared
+          rather than partitioned by where each user keeps their files. The name
+          is all of the dataroot that is portable, so re-pointing or re-tagging
+          one leaves the digest alone; a driver that cannot live with that
+          requires ``dataroot,<name>,tag`` like any other key and gets it
+          counted.
+        * File **contents** are not hashed. That would be a provenance record,
+          not a cache key: it costs minutes of I/O on a real PDK, and the
+          ``filehash`` field it would read is only populated when
+          :keypath:`option,hash` is set, so the digest would change with a flag
+          rather than with the configuration.
+        * The tool **version found on the system** is not included either, since
+          reading it means running the executable. Only the requirement, and the
+          executable's name. A driver that wants its cache keyed by the
+          installed version has :meth:`get_exe_version`, and can compose the
+          two. The **directory** the executable was found in is left out for the
+          same reason a resolved path is: it differs per machine.
+
+        Values are read at this task's step and index, so two nodes running the
+        same task share a digest exactly when nothing was set per-node to tell
+        them apart.
+
+        The digest is a name, not a checksum: it says that two tasks are
+        configured the same way, not that a directory holds valid contents.
+
+        Args:
+            length (int): if given, truncate the digest to this many characters.
+                A directory name rarely wants all 64.
+
+        Raises:
+            RuntimeError: if the task has no runtime, since the required
+                keypaths cannot be read without a project to read them from.
+            KeyError: if a required keypath is not in the schema.
+            ValueError: if `length` is not between 1 and the digest's length.
+
+        Returns:
+            str: hex digest.
+
+        Examples:
+            >>> os.path.join(task.cachedir, task.get_digest(length=16))
+            A cache directory for this tool, private to this configuration.
+        '''
+
+        import hashlib
+
+        hashobj = hashlib.sha256()
+
+        if length is not None and not 0 < length <= hashobj.digest_size * 2:
+            raise ValueError(f"length must be between 1 and {hashobj.digest_size * 2}")
+
+        project = self.project
+        if project is None:
+            raise RuntimeError("get_digest() requires a runtime, "
+                               "call it on the task yielded by Task.runtime()")
+
+        # Which binary this is, and which versions of it are acceptable, are
+        # part of what a cache belongs to: a cache named for a task pinned to
+        # >=v2.0 must not be handed to the same task pinned to <v2.0.
+        #
+        # Neither is added to get_digest_keys(), because that set also decides
+        # whether a node has to run again, and neither makes an existing result
+        # wrong: the executable is resolved and its version checked before every
+        # execution, and both are recorded in [record,toolpath] and
+        # [record,toolversion].
+        #
+        # [tool,<t>,task,<t>,path] is deliberately absent. It is the directory
+        # the executable was found in -- klayout sets it to
+        # ~/AppData/Roaming/KLayout or /Applications/klayout.app/... -- so
+        # hashing it would give the same task a different digest on every
+        # machine, partitioning the shared cache this digest exists to name. It
+        # is also a 'dir', so putting it in the key set would have the rerun
+        # check hash or mtime-walk an entire tool installation per node.
+        keys = set(self.get_digest_keys())
+        prefix = ("tool", self.tool(), "task", self.task())
+        keys.update((*prefix, key) for key in ("exe", "version"))
+
+        keys = sorted(keys)
+        # Add keys
+        hashobj.update(json.dumps(keys, default=repr).encode("utf-8"))
+
+        # The keypath travels with the value so that moving a setting from one
+        # key to another is a change, and sorting makes the digest independent
+        # of the order the driver happened to require things in.
+        material: List[Any] = [self.tool(), self.task()]
+        for keypath in keys:
+            if not project.valid(*keypath, default_valid=True):
+                raise KeyError(f"[{','.join(keypath)}] not found")
+
+            param = project.get(*keypath, field=None)
+            step, index = self.__step, self.__index
+            if param.get(field="pernode").is_never():
+                step, index = None, None
+
+            entry: List[Any] = [",".join(keypath), param.get(step=step, index=index)]
+            if param.is_path:
+                # Which dataroot a path is relative to is part of the path.
+                entry.append(param.get(field="dataroot", step=step, index=index))
+            material.append(entry)
+
+        # default=repr rather than an error: a driver's own parameter type is
+        # not worth refusing to name a directory over, and repr is stable and
+        # tells two types apart.
+        hashobj.update(json.dumps(material, default=repr).encode("utf-8"))
+
+        return hashobj.hexdigest()[:length]
+
+    def set_threads(self, max_threads: Optional[int] = None,
+                    step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                    clobber: bool = False):
+        """
+        Sets the requested thread count for the task
+
+        Args:
+            max_threads (int): if provided the requested thread count
+                will be set this value, otherwise the current machines
+                core count will be used.
+            clobber (bool): overwrite existing value
+        """
+        if max_threads is None or max_threads <= 0:
+            max_schema_threads: Optional[int] = self.project.option.scheduler.get("maxthreads")
+            if max_schema_threads:
+                max_threads = max_schema_threads
+            else:
+                max_threads = utils.get_cores()
+
+        return self.set("threads", max_threads, step=step, index=index, clobber=clobber)
+
+    def get_threads(self, step: Optional[str] = None,
+                    index: Optional[Union[str, int]] = None) -> int:
+        """
+        Returns the number of threads requested.
+        """
+        return self.get("threads", step=step, index=index)
+
+    def add_commandline_option(self, option: Union[List[str], str],
+                               step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                               clobber: bool = False):
+        """
+        Add to the command line options for the task
+
+        Args:
+            option (list of str or str): options to add to the commandline
+            clobber (bool): overwrite existing value
+        """
+
+        if clobber:
+            return self.set("option", option, step=step, index=index)
+        else:
+            return self.add("option", option, step=step, index=index)
+
+    def get_commandline_options(self,
+                                step: Optional[str] = None,
+                                index: Optional[Union[str, int]] = None) \
+            -> List[str]:
+        """
+        Returns the command line options specified
+        """
+        return self.get("option", step=step, index=index)
+
+    def add_input_file(self, file: Optional[str] = None, ext: Optional[str] = None,
+                       step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                       clobber: bool = False):
+        """
+        Add a required input file from the previous step in the flow.
+
+        file and ext are mutually exclusive.
+
+        Args:
+            file (str): full filename
+            ext (str): file extension, if specified, the filename will be <top>.<ext>
+            clobber (bool): overwrite existing value
+        """
+        if file and ext:
+            raise ValueError("only file or ext can be specified")
+
+        if ext:
+            file = f"{self.design_topmodule}.{ext}"
+
+        if clobber:
+            return self.set("input", file, step=step, index=index)
+        else:
+            return self.add("input", file, step=step, index=index)
+
+    def add_output_file(self, file: Optional[str] = None, ext: Optional[str] = None,
+                        step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                        clobber: bool = False):
+        """
+        Add an output file that this task will produce
+
+        file and ext are mutually exclusive.
+
+        Args:
+            file (str): full filename
+            ext (str): file extension, if specified, the filename will be <top>.<ext>
+            clobber (bool): overwrite existing value
+        """
+        if file and ext:
+            raise ValueError("only file or ext can be specified")
+
+        if ext:
+            file = f"{self.design_topmodule}.{ext}"
+
+        if clobber:
+            return self.set("output", file, step=step, index=index)
+        else:
+            return self.add("output", file, step=step, index=index)
+
+    def set_environmentalvariable(self, name: str, value: str,
+                                  step: Optional[str] = None,
+                                  index: Optional[Union[str, int]] = None,
+                                  clobber: bool = False):
+        '''Sets an environment variable for the tool's execution context.
+
+        The specified variable will be set in the shell environment before the
+        tool's executable is launched.
+
+        Args:
+            name (str): The name of the environment variable (e.g., 'PATH').
+            value (str): The value to assign to the variable.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        return self.set("env", name, value, step=step, index=index, clobber=clobber)
+
+    def add_prescript(self, script: str, dataroot: Optional[str] = None,
+                      step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                      clobber: bool = False):
+        '''Adds a script to be executed *before* the main tool command.
+
+        This is useful for pre-processing files or setting up the environment
+        in ways that go beyond simple environment variables.
+
+        Args:
+            script (str): The path to the pre-execution script.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            if clobber:
+                return self.set("prescript", script, step=step, index=index)
+            else:
+                return self.add("prescript", script, step=step, index=index)
+
+    def add_postscript(self, script: str, dataroot: Optional[str] = None,
+                       step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                       clobber: bool = False):
+        '''Adds a script to be executed *after* the main tool command.
+
+        This is useful for post-processing tool outputs or performing cleanup
+        actions.
+
+        Args:
+            script (str): The path to the post-execution script.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            if clobber:
+                return self.set("postscript", script, step=step, index=index)
+            else:
+                return self.add("postscript", script, step=step, index=index)
+
+    def has_prescript(self,
+                      step: Optional[str] = None, index: Optional[Union[str, int]] = None) -> bool:
+        '''Checks if any pre-execution scripts are configured for the task.
+
+        Args:
+            step (str, optional): The step to check. Defaults to the current step.
+            index (str, optional): The index to check. Defaults to the current index.
+
+        Returns:
+            True if one or more pre-scripts are set, False otherwise.
+        '''
+        if self.get("prescript", step=step, index=index):
+            return True
+        return False
+
+    def has_postscript(self,
+                       step: Optional[str] = None, index: Optional[Union[str, int]] = None) -> bool:
+        '''Checks if any post-execution scripts are configured for the task.
+
+        Args:
+            step (str, optional): The step to check. Defaults to the current step.
+            index (str, optional): The index to check. Defaults to the current index.
+
+        Returns:
+            True if one or more post-scripts are set, False otherwise.
+        '''
+        if self.get("postscript", step=step, index=index):
+            return True
+        return False
+
+    def set_refdir(self, dir: Union[Path, str], dataroot: Optional[str] = None,
+                   step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                   clobber: bool = False):
+        '''Sets the reference directory for tool scripts and auxiliary files.
+
+        This is often used by script-based tools to find helper scripts or
+        resource files relative to the main entry script.
+
+        Args:
+            dir (str): The path to the reference directory.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            return self.set("refdir", dir, step=step, index=index, clobber=clobber)
+
+    def set_script(self, script: Union[Path, str], dataroot: Optional[str] = ...,
+                   step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                   clobber: bool = False):
+        '''Sets the main entry script for a script-based tool (e.g., a TCL script).
+
+        Args:
+            script (str): The path to the entry script.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            return self.set("script", script, step=step, index=index, clobber=clobber)
+
+    def add_regex(self, type: str, regex: str,
+                  step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                  clobber: bool = False):
+        '''Adds a regular expression for parsing the tool's log file.
+
+        These regexes are used by the framework to identify errors, warnings,
+        and metrics from the tool's standard output.
+
+        Args:
+            type (str): The category of the regex (e.g., 'error', 'warning').
+            regex (str): The regular expression pattern.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        if clobber:
+            return self.set("regex", type, regex, step=step, index=index)
+        else:
+            return self.add("regex", type, regex, step=step, index=index)
+
+    def set_logdestination(self, type: str, dest: str, suffix: Optional[str] = None,
+                           step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                           clobber: bool = False):
+        '''Configures the destination for log files.
+
+        This method sets where log files are written ('file' or 'api') and
+        can specify a custom file suffix.
+
+        Args:
+            type (str): The type of log (e.g., 'report', 'metric').
+            dest (str): The destination, either 'file' or 'api'.
+            suffix (str, optional): A custom suffix for the log file name.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values.
+
+        Returns:
+            A list of the schema keys that were set.
+        '''
+        rets = []
+        rets.append(self.set(type, "destination", dest, step=step, index=index, clobber=clobber))
+        if suffix:
+            rets.append(self.set(type, "suffix", suffix, step=step, index=index, clobber=clobber))
+        return rets
+
+    def add_warningoff(self, type: str,
+                       step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                       clobber: bool = False):
+        '''Adds a warning message or code to be suppressed during log parsing.
+
+        Any warning that matches a regex in this list will be ignored by the
+        framework.
+
+        Args:
+            type (str): The warning message or code to suppress.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        if clobber:
+            return self.set("warningoff", type, step=step, index=index)
+        else:
+            return self.add("warningoff", type, step=step, index=index)
+
+    def set_exe(self, exe: Optional[str] = None, vswitch: Optional[Union[str, List[str]]] = None,
+                format: Optional[str] = None,
+                step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                clobber: bool = False):
+        '''Sets the executable, version switch, and script format for a tool.
+
+        This is a convenience method that bundles the configuration of a tool's
+        core executable properties.
+
+        Args:
+            exe (str, optional): The name of the tool's executable binary.
+            vswitch (List[str], optional): The command-line switch used to
+                make the executable print its version (e.g., '--version').
+            format (str, optional): The format of the entry script, if any
+                (e.g., 'tcl', 'python').
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            A list of the schema keys that were set.
+        '''
+        rets = []
+        if exe:
+            rets.append(self.set("exe", exe, step=step, index=index, clobber=clobber))
+        if vswitch:
+            switches = self.add_vswitch(vswitch, step=step, index=index, clobber=clobber)
+            if not isinstance(switches, list):
+                switches = list(switches)
+            rets.extend(switches)
+        if format:
+            rets.append(self.set("format", format, step=step, index=index, clobber=clobber))
+        return rets
+
+    def set_path(self, path: str, dataroot: Optional[str] = None,
+                 step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                 clobber: bool = False):
+        '''Sets the directory path where the tool's executable is located.
+
+        This path is prepended to the system's PATH environment variable
+        during execution.
+
+        Args:
+            path (str): The directory path to the tool's executable.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            return self.set("path", path, step=step, index=index, clobber=clobber)
+
+    def add_version(self, version: Union[List[str], str],
+                    step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                    clobber: bool = False):
+        '''Adds a supported version specifier for the tool.
+
+        SiliconCompiler checks the tool's actual version against these
+        specifiers to ensure compatibility. Versions should follow the
+        PEP-440 standard (e.g., '>=5.6', '==1.2.3').
+
+        Args:
+            version (str): The version specifier string.
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        if clobber:
+            return self.set("version", version, step=step, index=index)
+        else:
+            return self.add("version", version, step=step, index=index)
+
+    def add_vswitch(self, switch: Union[List[str], str],
+                    step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                    clobber: bool = False):
+        '''Adds the command-line switch used to print the tool's version.
+
+        This switch is passed to the executable to get its version string
+        for checking.
+
+        Args:
+            switch (str): The version switch (e.g., '-v', '--version').
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        if clobber:
+            return self.set("vswitch", switch, step=step, index=index)
+        else:
+            return self.add("vswitch", switch, step=step, index=index)
+
+    def add_licenseserver(self, name: str, server: str,
+                          step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                          clobber: bool = False):
+        '''Configures a license server connection for the tool.
+
+        This sets the environment variables that commercial EDA tools use
+        to find their license server.
+
+        Args:
+            name (str): The name of the license variable (e.g., 'LM_LICENSE_FILE').
+            server (str): The server address (e.g., 'port@host').
+            step (str, optional): The step associated with this setting.
+                Defaults to the current step.
+            index (str, optional): The index associated with this setting.
+                Defaults to the current index.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        if clobber:
+            return self.set("licenseserver", name, server, step=step, index=index)
+        else:
+            return self.add("licenseserver", name, server, step=step, index=index)
+
+    def add_sbom(self, version: str, sbom: Union[str, List[str]], dataroot: Optional[str] = None,
+                 step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+                 clobber: bool = False):
+        '''Adds a Software Bill of Materials (SBOM) file for a tool version.
+
+        Associates a specific tool version with its corresponding SBOM file,
+        typically in SPDX or CycloneDX format.
+
+        Args:
+            version (str): The exact tool version this SBOM corresponds to.
+            sbom (str): The path to the SBOM file.
+            dataroot (str, optional): The data root this path is relative to.
+                Defaults to the active package.
+            clobber (bool): If True, overwrite existing values. Otherwise,
+                append to them.
+
+        Returns:
+            The schema key that was set.
+        '''
+        with self.active_dataroot(self._get_active_dataroot(dataroot)):
+            if clobber:
+                return self.set("sbom", version, sbom, step=step, index=index)
+            else:
+                return self.add("sbom", version, sbom, step=step, index=index)
+
+    def record_metric(self, metric: str, value: Union[int, float],
+                      source_file: Optional[Union[List[Union[Path, str]], Path, str]] = None,
+                      source_unit: Optional[str] = None,
+                      quiet: bool = False):
+        '''
+        Records a metric and associates the source file with it.
+
+        Args:
+            metric (str): metric to record
+            value (float/int): value of the metric that is being recorded
+            source (str): file the value came from
+            source_unit (str): unit of the value, if not provided it is assumed to have no units
+            quiet (bool): dont generate warning on missing metric
+
+        Examples:
+            >>> self.record_metric('cellarea', 500.0, 'reports/metrics.json', \\
+                    source_units='um^2')
+            Records the metric cell area and notes the source as 'reports/metrics.json'
+        '''
+
+        if metric not in self.schema_metric.getkeys():
+            if not quiet:
+                self.logger.warning(f"{metric} is not a valid metric")
+            return
+
+        self.schema_metric.record(self.step, self.index, metric, value, unit=source_unit)
+        if source_file:
+            self.add("report", metric, source_file)
+
+    def get_fileset_file_keys(self, filetype: str) -> List[Tuple["Design", Tuple[str, ...]]]:
+        """
+        Collect a set of keys for a particular filetype.
+
+        Args:
+            filetype (str): Name of the filetype
+
+        Returns:
+            list of (object, keypath)
+        """
+        if not isinstance(filetype, str):
+            raise TypeError("filetype must be a string")
+
+        keys = []
+        for obj, fileset in self.project.get_filesets():
+            key = ("fileset", fileset, "file", filetype)
+            if obj.valid(*key, check_complete=True):
+                keys.append((obj, key))
+        return keys
+
+    def get(self, *keypath: str, field: Optional[str] = 'value',
+            step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        if step is None:
+            step = self.__step
+        if index is None:
+            index = self.__index
+        return super().get(*keypath, field=field, step=step, index=index)
+
+    def set(self, *args, field: str = 'value',
+            step: Optional[str] = None, index: Optional[Union[str, int]] = None,
+            clobber: bool = True):
+        if step is None:
+            step = self.__step
+        if index is None:
+            index = self.__index
+        return super().set(*args, field=field, clobber=clobber, step=step, index=index)
+
+    def add(self, *args, field: str = 'value',
+            step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        if step is None:
+            step = self.__step
+        if index is None:
+            index = self.__index
+        return super().add(*args, field=field, step=step, index=index)
+
+    def unset(self, *args: str,
+              step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        if step is None:
+            step = self.__step
+        if index is None:
+            index = self.__index
+        return super().unset(*args, step=step, index=index)
+
+    def find_files(self, *keypath: str, missing_ok: bool = False,
+                   step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        if step is None:
+            step = self.__step
+        if index is None:
+            index = self.__index
+        return super().find_files(*keypath, missing_ok=missing_ok,
+                                  step=step, index=index)
+
+    @classmethod
+    def find_task(cls: Type[TTask], project: "Project") -> Union[Set[TTask], TTask]:
+        """Finds registered task(s) in a project that match the calling class.
+
+        This method searches through all tasks configured in the provided `project`
+        and returns those that meet specific criteria derived from the class on
+        which this method is called. The filtering is based on three levels:
+
+        1.  **Class Type**: The primary filter ensures that any found task object
+            is an instance of the calling class (`cls`).
+        2.  **Tool Name**: If the calling class (`cls`) implements the `tool()`
+            method, the search is narrowed to tasks with that specific tool name.
+        3.  **Task Name**: If the calling class (`cls`) implements the `task()`
+            method, the search is further narrowed to tasks with that name.
+
+        The method conveniently returns a single object if only one match is
+        found, or a set of objects if multiple matches are found.
+
+        Args:
+            project (Project): The project instance to search within.
+
+        Returns:
+            Union[Task, Set[Task]]: A single Task instance if exactly one
+            match is found, otherwise a set of matching Task instances.
+
+        Raises:
+            TypeError: If the `project` argument is not a valid `Project` object.
+            ValueError: If no tasks matching the specified criteria are found in
+                the project.
+        """
+
+        from siliconcompiler import Project
+        if not isinstance(project, Project):
+            raise TypeError("project must be a Project")
+
+        task_obj: "Task" = cls()
+        tool, task = None, None
+        try:
+            tool = task_obj.tool()
+        except NotImplementedError:
+            pass
+        try:
+            task = task_obj.task()
+        except NotImplementedError:
+            pass
+
+        all_tasks: Set[Task] = set()
+        for tool_name in project.getkeys("tool"):
+            if tool and tool != tool_name:
+                continue
+            for task_name in project.getkeys("tool", tool_name, "task"):
+                if task and task != task_name:
+                    continue
+                all_tasks.add(project.get("tool", tool_name, "task", task_name, field="schema"))
+
+        tasks: Set[Task] = set()
+        for task_obj in all_tasks:
+            if not isinstance(task_obj, cls):
+                continue
+            tasks.add(task_obj)
+
+        if not tasks:
+            parts = []
+            if tool:
+                parts.append(f"tool='{tool}'")
+            if task:
+                parts.append(f"task='{task}'")
+            parts.append(f"class={cls.__name__}")
+            criteria = ", ".join(parts) if parts else "any criteria"
+            raise ValueError(f"No tasks found matching {criteria}")
+
+        if len(tasks) == 1:
+            return next(iter(tasks))
+        return tasks
+
+    def _find_files_search_paths(self, key: str,
+                                 step: Optional[str],
+                                 index: Optional[Union[int, str]],
+                                 missing_ok: bool) -> List[str]:
+        search_paths = super()._find_files_search_paths(key, step, index, missing_ok)
+        if key == "script":
+            for refdir in self.find_files("refdir", step=step, index=index, missing_ok=missing_ok):
+                if refdir is not None:
+                    search_paths.append(refdir)
+        elif key == "input":
+            search_paths.append(os.path.join(
+                paths.workdir(self._parent(root=True), step=step, index=index), "inputs"))
+        elif key == "report":
+            search_paths.append(os.path.join(
+                paths.workdir(self._parent(root=True), step=step, index=index), "reports"))
+        elif key == "output":
+            search_paths.append(os.path.join(
+                paths.workdir(self._parent(root=True), step=step, index=index), "outputs"))
+        return search_paths
+
+    def _generate_doc(self, doc,
+                      ref_root: str = "",
+                      key_offset: Optional[Tuple[str, ...]] = None,
+                      detailed: bool = True):
+        from .schema.docs.utils import build_section, strong, KeyPath, code, para, \
+            build_table, build_schema_value_table
+        from docutils import nodes
+
+        docs = []
+
+        if not key_offset:
+            key_offset = tuple()
+
+        # Show dataroot
+        dataroot = PathSchema._generate_doc(self, doc, ref_root=ref_root, key_offset=key_offset)
+        if dataroot:
+            docs.append(dataroot)
+
+        # Show var definitions
+        if self.valid("var"):
+            table = [[strong('Parameters'), strong('Type'), strong('Help')]]
+            for key in self.getkeys("var"):
+                key_node = nodes.paragraph()
+                with KeyPath.fallback(...):
+                    key_node += KeyPath.keypath(
+                        list(key_offset) + list(self._keypath) + ["var", key],
+                        doc.env.docname,
+                        key_text=["...", "var", key])
+
+                param = self.get("var", key, field=None)
+                help_str = param.get(field="help")
+
+                val_type = param.get(field="type")
+                encode_type = NodeType.parse(val_type)
+                if NodeType.contains(encode_type, "enum"):
+                    try:
+                        if NodeType.istype(encode_type, "list"):
+                            allowed = next(iter(encode_type)).values
+                            val_type = "[enum]"
+                        elif NodeType.istype(encode_type, "set"):
+                            allowed = next(iter(encode_type)).values
+                            val_type = "{enum}"
+                        elif NodeType.istype(encode_type, "tuple"):
+                            allowed = []
+                            val_type = val_type
+                        else:
+                            allowed = encode_type.values
+                            val_type = "enum"
+                    except:  # noqa E722
+                        allowed = []
+                        val_type = val_type
+
+                    if allowed:
+                        if help_str[-1] != ".":
+                            help_str += "."
+                        help_str = f"{help_str} Allowed values: {', '.join(sorted(allowed))}"
+
+                table.append([
+                    key_node,
+                    code(val_type),
+                    para(help_str)
+                ])
+
+            if len(table) > 1:
+                vars = build_section("Variables", f"{ref_root}-variables")
+                colspec = r'{|\X{2}{5}|\X{1}{5}|\X{2}{5}|}'
+                vars += build_table(table, colspec=colspec)
+                docs.append(vars)
+
+        # Show tool information
+        params = {}
+        for key in self.allkeys(include_default=False):
+            if key[0] == "dataroot":  # data root already handled
+                continue
+            params[key] = self.get(*key, field=None)
+
+        with KeyPath.fallback(...):
+            table = build_schema_value_table(params, "", list(key_offset) + list(self._keypath),
+                                             trim_prefix=list(key_offset) + list(self._keypath))
+        setup_info = build_section("Configuration", f"{ref_root}-config")
+        setup_info += table
+        docs.append(setup_info)
+
+        return docs
+
+    @classmethod
+    def make_docs(cls):
+        from siliconcompiler import Flowgraph, Design, Project
+        from siliconcompiler.scheduler import SchedulerNode
+        design = Design("<design>")
+        with design.active_fileset("docs"):
+            design.set_topmodule("top")
+        proj = Project(design)
+        proj.add_fileset("docs")
+        flow = Flowgraph("docsflow")
+        flow.node("<step>", cls(), index="<index>")
+        proj.set_flow(flow)
+
+        node = SchedulerNode(proj, "<step>", "<index>")
+        node.setup()
+        return node.task
+
+    def parse_version(self, stdout: str) -> str:
+        """
+        Parses the tool's version from its stdout. Must be implemented by subclasses.
+        """
+        raise NotImplementedError("must be implemented by the implementation class")
+
+    def normalize_version(self, version: str) -> str:
+        """
+        Normalizes a version string to a standard format. Can be overridden.
+        """
+        return version
+
+    def setup(self) -> None:
+        """
+        A hook for setting up the task before execution. Can be overridden.
+        """
+        pass
+
+    def select_input_nodes(self) -> List[Tuple[str, str]]:
+        """
+        Determines which preceding nodes are inputs to this task.
+
+        Nodes whose failure was excused by ``[option,continue]`` are dropped --
+        see :meth:`_is_input_excused` -- so this task consumes nothing from a
+        branch it has been told to proceed without.
+        """
+        return [node for node in self.schema_flowruntime.get_node_inputs(
+                    self.step, self.index, record=self.schema_record)
+                if not self._is_input_excused(*node)]
+
+    def pre_process(self) -> None:
+        """
+        A hook for pre-processing before the main tool execution. Can be overridden.
+        """
+        pass
+
+    def runtime_options(self) -> List[Union[int, str, Path]]:
+        """
+        Constructs the default runtime options for the task. Can be extended.
+        """
+        cmdargs: List[Union[int, str, Path]] = []
+        cmdargs.extend(self.get("option"))
+        script: List[str] = self.find_files('script', missing_ok=True)
+        if script:
+            cmdargs.extend(script)
+        return cmdargs
+
+    def replay_modes(self, args: List[str]) -> Dict[str, List[str]]:
+        """
+        Alternative commands the node's ``replay.sh`` offers, each selected with
+        ``--<mode>``, such as rerunning the step in the tool's GUI. Can be overridden.
+
+        Args:
+            args (list): the arguments the node runs with, from
+                :meth:`get_runtime_arguments`.
+
+        Returns:
+            dict: mode name to the full argument list for that mode.
+        """
+        return {}
+
+    def run(self) -> int:
+        """
+        The main execution logic for Python-based tasks. Must be implemented.
+        """
+        raise NotImplementedError("must be implemented by the implementation class")
+
+    def post_process(self) -> None:
+        """
+        A hook for post-processing after the main tool execution. Can be overridden.
+        """
+        pass
+
+    def __schema_task(self):
+        """
+        Defines the standard parameters for a task.
+
+        The parameters are grouped by what they configure, and each group is defined by
+        its own method below, so that one group can be read, changed or tested without
+        the other eight.
+        """
+        schema = EditableSchema(self)
+
+        self.__schema_task_tool(schema)
+        self.__schema_task_diagnostics(schema)
+        self.__schema_task_invocation(schema)
+        self.__schema_task_files(schema)
+        self.__schema_task_stdio(schema)
+        self.__schema_task_requirements(schema)
+        self.__schema_task_reports(schema)
+        self.__schema_task_scripts(schema)
+        self.__schema_task_resources(schema)
+
+    @staticmethod
+    def __schema_task_tool(schema):
+        """
+        Defines the parameters that locate and identify the executable a task runs.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'exe',
+            Parameter(
+                'str',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: executable name",
+                switch="-tool_exe 'tool <str>'",
+                example=["cli: -tool_exe 'openroad openroad'",
+                         "api: task.set('tool', 'openroad', 'exe', 'openroad')"],
+                help=trim("""Tool executable name.""")))
+
+        schema.insert(
+            'sbom', 'default',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: software BOM",
+                switch="-tool_sbom 'tool version <file>'",
+                example=[
+                    "cli: -tool_sbom 'yosys 1.0.1 ys_sbom.json'",
+                    "api: task.set('tool', 'yosys', 'sbom', '1.0', 'ys_sbom.json')"],
+                help=trim("""
+                Paths to software bill of material (SBOM) document file of the tool
+                specified on a per version basis. The SBOM includes critical
+                package information about the tool including the list of included
+                components, licenses, and copyright. The SBOM file is generally
+                provided as in a a standardized open data format such as SPDX.""")))
+
+        schema.insert(
+            'path',
+            Parameter(
+                'dir',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: executable path",
+                switch="-tool_path 'tool <dir>'",
+                example=[
+                    "cli: -tool_path 'openroad /usr/local/bin'",
+                    "api: task.set('tool', 'openroad', 'path', '/usr/local/bin')"],
+                help=trim("""
+                File system path to tool executable. The path is prepended to the
+                system PATH environment variable for batch and interactive runs. The
+                path parameter can be left blank if the :keypath:`tool,<tool>,task,<task>,exe` is
+                already in the environment search path.""")))
+
+        schema.insert(
+            'vswitch',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: executable version switch",
+                switch="-tool_vswitch 'tool <str>'",
+                example=["cli: -tool_vswitch 'openroad -version'",
+                         "api: task.set('tool', 'openroad', 'vswitch', '-version')"],
+                help=trim("""
+                Command line switch to use with executable used to print out
+                the version number. Common switches include ``-v``, ``-version``,
+                ``--version``. Some tools may require extra flags to run in batch mode.""")))
+
+        schema.insert(
+            'vendor',
+            Parameter(
+                'str',
+                scope=Scope.JOB,
+                shorthelp="Tool: vendor",
+                switch="-tool_vendor 'tool <str>'",
+                example=["cli: -tool_vendor 'yosys yosys'",
+                         "api: task.set('tool', 'yosys', 'vendor', 'yosys')"],
+                help=trim("""
+                Name of the tool vendor. Parameter can be used to set vendor
+                specific technology variables in the PDK and libraries. For
+                open source projects, the project name should be used in
+                place of vendor.""")))
+
+        schema.insert(
+            'version',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: version",
+                switch="-tool_version 'tool <str>'",
+                example=["cli: -tool_version 'openroad >=v2.0'",
+                         "api: task.set('tool', 'openroad', 'version', '>=v2.0')"],
+                help=trim("""
+                List of acceptable versions of the tool executable to be used. Each
+                entry in this list must be a version specifier as described by Python
+                `PEP-440 <https://peps.python.org/pep-0440/#version-specifiers>`_.
+                During task execution, the tool is called with the 'vswitch' to
+                check the runtime executable version. If the version of the system
+                executable is not allowed by any of the specifiers in 'version',
+                then the job is halted pre-execution. For backwards compatibility,
+                entries that do not conform to the standard will be interpreted as a
+                version with an '==' specifier. This check can be disabled by
+                setting :keypath:`option,novercheck` to True.""")))
+
+        schema.insert(
+            'format',
+            Parameter(
+                '<json,tcl,yaml,csv>',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: file format",
+                switch="-tool_format 'tool <str>'",
+                example=["cli: -tool_format 'yosys tcl'",
+                         "api: task.set('tool', 'yosys', 'format', 'tcl')"],
+                help=trim("""
+                File format for tool manifest handoff.""")))
+
+        schema.insert(
+            'licenseserver', 'default',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Tool: license servers",
+                switch="-tool_licenseserver 'name key <str>'",
+                example=[
+                    "cli: -tool_licenseserver 'atask ACME_LICENSE 1700@server'",
+                    "api: task.set('tool', 'acme', 'licenseserver', 'ACME_LICENSE', "
+                    "'1700@server')"],
+                help=trim("""
+                Defines a set of tool-specific environment variables used by the executable
+                that depend on license key servers to control access. For multiple servers,
+                separate servers with a colon. The named license variables are read at
+                runtime (:meth:`.Task.run()`) and the environment variables are set.
+                """)))
+
+    @staticmethod
+    def __schema_task_diagnostics(schema):
+        """
+        Defines the parameters that shape how a task's log is read: which warnings to
+        ignore and which patterns to match.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'warningoff',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: warning filter",
+                switch="-tool_task_warningoff 'tool task <str>'",
+                example=[
+                    "cli: -tool_task_warningoff 'verilator lint COMBDLY'",
+                    "api: task.set('tool', 'verilator', 'task', 'lint', 'warningoff', 'COMBDLY')"],
+                help=trim("""
+                A list of tool warnings for which printing should be suppressed.
+                Generally this is done on a per design basis after review has
+                determined that warning can be safely ignored The code for turning
+                off warnings can be found in the specific task reference manual.
+                """)))
+
+        schema.insert(
+            'regex', 'default',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: regex filter",
+                switch="-tool_task_regex 'tool task suffix <str>'",
+                example=[
+                    "cli: -tool_task_regex 'openroad place errors \"'-v ERROR'\"'",
+                    "api: task.set('tool', 'openroad', 'task', 'place', 'regex', 'errors', "
+                    "'-v ERROR')"],
+                help=trim("""
+                A list of piped together grep commands. Each entry represents a set
+                of command line arguments for grep including the regex pattern to
+                match. Starting with the first list entry, each grep output is piped
+                into the following grep command in the list. Supported grep options
+                include ``-v`` and ``-e``. Patterns starting with "-" should be
+                directly preceded by the ``-e`` option. The following example
+                illustrates the concept.
+
+                UNIX grep:
+
+                .. code-block:: bash
+
+                    $ grep WARNING place.log | grep -v "bbox" > place.warnings
+
+                SiliconCompiler::
+
+                    task.set('task', 'openroad', 'regex', 'place', '0', 'warnings',
+                             ["WARNING", "-v bbox"])
+
+                The "errors" and "warnings" suffixes are special cases. When set,
+                the number of matches found for these regexes will be added to the
+                errors and warnings metrics for the task, respectively. This will
+                also cause the logfile to be added to the :keypath:`tool, <tool>,
+                task, <task>, report` parameter for those metrics, if not already present.""")))
+
+    @staticmethod
+    def __schema_task_invocation(schema):
+        """
+        Defines the parameters that make up a task's command line and environment.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'option',
+            Parameter(
+                '[str]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: executable options",
+                switch="-tool_task_option 'tool task <str>'",
+                example=[
+                    "cli: -tool_task_option 'openroad cts -no_init'",
+                    "api: task.set('tool', 'openroad', 'task', 'cts', 'option', '-no_init')"],
+                help=trim("""
+                List of command line options for the task executable, specified on
+                a per task and per step basis. Options must not include spaces.
+                For multiple argument options, each option is a separate list element.
+                """)))
+
+        schema.insert(
+            'env', 'default',
+            Parameter(
+                'str',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: environment variables",
+                switch="-tool_task_env 'tool task env <str>'",
+                example=[
+                    "cli: -tool_task_env 'openroad cts MYVAR 42'",
+                    "api: task.set('tool', 'openroad', 'task', 'cts', 'env', 'MYVAR', '42')"],
+                help=trim("""
+                Environment variables to set for individual tasks. Keys and values
+                should be set in accordance with the task's documentation. Most
+                tasks do not require extra environment variables to function.""")))
+
+    @staticmethod
+    def __schema_task_files(schema):
+        """
+        Defines the files a task expects to read and promises to write.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'input',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.REQUIRED,
+                shorthelp="Task: input files",
+                switch="-tool_task_input 'tool task <file>'",
+                example=[
+                    "cli: -tool_task_input 'openroad place \"place 0 oh_add.def\"'",
+                    "api: task.set('tool', 'openroad', 'task', 'place', 'input', 'oh_add.def', "
+                    "step='place', index='0')"],
+                help=trim("""
+                List of data files to be copied from previous flowgraph steps 'output'
+                directory. The list of steps to copy files from is defined by the
+                list defined by the dictionary key :keypath:`flowgraph,<flow>,<step>,<index>,input`.
+                All files must be available for flow to continue. If a file
+                is missing, the program exists on an error.""")))
+
+        schema.insert(
+            'output',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.REQUIRED,
+                shorthelp="Task: output files",
+                switch="-tool_task_output 'tool task <file>'",
+                example=[
+                    "cli: -tool_task_output 'openroad place \"place 0 oh_add.def\"'",
+                    "api: task.set('tool', 'openroad', 'task', 'place', 'output', 'oh_add.def', "
+                    "step='place', index='0')"],
+                help=trim("""
+                List of data files written to the 'output' directory of the
+                tool/task/step/index used in the keypath. All files must be available
+                for flow to continue. If a file is missing, the program exists on an error.""")))
+
+    @staticmethod
+    def __schema_task_stdio(schema):
+        """
+        Defines where a task's stdout and stderr are redirected to.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        dest_enum = ['log', 'output', 'none']
+        schema.insert(
+            'stdout', 'destination',
+            Parameter(
+                f'<{",".join(dest_enum)}>',
+                defvalue='log',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: destination for stdout",
+                switch="-tool_task_stdout_destination 'tool task <str>'",
+                example=["cli: -tool_task_stdout_destination 'ghdl import log'",
+                         "api: task.set('tool', 'ghdl', 'task', 'import', 'stdout', 'destination', "
+                         "'log')"],
+                help=trim("""
+                Defines where to direct the output generated over stdout.
+                Supported options are:
+                none: the stream generated to STDOUT is ignored.
+                log: the generated stream is stored in <step>.<suffix>; if not in quiet mode,
+                it is additionally dumped to the display.
+                output: the generated stream is stored in outputs/<design>.<suffix>.""")))
+
+        schema.insert(
+            'stdout', 'suffix',
+            Parameter(
+                'str',
+                defvalue='log',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: file suffix for redirected stdout",
+                switch="-tool_task_stdout_suffix 'tool task <str>'",
+                example=["cli: -tool_task_stdout_suffix 'ghdl import log'",
+                         "api: task.set('tool', 'ghdl', 'task', 'import', 'stdout', "
+                         "'suffix', 'log')"],
+                help=trim("""
+                Specifies the file extension for the content redirected from stdout.""")))
+
+        schema.insert(
+            'stderr', 'destination',
+            Parameter(
+                f'<{",".join(dest_enum)}>',
+                defvalue='log',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: destination for stderr",
+                switch="-tool_task_stderr_destination 'tool task <str>'",
+                example=["cli: -tool_task_stderr_destination 'ghdl import log'",
+                         "api: task.set('tool', 'ghdl', 'task', 'import', 'stderr', 'destination', "
+                         "'log')"],
+                help=trim("""
+                Defines where to direct the output generated over stderr.
+                Supported options are:
+                none: the stream generated to STDERR is ignored
+                log: the generated stream is stored in <step>.<suffix>; if not in quiet mode,
+                it is additionally dumped to the display.
+                output: the generated stream is stored in outputs/<design>.<suffix>""")))
+
+        schema.insert(
+            'stderr', 'suffix',
+            Parameter(
+                'str',
+                defvalue='log',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: file suffix for redirected stderr",
+                switch="-tool_task_stderr_suffix 'tool task <str>'",
+                example=["cli: -tool_task_stderr_suffix 'ghdl import log'",
+                         "api: task.set('tool', 'ghdl', 'task', 'import', 'stderr', "
+                         "'suffix', 'log')"],
+                help=trim("""
+                Specifies the file extension for the content redirected from stderr.""")))
+
+    @staticmethod
+    def __schema_task_requirements(schema):
+        """
+        Defines the keypaths a task requires to be set before it runs.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'require',
+            Parameter(
+                '{str}',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: parameter requirements",
+                switch="-tool_task_require 'tool task <str>'",
+                example=[
+                    "cli: -tool_task_require 'openroad cts design'",
+                    "api: task.set('tool', 'openroad', 'task', 'cts', 'require', 'design')"],
+                help=trim("""
+                List of keypaths to required task parameters. The list is used
+                by :meth:`.Project.check_manifest()` to verify that all parameters have been set up
+                before step execution begins.""")))
+
+    @staticmethod
+    def __schema_task_reports(schema):
+        """
+        Defines the report files a task associates with each metric.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'report', 'default',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.REQUIRED,
+                shorthelp="Task: metric report files",
+                switch="-tool_task_report 'tool task metric <file>'",
+                example=[
+                    "cli: -tool_task_report 'openroad place holdtns \"place 0 place.log\"'",
+                    "api: task.set('tool', 'openroad', 'task', 'place', 'report', 'holdtns', "
+                    "'place.log', step='place', index='0')"],
+                help=trim("""
+                List of report files associated with a specific 'metric'. The file path
+                specified is relative to the run directory of the current task.""")))
+
+    @staticmethod
+    def __schema_task_scripts(schema):
+        """
+        Defines the scripts a task runs and the directories they are found in.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'refdir',
+            Parameter(
+                '[dir]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: script directory",
+                switch="-tool_task_refdir 'tool task <dir>'",
+                example=[
+                    "cli: -tool_task_refdir 'yosys syn ./myref'",
+                    "api: task.set('tool', 'yosys', 'task', 'syn_asic', 'refdir', './myref')"],
+                help=trim("""
+                Path to directories containing reference flow scripts, specified
+                on a per step and index basis.""")))
+
+        schema.insert(
+            'script',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: entry script",
+                switch="-tool_task_script 'tool task <file>'",
+                example=[
+                    "cli: -tool_task_script 'yosys syn syn.tcl'",
+                    "api: task.set('tool', 'yosys', 'task', 'syn_asic', 'script', 'syn.tcl')"],
+                help=trim("""
+                Path to the entry script called by the executable specified
+                on a per task and per step basis.""")))
+
+        schema.insert(
+            'prescript',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                copy=True,
+                shorthelp="Task: pre-step script",
+                switch="-tool_task_prescript 'tool task <file>'",
+                example=[
+                    "cli: -tool_task_prescript 'yosys syn syn_pre.tcl'",
+                    "api: task.set('tool', 'yosys', 'task', 'syn_asic', 'prescript', "
+                    "'syn_pre.tcl')"],
+                help=trim("""
+                Path to a user supplied script to execute after reading in the design
+                but before the main execution stage of the step. Exact entry point
+                depends on the step and main script being executed. An example
+                of a prescript entry point would be immediately before global
+                placement.""")))
+
+        schema.insert(
+            'postscript',
+            Parameter(
+                '[file]',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                copy=True,
+                shorthelp="Task: post-step script",
+                switch="-tool_task_postscript 'tool task <file>'",
+                example=[
+                    "cli: -tool_task_postscript 'yosys syn syn_post.tcl'",
+                    "api: task.set('tool', 'yosys', 'task', 'syn_asic', 'postscript', "
+                    "'syn_post.tcl')"],
+                help=trim("""
+                Path to a user supplied script to execute after the main execution
+                stage of the step but before the design is saved.
+                Exact entry point depends on the step and main script being
+                executed. An example of a postscript entry point would be immediately
+                after global placement.""")))
+
+    @staticmethod
+    def __schema_task_resources(schema):
+        """
+        Defines the machine resources a task asks for.
+
+        Args:
+            schema (EditableSchema): The editable schema to add the parameters to.
+        """
+        schema.insert(
+            'threads',
+            Parameter(
+                'int<1..>',
+                scope=Scope.JOB,
+                pernode=PerNode.OPTIONAL,
+                shorthelp="Task: thread parallelism",
+                switch="-tool_task_threads 'tool task <int>'",
+                example=["cli: -tool_task_threads 'magic drc 64'",
+                         "api: task.set('tool', 'magic', 'task', 'drc', 'threads', '64')"],
+                help=trim("""
+                Thread parallelism to use for execution specified on a per task and per
+                step basis. If not specified, SC queries the operating system and sets
+                the threads based on the maximum thread count supported by the
+                hardware.""")))
+
+
+class OpenTask(Task):
+    """
+    A specialized Task for tasks that open files in an interactive tool session.
+
+    `OpenTask` is the base class for tasks that hand a design file to an
+    interactive backend (for example, opening an `.odb`/`.def` in OpenROAD's
+    REPL/GUI for further inspection or scripting). Subclasses dynamically
+    discover the right backend based on the input file's extension.
+
+    `ShowTask` (a subclass) narrows this to non-interactive viewer applications
+    that display a file, and `ScreenshotTask` further specializes that to
+    headless image generation. When you only need to render a file, use
+    `ShowTask`; use `OpenTask` directly when you want to open the design in an
+    interactive session that keeps running after the file is loaded.
+
+    Subclasses should implement `get_supported_task_extentions` to declare
+    which file extensions they can handle, best view of a design first --
+    see :meth:`get_extension_map` for what that order is used for.
+    """
+    def __init__(self):
+        """Initialize an OpenTask, adding the parameters shared by open tasks."""
+        super().__init__()
+        self.add_parameter("showfilepath", "file", "path to the file to open")
+        self.add_parameter("showfiletype", "str", "extension of the file to open")
+        self.add_parameter("shownode", "(str,str,str)",
+                           "source node (jobname, step, index) the file came from; "
+                           "not always available")
+        self.add_parameter("showexit", "bool",
+                           "exit the tool after the file is opened", defvalue=False)
+
+    def task(self) -> str:
+        """Returns the name of this task."""
+        return "open"
+
+    def setup(self) -> None:
+        """Sets up the parameters and requirements for the open task."""
+        super().setup()
+
+        self._set_filetype()
+
+        self.add_required_key("var", "showexit")
+
+        if self.get("var", "shownode"):
+            self.add_required_key("var", "shownode")
+
+        if self.get("var", "showfilepath"):
+            self.add_required_key("var", "showfilepath")
+        elif self.get("var", "showfiletype"):
+            self.add_required_key("var", "showfiletype")
+        else:
+            raise ValueError(f"no file information provided to {self.task()}")
+
+    def get_supported_task_extentions(self) -> List[str]:
+        """
+        Returns a list of file extensions supported by this task.
+        This method must be implemented by subclasses.
+
+        **Order is meaningful**: list them best view of a design first. A task
+        that reads several formats is the only thing that knows how they rank
+        against each other -- openroad reading ``["odb", "def", "vg"]`` is
+        stating that an odb beats the def beside it, which beats the netlist --
+        and :meth:`get_extension_map` builds the search order
+        :meth:`Project.show <siliconcompiler.Project.show>` uses out of those
+        statements. A task supporting one extension says nothing either way.
+        """
+        if hasattr(self, "get_supported_show_extentions"):
+            import warnings
+            warnings.warn("get_supported_show_extentions is deprecated, please implement "
+                          "get_supported_task_extentions instead",
+                          DeprecationWarning, stacklevel=2)
+            return self.get_supported_show_extentions()
+        raise NotImplementedError(
+            "get_supported_task_extentions must be implemented by the child class")
+
+    def _set_filetype(self) -> None:
+        """
+        Private helper to determine and set the 'showfiletype' parameter based
+        on the provided 'showfilepath' or available input files.
+        """
+        def set_file(file, ext):
+            if file.lower().endswith(".gz"):
+                self.set("var", "showfiletype", f"{ext}.gz")
+            else:
+                self.set("var", "showfiletype", ext)
+
+        if not self.get("var", "showfilepath"):
+            exts = self.get_supported_task_extentions()
+
+            if not self.get("var", "showfiletype"):
+                input_files = {utils.get_file_ext(f): f.lower()
+                               for f in self.get_files_from_input_nodes().keys()}
+                for ext in exts:
+                    if ext in input_files:
+                        set_file(input_files[ext], ext)
+                        break
+            if exts:
+                self.set("var", "showfiletype", exts[-1], clobber=False)
+        else:
+            file = self.get("var", "showfilepath")
+            ext = utils.get_file_ext(file)
+            set_file(file, ext)
+
+    def set_showfilepath(self, path: str,
+                         step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        """Sets the path to the file to be displayed."""
+        return self.set("var", "showfilepath", path, step=step, index=index)
+
+    def set_showfiletype(self, file_type: str,
+                         step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        """Sets the type of the file to be displayed."""
+        return self.set("var", "showfiletype", file_type, step=step, index=index)
+
+    def set_showexit(self, value: bool,
+                     step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        """Sets whether the viewer application should exit after opening the file."""
+        return self.set("var", "showexit", value, step=step, index=index)
+
+    def set_shownode(self, jobname: Optional[str] = None,
+                     nodestep: Optional[str] = None, nodeindex: Optional[Union[str, int]] = None,
+                     step: Optional[str] = None, index: Optional[Union[str, int]] = None):
+        """Sets the source node information for the file being displayed."""
+        return self.set("var", "shownode", (jobname, nodestep, nodeindex), step=step, index=index)
+
+    def has_show_filepath(self) -> bool:
+        """Whether ``showfilepath`` has been provided."""
+        return bool(self.get("var", "showfilepath"))
+
+    def get_show_filepath(self) -> Optional[str]:
+        """Resolved path to ``showfilepath``, or ``None`` if not set."""
+        if not self.has_show_filepath():
+            return None
+        return self.find_files("var", "showfilepath")
+
+    def get_show_filetype(self) -> Optional[str]:
+        """The ``showfiletype`` value, or ``None`` if not set."""
+        return self.get("var", "showfiletype") or None
+
+    def has_show_node(self) -> bool:
+        """Whether ``shownode`` has been provided."""
+        shownode = self.get("var", "shownode")
+        if not shownode:
+            return False
+        return any(item not in (None, "") for item in shownode)
+
+    def get_show_job(self) -> Optional[str]:
+        """The jobname recorded in ``shownode``, or ``None`` if not set."""
+        if not self.has_show_node():
+            return None
+        job, _, _ = self.get("var", "shownode")
+        return job
+
+    def get_show_node(self) -> Tuple[Optional[str], Optional[str]]:
+        """The ``(step, index)`` recorded in ``shownode``; ``(None, None)`` if not set."""
+        if not self.has_show_node():
+            return (None, None)
+        _, step, index = self.get("var", "shownode")
+        return (step, index)
+
+    def get_show_jobroot(self) -> Optional["Project"]:
+        """
+        Project used to resolve files for the source ``shownode``.
+
+        When ``shownode`` carries a jobname, returns the matching history project
+        (or a fresh copy with that jobname applied if no history entry exists).
+        Otherwise returns the current project (which may be ``None`` outside of
+        a runtime context).
+        """
+        job_root = self.project
+        show_job = self.get_show_job()
+        if not show_job or job_root is None:
+            return job_root
+        try:
+            return job_root.history(show_job)
+        except KeyError:
+            job_root = job_root.copy()
+            job_root.option.set_jobname(show_job)
+            return job_root
+
+    def get_show_workdir(self) -> Optional[str]:
+        """
+        Working directory of the source ``shownode``, or ``None`` if a complete
+        ``shownode`` is not available. Callers append ``outputs/`` (or another
+        subdirectory) themselves when needed.
+        """
+        show_step, show_index = self.get_show_node()
+        if show_step is None or show_index is None:
+            return None
+        job_root = self.get_show_jobroot()
+        if job_root is None:
+            return None
+        return paths.workdir(job_root, step=show_step, index=show_index)
+
+    def has_breakpoint(self):
+        # Open is like a breakpoint
+        return True
+
+    @classmethod
+    def __check_task(cls, task: Optional[Type["OpenTask"]]) -> bool:
+        """
+        Private helper to validate if a task is a valid OpenTask, ShowTask, or ScreenshotTask.
+        """
+        if cls is not OpenTask and cls is not ShowTask and cls is not ScreenshotTask:
+            raise TypeError("class must be OpenTask, ShowTask, or ScreenshotTask")
+
+        if task is None:
+            return False
+
+        if cls is OpenTask:
+            check, task_filter = OpenTask, (ShowTask, ScreenshotTask)
+        elif cls is ShowTask:
+            check, task_filter = ShowTask, ScreenshotTask
+        else:
+            check, task_filter = ScreenshotTask, None
+
+        if not issubclass(task, check):
+            return False
+        if task_filter and issubclass(task, task_filter):
+            return False
+
+        return True
+
+    @classmethod
+    def register_task(cls, task: Optional[Type["OpenTask"]]) -> None:
+        """
+        Registers a new show task class for dynamic discovery.
+
+        Registration order is priority order: later registrations outrank
+        earlier ones (see :meth:`get_task`). Re-registering an already known
+        task therefore moves it to the end -- :meth:`SettingsManager.set
+        <siliconcompiler.utils.settings.SettingsManager.set>` appends on every
+        write. Were it to stay where it first landed, whoever imported a viewer
+        module first would fix its priority for the life of the process, and
+        the deliberate ordering in
+        :func:`~siliconcompiler.utils.showtools.showtasks` would be silently
+        ignored for any module already pulled in by user code, a plugin, or the
+        subclass recursion in ``__build_tasks``.
+
+        Args:
+            task: The show task class to register.
+
+        Raises:
+            TypeError: If the task is not a valid subclass.
+        """
+        if not cls.__check_task(task):
+            raise TypeError(f"task must be a subclass of {cls.__name__}")
+
+        MPManager.get_transient_settings().set(
+            cls.__name__,
+            f"{task.__module__}/{task.__name__}",
+            task)
+
+    @classmethod
+    def __populate_tasks(cls) -> None:
+        """
+        Private helper to discover and populate all available show/screenshot tasks.
+
+        This method recursively finds all subclasses and also loads tasks from
+        any installed plugins. Tasks are registered in a stable order:
+        1. Core siliconcompiler tasks (sorted by module path)
+        2. The built-in siliconcompiler viewers, in their preferred order
+        3. Plugin-provided tasks (in plugin load order)
+
+        This ensures that later-registered extensions take precedence over
+        earlier core tasks when multiple tools support the same extension.
+
+        Population is atomic: the registry is held for the length of the build
+        so that a caller arriving mid-population waits rather than reading a
+        half-written category, and completion is recorded by writing
+        :data:`_TASKS_POPULATED` last (see that constant for why the category
+        being non-empty does not mean it is finished).
+        """
+        cls.__check_task(None)
+
+        settings = MPManager.get_transient_settings()
+
+        # One lock for the whole OpenTask family, not one per category: the
+        # showtasks() call in __build_tasks writes into the sibling categories
+        # as well, so per-category locks would let two threads populating
+        # different subclasses each hold the category the other needs next.
+        with settings.lock_category(OpenTask.__name__):
+            if settings.get(cls.__name__, _TASKS_POPULATED, False):
+                return  # Already populated
+
+            cls.__build_tasks()
+
+            # Written last, once the registry above is complete.
+            settings.set(cls.__name__, _TASKS_POPULATED, True)
+
+    @classmethod
+    def __build_tasks(cls) -> None:
+        """
+        Private helper doing the actual discovery for :meth:`__populate_tasks`.
+
+        Split out only to keep that method's locked block short. It assumes the
+        lock is held and is not safe to call on its own.
+        """
+        def recurse(searchcls: Type["OpenTask"]) -> list:
+            subclss = []
+            if not cls.__check_task(searchcls):
+                return subclss
+
+            subclss.append(searchcls)
+            # Iterate over subclasses (final sort by module path happens below)
+            for subcls in searchcls.__subclasses__():
+                subclss.extend(recurse(subcls))
+
+            return subclss
+
+        classes = recurse(cls)
+
+        # Sort core classes by module path for stable ordering
+        # Ensures consistent discovery order across runs
+        core_classes = sorted(classes, key=lambda c: (c.__module__, c.__name__))
+
+        # Register core tasks first
+        for c in core_classes:
+            cls.register_task(c)
+
+        # Register the built-in viewers, in the order showtools prefers.
+        #
+        # Imported here rather than at module scope because showtools imports from
+        # siliconcompiler, which imports this module. Priority no longer depends on
+        # this running after the recursion above -- register_task() re-orders on
+        # re-registration -- but it is still what pulls the viewer modules in, so the
+        # recursion alone cannot be relied on to discover them.
+        from siliconcompiler.utils.showtools import showtasks
+        showtasks()
+
+        # Support non-SC defined tasks from plugins (these override core tasks)
+        # Sort plugins deterministically for consistent ordering
+        plugins = sorted(
+            utils.get_plugins('showtask'),
+            key=lambda p: (p.__module__, p.__name__)
+        )
+        for plugin in plugins:
+            plugin()
+
+    @classmethod
+    def get_task(cls: Type[TOpenTask], ext: Optional[str], tool: Optional[str] = None) -> \
+            Union[Optional[TOpenTask], List[Type[TOpenTask]]]:
+        """
+        Retrieves a suitable show task instance for a given file extension.
+
+        The method first checks for a requested tool (if provided), then checks the user's
+        settings file (~/.sc/settings.json) under the 'showtask' category for a preferred tool.
+        If no tool is requested and no preference is found, it falls back to automatic discovery.
+
+        Every lookup walks the registry in reverse registration order, so a
+        later-registered task (a plugin, or a built-in listed later in
+        :func:`~siliconcompiler.utils.showtools.showtasks`) wins over an earlier
+        one. This holds for the ``tool`` hint and the user-settings preference
+        as well as for automatic discovery, so narrowing a lookup with a
+        tool-only hint like ``"openroad"`` cannot select a lower-priority task
+        than the unhinted lookup would.
+
+        Args:
+            ext (str): The file extension to find a viewer for.
+            tool (str, optional): The tool/task to use, as ``"tool"`` for any
+                task of that tool or ``"tool/task"`` for a specific one. This
+                is a requirement, not a hint: if it cannot be resolved for
+                ``ext`` -- an unknown tool, or one that does not support that
+                extension -- None is returned rather than quietly running
+                something else. Leave it unset to let ``ext`` decide.
+
+        Returns:
+            An instance of a compatible ShowTask subclass, or None if
+            no suitable task is found.
+        """
+        def find_task_by_spec(spec: str, ext: str, tasks: List) -> Optional[Type[TOpenTask]]:
+            """
+            Find a task matching a tool/task specification.
+
+            Args:
+                spec (str): Tool specification in format "tool" or "tool/task"
+                ext (str): File extension to verify support for
+                tasks (List): List of available task classes to search through
+
+            Returns:
+                An instance of matching OpenTask, or None if no match found
+            """
+            # Parse specification: "tool" or "tool/task"
+            spec_parts = spec.split('/')
+            spec_tool = spec_parts[0]
+            spec_task = spec_parts[1] if len(spec_parts) > 1 else None
+
+            # Iterate in reverse, matching the automatic-discovery fallback below:
+            # later registrations take precedence. Walking forward here would make a
+            # tool-only spec resolve to the *lowest*-priority task of that tool, so
+            # e.g. "openroad" would pick openroad/web over openroad/show even though
+            # showtasks() registers web first precisely so show wins.
+            for task_cls in reversed(tasks):
+                try:
+                    task_inst = task_cls()
+                    # Check if this task matches the specification
+                    if task_inst.tool() == spec_tool:
+                        if spec_task and task_inst.task() != spec_task:
+                            continue
+
+                        # Verify the tool actually supports the extension
+                        if ext in task_inst.get_supported_task_extentions():
+                            return task_inst
+                except NotImplementedError:
+                    continue
+
+            return None
+
+        cls.__check_task(None)
+        cls.__populate_tasks()
+
+        settings = MPManager.get_transient_settings()
+        tasks = [task for key, task in settings.get_category(cls.__name__).items()
+                 if key != _TASKS_POPULATED]
+        if not tasks:
+            return None
+
+        if ext is None:
+            return tasks
+
+        # 1. An explicitly requested tool wins, and is the only thing tried:
+        # the caller named it, so falling through to another one would silently
+        # launch the wrong viewer.
+        if tool:
+            return find_task_by_spec(tool, ext, tasks)
+
+        # 2. Check User Settings for Preference
+        category = SHOWTASK_SETTINGS if issubclass(cls, ShowTask) else OPENTASK_SETTINGS
+        preference = category.setting(ext).get()
+
+        # Unlike an explicit request, a stale preference degrades quietly: a
+        # setting left over from an uninstalled viewer should not make show()
+        # stop working.
+        if preference:
+            result = find_task_by_spec(preference, ext, tasks)
+            if result:
+                return result
+
+        # 3. Fallback to Automatic Discovery
+        # Iterate in reverse so later-registered tasks (e.g., plugins) take precedence
+        for task_cls in reversed(tasks):
+            try:
+                task_inst = task_cls()
+                if ext in task_inst.get_supported_task_extentions():
+                    return task_inst
+            except NotImplementedError:
+                pass
+
+        return None
+
+    @classmethod
+    def get_extension_map(cls: Type[TOpenTask],
+                          tool: Optional[str] = None) -> Dict[str, TOpenTask]:
+        """
+        Returns a mapping of supported file extensions to the preferred task.
+
+        For every extension declared by any registered task of this class, the
+        returned dict contains the task instance that :meth:`get_task` would
+        pick for that extension. This is the single source of truth for
+        "which tool handles extension X" and is shared by ``sc-show -list``
+        and :meth:`Project.show` to keep their behavior consistent.
+
+        Key insertion order is deterministic, and is the order
+        :meth:`Project.show <siliconcompiler.Project.show>` searches a build
+        directory in when it has no filename to work from -- richest view of a
+        node first, so an ``odb`` is found ahead of the ``def`` beside it.
+
+        Nothing here holds a list of extensions. The order is derived from what
+        the tasks declare: each ranks the formats it reads best-first in
+        :meth:`get_supported_task_extentions`, and an extension takes the worst
+        rank any task gives it, ties going to the higher-priority tool (see the
+        implementation for why the worst rather than the best). So an extension
+        only ever moves because the tool that reads it said something about it.
+
+        Two extensions that never appear in the same build cannot affect each
+        other, whatever order they land in: the search simply misses on every
+        node and moves on. Only formats a single flow emits together -- an
+        ``odb``, ``def``, ``vg`` and ``lef`` in one node -- are really being
+        ordered here, and those are all ranked by a task that reads them all.
+
+        This is independent of which *tool* wins an extension, which
+        :meth:`get_task` resolves from the same registration order and which
+        shows up here only in the values.
+
+        Args:
+            tool (str, optional): Restrict the map to one tool/task, in
+                ``"tool"`` or ``"tool/task"`` form, forwarded to
+                :meth:`get_task`. Extensions that tool cannot handle are
+                omitted, so the result describes only what it can show.
+
+        Returns:
+            A dictionary mapping each supported extension to the preferred
+            task instance for that extension.
+        """
+        cls.__check_task(None)
+        cls.__populate_tasks()
+
+        tasks = cls.get_task(None)
+        if not tasks:
+            return {}
+
+        # An extension is ranked by the *worst* position any task that reads it
+        # puts it in. A task reading one format has no opinion to offer -- its
+        # favorite is just its only option -- while one reading several has
+        # ranked them against each other, so taking the maximum lets the
+        # informed opinion decide: openroad lists vg last of its three and that
+        # demotes vg globally, even though opensta reads nothing else. It also
+        # means a new single-format viewer can only ever demote an extension,
+        # never promote one, so adding a tool cannot reshuffle the head of the
+        # list out from under an existing flow.
+        rank: Dict[str, int] = {}
+        origin: Dict[str, Tuple[int, int]] = {}
+        # reversed(): same walk as get_task(), so "which tool wins an
+        # extension" and "which extension leads a tie" answer to one order.
+        for tool_rank, task_cls in enumerate(reversed(tasks)):
+            try:
+                exts = task_cls().get_supported_task_extentions()
+            except NotImplementedError:
+                continue
+            for pos, ext in enumerate(exts):
+                rank[ext] = max(rank.get(ext, 0), pos)
+                origin.setdefault(ext, (tool_rank, pos))
+
+        ordered_exts = sorted(rank, key=lambda ext: (rank[ext], origin[ext]))
+
+        ext_map: Dict[str, TOpenTask] = {}
+        for ext in ordered_exts:
+            preferred = cls.get_task(ext, tool=tool)
+            if preferred is not None:
+                ext_map[ext] = preferred
+        return ext_map
+
+    @classmethod
+    def _get_tasks_for_extension(cls: Type[TOpenTask], ext: str) -> List[TOpenTask]:
+        """
+        Returns every registered task that declares support for an extension.
+
+        Args:
+            ext (str): The file extension to look up.
+
+        Returns:
+            A list of task instances supporting ``ext``, most-preferred first
+            (reverse registration order, matching :meth:`get_task`).
+        """
+        tasks = cls.get_task(None)
+        if not tasks:
+            return []
+
+        found: List[TOpenTask] = []
+        for task_cls in reversed(tasks):
+            try:
+                task_inst = task_cls()
+                if ext in task_inst.get_supported_task_extentions():
+                    found.append(task_inst)
+            except NotImplementedError:
+                continue
+        return found
+
+
+class ShowTask(OpenTask):
+    """
+    A specialized `OpenTask` for tasks that display files in a viewer.
+
+    `ShowTask` is intended for read-only visualization: the backend (e.g. a GUI
+    layout viewer) renders the file and the user inspects it. Use this when the
+    goal is to look at a file rather than to drive an interactive tool session;
+    for the latter, use `OpenTask` directly. For headless image generation, use
+    the `ScreenshotTask` subclass.
+
+    Subclasses should implement `get_supported_task_extentions` to declare
+    which file extensions they can render.
+    """
+    def task(self) -> str:
+        """Returns the name of this task."""
+        return "show"
+
+    def get_tcl_variables(self, manifest: Optional[BaseSchema] = None) -> Dict[str, str]:
+        """
+        Gets Tcl variables for the task, ensuring 'sc_do_screenshot' is false
+        for regular show tasks.
+        """
+        vars = super().get_tcl_variables(manifest)
+        vars["sc_do_screenshot"] = "false"
+        return vars
+
+
+class ScreenshotTask(ShowTask):
+    """
+    A specialized `ShowTask` that renders a file to an image and exits.
+
+    Inherits the viewer-discovery machinery from `ShowTask` but runs headlessly:
+    the backend opens the file, writes a screenshot, and terminates. The
+    `showexit` parameter is forced to True during setup so subclasses cannot
+    accidentally leave an interactive session running.
+    """
+
+    def task(self) -> str:
+        """Returns the name of this task."""
+        return "screenshot"
+
+    def setup(self) -> None:
+        """
+        Sets up the screenshot task, ensuring that the viewer will exit
+        after the screenshot is taken.
+        """
+        super().setup()
+        # Ensure the viewer exits after taking the screenshot
+        self.set_showexit(True)
+
+    def get_tcl_variables(self, manifest: Optional[BaseSchema] = None) -> Dict[str, str]:
+        """
+        Gets Tcl variables for the task, setting 'sc_do_screenshot' to true.
+        """
+        vars = super().get_tcl_variables(manifest)
+        vars["sc_do_screenshot"] = "true"
+        return vars
+
+    def has_breakpoint(self):
+        # Use task level breakpoint information
+        return Task.has_breakpoint(self)
+
+
+def _viewer_setting(task: Type[OpenTask], category: str, ext: str) -> Setting:
+    """The tool, or tool/task, that ``task`` opens ``ext`` files with."""
+    def normalize(tool: str) -> str:
+        if task.get_task(ext, tool=tool) is None:
+            raise ValueError(f"{tool} cannot open .{ext} files")
+        return tool
+
+    return Setting(category, ext, "str", normalize=normalize)
+
+
+SHOWTASK_SETTINGS = KeyedSettingsCategory(
+    "showtask", "<extension>", "the tool, or tool/task, sc-show views a file with",
+    lambda ext: _viewer_setting(ShowTask, "showtask", ext))
+OPENTASK_SETTINGS = KeyedSettingsCategory(
+    "opentask", "<extension>", "the interactive tool, or tool/task, a file is opened in",
+    lambda ext: _viewer_setting(OpenTask, "opentask", ext))

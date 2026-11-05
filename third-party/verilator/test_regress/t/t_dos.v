@@ -1,0 +1,18 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2003 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// This file has DOS carrage returns in it!
+module t (
+    input clk
+);
+
+  always @(posedge clk) begin
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule
+// This file has DOS carrage returns in it!

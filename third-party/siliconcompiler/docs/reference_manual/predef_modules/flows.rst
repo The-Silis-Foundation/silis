@@ -1,0 +1,238 @@
+.. _builtin_flows:
+
+Pre-Defined Flows
+====================
+
+The following are examples of pre-built :ref:`flows <dev_flows>` that come with SiliconCompiler which you can use for your own builds.
+
+See the pre-built :ref:`targets <builtin_targets>` for examples on how these are used in conjunction with :ref:`pdks <builtin_pdks>`, :ref:`tools <builtin_tools>` and :ref:`libraries <builtin_libraries>`.
+
+ASIC Flows
+----------
+
+Complete :term:`ASIC` compilation flows that take :term:`RTL` through
+:term:`synthesis`, :term:`place-and-route`, and finishing. The ``language``
+argument selects the front-end used to bring the design into :term:`Verilog`
+before the shared place-and-route back-end runs; a variant is shown below for
+each supported source language.
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/ASICFlow
+
+ASIC Subflows
+^^^^^^^^^^^^^
+
+The ASIC flow is assembled from the following stage-specific subflows. They can be
+used on their own to run or debug an individual stage of the back-end.
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/PNRFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/CleanupSynthFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/FloorplanningFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/PlacementFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/ClockTreeSynthesisFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/FillerCellFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/RoutingFlow
+
+.. schema::
+  :root: siliconcompiler.flows.asicflow/MetalFillFlow
+
+Elaboration Flows
+-----------------
+
+Front-end flows that :term:`elaborate <elaboration>` an RTL design from its
+source files and emit Verilog.
+Because every variant produces Verilog, they can be used interchangeably as a
+front-end for any downstream flow that consumes a Verilog :term:`netlist`.
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/ElaborationFlow
+
+Elaboration Subflows
+^^^^^^^^^^^^^^^^^^^^^
+
+The language-specific building blocks for elaborating a design in a single
+source language. They can be used on their own as a front-end.
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/SlangElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/SV2VElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/HLSElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/VHDLElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/ChiselElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.elaborationflow/BluespecElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.sodaflow/SODABaselineElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.sodaflow/SODAOptimizedElaborationFlow
+
+.. schema::
+  :root: siliconcompiler.flows.sodaflow/SODATransformedElaborationFlow
+
+Synthesis Flows
+---------------
+
+Flows that elaborate and synthesize an RTL design into a gate-level netlist. Each
+variant pairs a different front-end language with the shared Yosys synthesis step.
+
+.. schema::
+  :root: siliconcompiler.flows.synflow/SynthesisFlow
+
+Lint Flows
+----------
+
+Flows for :term:`linting <lint>` an RTL design.
+
+.. schema::
+  :root: siliconcompiler.flows.lintflow/LintFlow
+
+.. schema::
+  :root: siliconcompiler.flows.lintflow/VerilatorLintFlow
+
+.. schema::
+  :root: siliconcompiler.flows.lintflow/SlangLintFlow
+
+Design Verification Flows
+-------------------------
+
+Flows for simulating and verifying a design. Each variant targets a specific
+simulator (and optionally cocotb-based testbenches).
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/DVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/IcarusDVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/IcarusCocotbDVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/VerilatorDVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/VerilatorCocotbDVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/XyceDVFlow
+
+.. schema::
+  :root: siliconcompiler.flows.dvflow/XDMXyceDVFlow
+
+Formal Verification Flows
+-------------------------
+
+Flows for :term:`formally verifying <formal verification>` a design: checking
+the SVA :term:`assertions <assertion>` in its RTL using SymbiYosys (sby), and
+proving two views of a design equivalent (:term:`LEC`) with Kepler-formal or
+Yosys -- either two :term:`netlists <netlist>` against each other, or a
+synthesized netlist against the :term:`RTL` it came from. The equivalence flow
+holds the check alone, so it is grafted onto whichever flow builds the views
+being compared.
+
+.. schema::
+  :root: siliconcompiler.flows.formalflow/PropertyCheckFlow
+
+.. schema::
+  :root: siliconcompiler.flows.formalflow/LECFlow
+
+DRC Flows
+---------
+
+Flows for running design rule checking (:term:`DRC`) :term:`signoff` on a layout.
+
+.. schema::
+  :root: siliconcompiler.flows.drcflow/DRCFlow
+
+.. schema::
+  :root: siliconcompiler.flows.drcflow/KlayoutDRCFlow
+
+.. schema::
+  :root: siliconcompiler.flows.drcflow/MagicDRCFlow
+
+LVS Flows
+---------
+
+Flows for running layout-versus-schematic (:term:`LVS`) signoff on a layout.
+
+.. schema::
+  :root: siliconcompiler.flows.lvsflow/MagicLVSFlow
+
+Signoff Flows
+-------------
+
+Flows that combine the physical verification steps into a single signoff flow.
+
+.. schema::
+  :root: siliconcompiler.flows.signoffflow/SignoffFlow
+
+FPGA Flows
+----------
+
+Complete :term:`FPGA` compilation flows. Each variant targets a different FPGA toolchain.
+
+.. schema::
+  :root: siliconcompiler.flows.fpgaflow/FPGANextPNRFlow
+
+.. schema::
+  :root: siliconcompiler.flows.fpgaflow/FPGAVPRFlow
+
+.. schema::
+  :root: siliconcompiler.flows.fpgaflow/FPGAVPROpenSTAFlow
+
+.. schema::
+  :root: siliconcompiler.flows.fpgaflow/FPGAXilinxFlow
+
+Utility Flows
+-------------
+
+Supporting flows for library QA, screenshots, format conversion,
+:term:`parasitic extraction <PEX>`, and interposer assembly.
+
+.. schema::
+  :root: siliconcompiler.flows.checklibraryflow/CheckLibraryFlow
+
+.. schema::
+  :root: siliconcompiler.flows.showflow/ShowFlow
+
+.. schema::
+  :root: siliconcompiler.flows.highresscreenshotflow/HighResScreenshotFlow
+
+.. schema::
+  :root: siliconcompiler.flows.img2streamflow/Img2StreamFlow
+
+.. schema::
+  :root: siliconcompiler.flows.openroad_pex/GenerateOpenRCXFlow
+
+.. schema::
+  :root: siliconcompiler.flows.openroad_pex/GeneratePEXEstimateFlow
+
+.. schema::
+  :root: siliconcompiler.flows.openroad_pex/PEXCalibrateFlow
+
+.. schema::
+  :root: siliconcompiler.flows.interposerflow/InterposerFlow

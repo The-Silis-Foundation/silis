@@ -1,0 +1,364 @@
+###############################
+# Reading SC Schema
+###############################
+
+source ./sc_manifest.tcl
+
+###############################
+# Read Files
+###############################
+
+source "$sc_refdir/sc_read_design.tcl"
+
+###############################
+# Report power activity annotation
+###############################
+
+# Report how much of the design's switching activity was annotated from the VCD
+if { $sc_read_vcd } {
+    puts "Reporting power activity annotation coverage"
+    puts "report: reports/power/activity_annotation.rpt"
+    file mkdir reports/power
+    report_activity_annotation -report_annotated -report_unannotated > \
+        reports/power/activity_annotation.rpt
+}
+
+###############################
+# Write SDF
+###############################
+
+if { [sc_cfg_tool_task_get var write_sdf] } {
+    foreach corner $sc_scenarios {
+        puts "Writing SDF for $corner"
+        write_sdf -corner $corner \
+            -include_typ \
+            "outputs/${sc_topmodule}.${corner}.sdf"
+    }
+}
+
+###############################
+# Write Liberty
+###############################
+
+if { [sc_cfg_tool_task_get var write_liberty] } {
+    foreach corner $sc_scenarios {
+        puts "Writing liberty model for $corner"
+        write_timing_model -library_name "${sc_topmodule}_${corner}" \
+            -corner $corner \
+            "outputs/${sc_topmodule}.${corner}.lib"
+    }
+}
+
+###############################
+# Report Metrics
+###############################
+
+file mkdir \
+    reports/checks \
+    reports/clocks \
+    reports/constraints \
+    reports/design \
+    reports/power \
+    reports/timing
+
+set opensta_top_n_paths [sc_cfg_tool_task_get var top_n_paths]
+
+# Must be a flat list: report_checks is invoked directly here, so the value reaches
+# parse_report_path_options as-is. The braced-string form used by the OpenROAD scripts
+# only works there because tee re-evaluates the command string.
+set fields {capacitance slew input_pins hierarcial_pins net fanout}
+set PREFIX "SC_METRIC:"
+
+puts "$PREFIX timeunit"
+puts [sta::unit_scale_abbreviation time]
+
+if { [sc_cfg_tool_task_check_in_list scenarios var reports] } {
+    sc_report_banner "Timing scenarios" \
+        reports/constraints/scenarios.rpt
+    sc_report_scenarios
+}
+
+if { [sc_cfg_tool_task_check_in_list check_setup var reports] } {
+    sc_report_check_timing
+}
+
+if { [sc_cfg_tool_task_check_in_list setup var reports] } {
+    set setup_reports [list \
+        reports/timing/setup.rpt \
+        reports/timing/setup.topN.rpt \
+        reports/timing/setup.failing.rpt \
+        reports/timing/setup.endpoints.rpt \
+        reports/timing/worst_slack.setup.rpt \
+        reports/timing/total_negative_slack.setup.rpt]
+    lappend setup_reports {*}[sc_corner_timing_reports -name setup]
+    sc_report_banner "Setup timing" {*}$setup_reports
+
+    puts "$PREFIX report_checks -path_delay max"
+    report_checks -sort_by_slack -fields $fields -path_delay max \
+        -format full_clock_expanded \
+        > reports/timing/setup.rpt
+    sc_display_report reports/timing/setup.rpt
+    report_checks -sort_by_slack -fields $fields -path_delay max \
+        -group_path_count $opensta_top_n_paths \
+        > reports/timing/setup.topN.rpt
+    report_checks -sort_by_slack -path_delay max -slack_max 0 -endpoint_path_count 1 \
+        -group_path_count $opensta_top_n_paths -format short \
+        > reports/timing/setup.failing.rpt
+    report_checks -sort_by_slack -path_delay max -endpoint_path_count 1 \
+        -group_path_count $opensta_top_n_paths -format end \
+        > reports/timing/setup.endpoints.rpt
+    sc_report_corner_timing -delay max -name setup \
+        -fields $fields -top_paths $opensta_top_n_paths
+
+    puts "$PREFIX setupslack"
+    report_worst_slack -max > reports/timing/worst_slack.setup.rpt
+    sc_display_report reports/timing/worst_slack.setup.rpt
+
+    puts "$PREFIX setuppaths"
+    puts [sta::endpoint_violation_count max]
+
+    puts "$PREFIX setuptns"
+    report_tns > reports/timing/total_negative_slack.setup.rpt
+    sc_display_report reports/timing/total_negative_slack.setup.rpt
+}
+
+if { [sc_cfg_tool_task_check_in_list hold var reports] } {
+    set hold_reports [list \
+        reports/timing/hold.rpt \
+        reports/timing/hold.topN.rpt \
+        reports/timing/hold.failing.rpt \
+        reports/timing/hold.endpoints.rpt \
+        reports/timing/worst_slack.hold.rpt \
+        reports/timing/total_negative_slack.hold.rpt]
+    lappend hold_reports {*}[sc_corner_timing_reports -name hold]
+    sc_report_banner "Hold timing" {*}$hold_reports
+
+    puts "$PREFIX report_checks -path_delay min"
+    report_checks -sort_by_slack -fields $fields -path_delay min \
+        -format full_clock_expanded \
+        > reports/timing/hold.rpt
+    sc_display_report reports/timing/hold.rpt
+    report_checks -sort_by_slack -fields $fields -path_delay min \
+        -group_path_count $opensta_top_n_paths \
+        > reports/timing/hold.topN.rpt
+    report_checks -sort_by_slack -path_delay min -slack_max 0 -endpoint_path_count 1 \
+        -group_path_count $opensta_top_n_paths -format short \
+        > reports/timing/hold.failing.rpt
+    report_checks -sort_by_slack -path_delay min -endpoint_path_count 1 \
+        -group_path_count $opensta_top_n_paths -format end \
+        > reports/timing/hold.endpoints.rpt
+    sc_report_corner_timing -delay min -name hold \
+        -fields $fields -top_paths $opensta_top_n_paths
+
+    puts "$PREFIX holdslack"
+    report_worst_slack -min > reports/timing/worst_slack.hold.rpt
+    sc_display_report reports/timing/worst_slack.hold.rpt
+
+    puts "$PREFIX holdpaths"
+    puts [sta::endpoint_violation_count min]
+
+    puts "$PREFIX holdtns"
+    report_tns -min > reports/timing/total_negative_slack.hold.rpt
+    sc_display_report reports/timing/total_negative_slack.hold.rpt
+}
+
+if { [sc_cfg_tool_task_check_in_list unconstrained var reports] } {
+    set unconstrained_reports [list \
+        reports/timing/unconstrained.rpt \
+        reports/timing/unconstrained.topN.rpt]
+    lappend unconstrained_reports \
+        {*}[sc_corner_timing_reports -unconstrained -name unconstrained]
+    sc_report_banner "Unconstrained paths" {*}$unconstrained_reports
+
+    report_checks -sort_by_slack -fields $fields -unconstrained \
+        -format full_clock_expanded \
+        -path_group unconstrained > reports/timing/unconstrained.rpt
+    sc_display_report reports/timing/unconstrained.rpt
+    report_checks -sort_by_slack -fields $fields -unconstrained \
+        -group_path_count $opensta_top_n_paths \
+        > reports/timing/unconstrained.topN.rpt
+    sc_report_corner_timing -unconstrained -name unconstrained \
+        -fields $fields -top_paths $opensta_top_n_paths
+}
+
+if {
+    [sc_cfg_tool_task_check_in_list clock_skew var reports] &&
+    [llength [all_clocks]] > 0
+} {
+    sc_report_banner "Clock skew" \
+        reports/clocks/skew.setup.rpt \
+        reports/clocks/skew.hold.rpt
+    puts "$PREFIX setupskew"
+    report_clock_skew -setup -digits 4 > reports/clocks/skew.setup.rpt
+    sc_display_report reports/clocks/skew.setup.rpt
+    puts "$PREFIX holdskew"
+    report_clock_skew -hold -digits 4 > reports/clocks/skew.hold.rpt
+    sc_display_report reports/clocks/skew.hold.rpt
+}
+
+if { [sc_cfg_tool_task_check_in_list drv_violations var reports] } {
+    sc_report_banner "DRV violators" \
+        reports/checks/drv_violators.rpt
+    puts "$PREFIX drvs"
+    report_check_types -max_slew -max_capacitance -max_fanout -violators -no_line_splits \
+        > reports/checks/drv_violators.rpt
+    sc_display_report reports/checks/drv_violators.rpt
+}
+
+if { [sc_cfg_tool_task_check_in_list fmax var reports] } {
+    set fmax_report ""
+    if { [llength [all_clocks]] > 0 } {
+        sc_report_banner "Fmax" \
+            reports/clocks/fmax.rpt
+        set fmax_report [open reports/clocks/fmax.rpt w]
+        puts $fmax_report [format "%-30s %12s %12s %12s %10s" \
+            "clock" "period" "min_period" "fmax_mhz" "registers"]
+    } else {
+        sc_report_banner "Fmax"
+    }
+    # Model on: https://github.com/The-OpenROAD-Project/OpenSTA/blob/f913c3ddbb3e7b4364ed4437c65ac78c4da9174b/tcl/Search.tcl#L1078
+    set fmax_metric 0
+    foreach clk [sta::sort_by_name [all_clocks]] {
+        puts "$PREFIX fmax"
+        set clk_name [get_name $clk]
+        set period [get_property $clk period]
+        set regs [llength [all_registers -clock $clk]]
+        set min_period [sta::find_clk_min_period $clk 1]
+        if { $min_period == 0.0 } {
+            puts $fmax_report [format "%-30s %12.4f %12s %12s %10d" \
+                $clk_name $period "-" "-" $regs]
+            continue
+        }
+        set fmax [expr { 1.0 / $min_period }]
+        puts "$clk_name fmax = [format %.2f [expr { $fmax / 1e6 }]] MHz"
+        puts $fmax_report [format "%-30s %12.4f %12.4f %12.2f %10d" \
+            $clk_name $period [sta::time_sta_ui $min_period] \
+            [expr { $fmax / 1e6 }] $regs]
+        set fmax_metric [expr { max($fmax_metric, $fmax) }]
+    }
+    if { $fmax_report != "" } {
+        close $fmax_report
+    }
+    if { $fmax_metric > 0 } {
+        puts "fmax = [format %.2f [expr { $fmax_metric / 1e6 }]] MHz"
+    }
+}
+
+# get logic depth of design
+if { [sc_cfg_tool_task_check_in_list logicdepth var reports] } {
+    puts "$PREFIX logicdepth"
+    puts [sc_count_logic_depth -report reports/design/logic_depth.rpt]
+}
+
+if { [sc_cfg_tool_task_check_in_list power var reports] } {
+    sc_report_banner "Power"
+    puts "$PREFIX power"
+    foreach scene $sc_scenarios {
+        if {
+            ![sc_is_scene_enabled $scene power] &&
+            ![sc_is_scene_enabled $scene leakagepower] &&
+            ![sc_is_scene_enabled $scene dynamicpower]
+        } {
+            continue
+        }
+        puts "Power for scene: $scene"
+        puts "report: reports/power/${scene}.rpt"
+        report_power -corner $scene > reports/power/${scene}.rpt
+        sc_display_report reports/power/${scene}.rpt
+    }
+}
+
+if { [sc_cfg_tool_task_check_in_list design_stats var reports] } {
+    sc_report_banner "Design statistics" \
+        reports/design/area.rpt \
+        reports/design/registers.rpt \
+        reports/design/high_fanout.rpt \
+        reports/design/logic_depth.rpt
+
+    set fid [open reports/design/area.rpt w]
+    puts $fid "Design area: [sc_design_area]"
+    close $fid
+
+    set design_regs []
+    foreach inst [all_registers] {
+        lappend design_regs [get_full_name $inst]
+    }
+    set fid [open reports/design/registers.rpt w]
+    foreach reg [lsort $design_regs] {
+        puts $fid $reg
+    }
+    close $fid
+
+    set net_fanouts []
+    foreach net [get_nets -hierarchical *] {
+        set loads 0
+        foreach pin [get_pins -quiet -of_objects $net] {
+            if { [get_property $pin direction] == "input" } {
+                incr loads
+            }
+        }
+        lappend net_fanouts [list [get_full_name $net] $loads]
+    }
+    set net_fanouts [lsort -integer -decreasing -index 1 $net_fanouts]
+    set fid [open reports/design/high_fanout.rpt w]
+    puts $fid [format "%-60s %8s" "net" "fanout"]
+    foreach net_info [lrange $net_fanouts 0 49] {
+        lassign $net_info net_name net_fanout
+        puts $fid [format "%-60s %8d" $net_name $net_fanout]
+    }
+    close $fid
+
+    sc_count_logic_depth -report reports/design/logic_depth.rpt
+} else {
+    sc_report_banner "Design statistics"
+}
+puts "$PREFIX cells"
+puts [llength [get_cells *]]
+
+puts "$PREFIX cellarea"
+puts [sc_design_area]
+
+# get number of nets in design
+puts "$PREFIX nets"
+puts [llength [get_nets *]]
+
+# get number of registers
+puts "$PREFIX registers"
+puts [llength [all_registers]]
+
+# get number of buffers
+set bufs 0
+set invs 0
+foreach inst [get_cells -hierarchical *] {
+    set cell [$inst cell]
+    if { $cell == "NULL" } {
+        continue
+    }
+    set liberty_cell [$cell liberty_cell]
+    if { $liberty_cell == "NULL" } {
+        continue
+    }
+    if { [$liberty_cell is_buffer] } {
+        incr bufs
+    } elseif { [$liberty_cell is_inverter] } {
+        incr invs
+    }
+}
+puts "$PREFIX buffers"
+puts $bufs
+puts "$PREFIX inverters"
+puts $invs
+
+puts "$PREFIX pins"
+puts [llength [get_ports *]]
+
+# get number of unconstrained endpoints
+if { [sc_cfg_tool_task_check_in_list unconstrained var reports] } {
+    with_output_to_variable endpoints {check_setup -unconstrained_endpoints}
+    set unconstrained_endpoints [regexp -all -inline {[0-9]+} $endpoints]
+    if { $unconstrained_endpoints == "" } {
+        set unconstrained_endpoints 0
+    }
+    puts "$PREFIX unconstrained"
+    puts $unconstrained_endpoints
+}

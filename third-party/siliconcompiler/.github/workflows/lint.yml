@@ -1,0 +1,92 @@
+name: Lint
+on:
+  # Runs on pushes to test/ branches and main
+  push:
+    branches:
+      - 'main'
+      - 'test/**'
+  # Runs on all PRs
+  pull_request:
+  # Manual Dispatch
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# The repository's default workflow token is write-all; nothing here writes.
+permissions:
+  contents: read
+
+jobs:
+  lint_python:
+    name: Lint Python Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Lint with Flake8
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install .[lint]
+          flake8 --statistics .
+
+  lint_verilog:
+    name: Lint Verilog Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+
+      - name: Set up Verible
+        run: |
+          ./siliconcompiler/toolscripts/ubuntu20/install-verible.sh
+          echo /opt/verible/bin >> $GITHUB_PATH
+
+      - name: Check format
+        id: check-format
+        run: |
+          ./.github/workflows/bin/format_verilog.sh > files.txt
+          cat files.txt
+          git diff --exit-code
+
+      - name: Check lint
+        if: success() || steps.check-format.conclusion == 'failure'
+        run: |
+          verible-verilog-lint --rules_config .github/workflows/config/verible.rules `cat files.txt`
+
+  lint_tcl:
+    name: Lint TCL scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Lint with tclint
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install .[lint]
+          tclfmt --check .
+          tclint .
+
+  spelling:
+    name: Check spelling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check spelling
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install .[lint]
+          codespell

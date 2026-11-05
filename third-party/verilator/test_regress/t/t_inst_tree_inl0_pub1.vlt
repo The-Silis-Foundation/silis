@@ -1,0 +1,11 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2019 Stefan Wallentowitz
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+
+no_inline -module "l*"
+public -module "l*" -var "z*"
+lint_off -rule UNOPTPUBLIC

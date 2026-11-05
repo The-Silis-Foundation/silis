@@ -1,0 +1,1781 @@
+#######################
+# Global Placement
+#######################
+
+proc sc_global_placement_density { args } {
+    sta::parse_key_args "sc_global_placement_density" args \
+        keys {} \
+        flags {-exclude_padding}
+    sta::check_argc_eq0 "sc_global_placement_density" $args
+
+    set gpl_place_density [sc_cfg_tool_task_get var place_density]
+    set gpl_uniform_placement_adjustment \
+        [sc_cfg_tool_task_get var gpl_uniform_placement_adjustment]
+
+    set density_args []
+    if { ![info exists flags(-exclude_padding)] } {
+        set gpl_padding [sc_cfg_tool_task_get var pad_global_place]
+
+        lappend density_args -pad_left $gpl_padding
+        lappend density_args -pad_right $gpl_padding
+    }
+    set or_uniform_density [gpl::get_global_placement_uniform_density {*}$density_args]
+
+    # Small adder to ensure requested density is slightly over the uniform density
+    set or_adjust_density_adder 0.001
+
+    set selected_density $gpl_place_density
+
+    # User specified adjustment
+    if { $gpl_uniform_placement_adjustment > 0.0 } {
+        set or_uniform_adjusted_density \
+            [expr {
+                $or_uniform_density + ((1.0 - $or_uniform_density) *
+                    $gpl_uniform_placement_adjustment) + $or_adjust_density_adder
+            }]
+        if { $or_uniform_adjusted_density > 1.00 } {
+            utl::warn FLW 1 "Adjusted density exceeds 1.00 \
+                ([format %0.3f $or_uniform_adjusted_density]), reverting to use \
+                ($gpl_place_density) for global placement"
+            set selected_density $gpl_place_density
+        } else {
+            utl::info FLW 1 "Using computed density of \
+              ([format %0.3f $or_uniform_adjusted_density]) for global placement"
+            set selected_density $or_uniform_adjusted_density
+        }
+    }
+
+    # Final selection
+    set or_uniform_zero_adjusted_density \
+        [expr { min($or_uniform_density + $or_adjust_density_adder, 1.0) }]
+
+    if { $selected_density < $or_uniform_density } {
+        utl::warn FLW 1 "Using computed density of \
+            ([format %0.3f $or_uniform_zero_adjusted_density]) for global placement as \
+            [format %0.3f $selected_density] < [format %0.3f $or_uniform_density]"
+        set selected_density $or_uniform_zero_adjusted_density
+    }
+
+    return $selected_density
+}
+
+proc sc_global_placement { args } {
+    sta::parse_key_args "sc_global_placement" args \
+        keys {} \
+        flags {-skip_io -disable_routability_driven}
+    sta::check_argc_eq0 "sc_global_placement" $args
+
+    set gpl_padding [sc_cfg_tool_task_get var pad_global_place]
+
+    set gpl_args []
+    if {
+        [sc_cfg_tool_task_get var gpl_routability_driven] &&
+        ![info exists flags(-disable_routability_driven)]
+    } {
+        lappend gpl_args "-routability_driven"
+    }
+    if { [sc_cfg_tool_task_get var gpl_timing_driven] } {
+        lappend gpl_args "-timing_driven"
+    }
+    if { [sc_cfg_tool_task_get var gpl_enable_skip_initial_place] } {
+        lappend gpl_args "-skip_initial_place"
+    }
+
+    if { [info exists flags(-skip_io)] } {
+        lappend gpl_args "-skip_io"
+    }
+
+    set density [sc_global_placement_density]
+
+    lappend gpl_args \
+        -density $density \
+        -pad_left $gpl_padding \
+        -pad_right $gpl_padding
+
+    sc_report_args -command global_placement -args $gpl_args
+    global_placement {*}$gpl_args
+}
+
+###########################
+# Resistance aware global routing
+###########################
+
+# Upstream passes -resistance_aware on every global_route call including the
+# incremental ones issued around detailed placement, hence a shared proc.
+proc sc_grt_resistance_aware_args { } {
+    if {
+        [sc_cfg_tool_task_get {var} grt_resistance_aware] &&
+        [sc_check_version 24 3 9363]
+    } {
+        return [list -resistance_aware]
+    }
+    return []
+}
+
+###########################
+# Detailed placement legalizer
+###########################
+
+# The negotiation-based legalizer became the detailed_placement default in 26Q3-441,
+# which is also when the opt-out for the original diamond search engine was named
+# -use_diamond_legalizer. Older builds legalize with diamond search regardless, so
+# there is nothing to pass them.
+proc sc_dpl_legalizer_args { } {
+    if {
+        [sc_cfg_tool_task_get {var} dpl_use_diamond_legalizer] &&
+        [sc_check_version 26 3 441]
+    } {
+        return [list -use_diamond_legalizer]
+    }
+    return []
+}
+
+###########################
+# Resizer arguments
+###########################
+
+# Filter a move sequence down to what the installed OpenROAD understands.
+#
+# Unlike the -sequence flag itself, the move *names* are recent: the current
+# vocabulary arrives with the resizer rearchitecture in 26Q2-384 and "reroute" only
+# in 26Q2-946, both far above the tool's declared floor. An unknown name is a hard
+# error inside repair_timing, and rsz_wns_sequence defaults to a sequence containing
+# reroute, so an older but supported build has to be given a sequence it can parse
+# rather than the raw list.
+#
+# Dropping every move leaves the caller to omit -sequence entirely, which falls back
+# to the tool's own ordering -- the pass still runs.
+proc sc_rsz_supported_moves { moves } {
+    if { ![sc_check_version 26 2 384] } {
+        return []
+    }
+    if { [sc_check_version 26 2 946] } {
+        return $moves
+    }
+
+    set supported []
+    foreach move $moves {
+        if { $move ne "reroute" } {
+            lappend supported $move
+        }
+    }
+    return $supported
+}
+
+# Build the repair_design argument list from the rsz_* task variables.
+proc sc_repair_design_args { } {
+    set args []
+
+    set cap_margin [sc_cfg_tool_task_get {var} rsz_cap_margin]
+    if { $cap_margin > 0 } {
+        lappend args -cap_margin $cap_margin
+    }
+    set slew_margin [sc_cfg_tool_task_get {var} rsz_slew_margin]
+    if { $slew_margin > 0 } {
+        lappend args -slew_margin $slew_margin
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_match_cell_footprint] } {
+        lappend args -match_cell_footprint
+    }
+    set max_utilization [sc_cfg_tool_task_get {var} rsz_max_utilization]
+    if { $max_utilization != {} } {
+        lappend args -max_utilization $max_utilization
+    }
+    set max_wire_length [sc_cfg_tool_task_get {var} rsz_max_wire_length]
+    if { $max_wire_length != {} } {
+        lappend args -max_wire_length $max_wire_length
+    }
+
+    return $args
+}
+
+# Build the repair_timing argument list for one repair phase, from the rsz_* task
+# variables. The phase decides which variables apply:
+#
+#   setup   the main setup pass: move controls, rsz_sequence, and the setup-only
+#           rsz_phases / rsz_skip_size_down / rsz_max_repairs_per_pass
+#   hold    the hold pass: move controls plus the two hold-only limits
+#   wns     the worst negative slack pass: move controls, rsz_wns_sequence, and a
+#           fixed -repair_tns 0 so only the single worst endpoint is repaired
+#   power   power recovery, which ignores the setup and hold move controls
+#
+# Flags that the installed OpenROAD is too old to accept are dropped here rather
+# than at the call site.
+proc sc_repair_timing_args { phase } {
+    # Shared by every phase.
+    set args []
+    if { [sc_cfg_tool_task_get {var} rsz_skip_pin_swap] } {
+        lappend args -skip_pin_swap
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_skip_gate_cloning] } {
+        lappend args -skip_gate_cloning
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_skip_buffer_removal] } {
+        lappend args -skip_buffer_removal
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_skip_buffering] } {
+        lappend args -skip_buffering
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_skip_vt_swap] && [sc_check_version 24 3 7918] } {
+        lappend args -skip_vt_swap
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_skip_crit_vt_swap] && [sc_check_version 24 3 8690] } {
+        lappend args -skip_crit_vt_swap
+    }
+    if { [sc_cfg_tool_task_get {var} rsz_match_cell_footprint] } {
+        lappend args -match_cell_footprint
+    }
+    set max_utilization [sc_cfg_tool_task_get {var} rsz_max_utilization]
+    if { $max_utilization != {} } {
+        lappend args -max_utilization $max_utilization
+    }
+    # Effort caps. Upstream feeds these to both setup and hold repair but not to power
+    # recovery, so the power phase accepts and ignores them.
+    set max_passes [sc_cfg_tool_task_get {var} rsz_max_passes]
+    if { $max_passes != {} } {
+        lappend args -max_passes $max_passes
+    }
+    set max_iterations [sc_cfg_tool_task_get {var} rsz_max_iterations]
+    if { $max_iterations != {} && [sc_check_version 24 3 9983] } {
+        lappend args -max_iterations $max_iterations
+    }
+
+    switch -exact -- $phase {
+        power {
+            # Power recovery ignores everything below.
+        }
+        setup -
+        hold {
+            if { [sc_cfg_tool_task_get {var} rsz_skip_final_sizing] } {
+                lappend args -skip_last_gasp
+            }
+            set sequence [sc_rsz_supported_moves [sc_cfg_tool_task_get {var} rsz_sequence]]
+            if { [llength $sequence] != 0 } {
+                lappend args -sequence [join $sequence " "]
+            }
+            if { $phase == "setup" } {
+                # Consumed by setup repair only, ignored by hold repair.
+                if {
+                    [sc_cfg_tool_task_get {var} rsz_skip_size_down] &&
+                    [sc_check_version 24 3 6057]
+                } {
+                    lappend args -skip_size_down
+                }
+                set phases [sc_cfg_tool_task_get {var} rsz_phases]
+                if { [llength $phases] != 0 && [sc_check_version 26 1 217] } {
+                    lappend args -phases [join $phases " "]
+                }
+                set max_repairs [sc_cfg_tool_task_get {var} rsz_max_repairs_per_pass]
+                if { $max_repairs != {} && [sc_check_version 24 3 3287] } {
+                    lappend args -max_repairs_per_pass $max_repairs
+                }
+            }
+            if { $phase == "hold" } {
+                # Consumed by hold repair only, ignored by setup repair.
+                if { [sc_cfg_tool_task_get {var} rsz_allow_setup_violations] } {
+                    lappend args -allow_setup_violations
+                }
+                set max_buffer_percent [sc_cfg_tool_task_get {var} rsz_max_buffer_percent]
+                if { $max_buffer_percent != {} } {
+                    lappend args -max_buffer_percent $max_buffer_percent
+                }
+            }
+        }
+        wns {
+            # Restricted to the moves that disturb placement and routing the least,
+            # so it takes rsz_wns_sequence and always skips the final sizing pass.
+            lappend args -skip_last_gasp -repair_tns 0
+            set sequence [sc_rsz_supported_moves [sc_cfg_tool_task_get {var} rsz_wns_sequence]]
+            if { [llength $sequence] != 0 } {
+                lappend args -sequence [join $sequence " "]
+            }
+        }
+        default {
+            utl::error FLW 1 "Unknown repair_timing phase: $phase"
+        }
+    }
+
+    return $args
+}
+
+###########################
+# Detailed route arguments
+###########################
+
+# Build the detailed_route argument list. Shared so the antenna repair that follows
+# routing reroutes with exactly the same settings the initial route used.
+#
+# Also applies the routing layer range, which on newer OpenROAD is set through
+# set_routing_layers rather than passed as arguments.
+proc sc_detailed_route_args { } {
+    global sc_pdk
+    global sc_topmodule
+
+    set drt_arguments []
+    if { [sc_cfg_tool_task_get {var} drt_disable_via_gen] } {
+        lappend drt_arguments "-disable_via_gen"
+    }
+    set drt_process_node [sc_cfg_tool_task_get {var} drt_process_node]
+    if { $drt_process_node != {} } {
+        lappend drt_arguments "-db_process_node" $drt_process_node
+    }
+    set drt_via_in_pin_bottom_layer \
+        [sc_get_layer_name [sc_cfg_tool_task_get {var} drt_via_in_pin_bottom_layer]]
+    if { $drt_via_in_pin_bottom_layer != {} } {
+        lappend drt_arguments "-via_in_pin_bottom_layer" $drt_via_in_pin_bottom_layer
+    }
+    set drt_via_in_pin_top_layer \
+        [sc_get_layer_name [sc_cfg_tool_task_get {var} drt_via_in_pin_top_layer]]
+    if { $drt_via_in_pin_top_layer != {} } {
+        lappend drt_arguments "-via_in_pin_top_layer" $drt_via_in_pin_top_layer
+    }
+    set drt_repair_pdn_vias \
+        [sc_get_layer_name [sc_cfg_tool_task_get {var} drt_repair_pdn_vias]]
+    if { $drt_repair_pdn_vias != {} } {
+        lappend drt_arguments "-repair_pdn_vias" $drt_repair_pdn_vias
+    }
+    set drt_end_iteration [sc_cfg_tool_task_get {var} drt_end_iteration]
+    if { $drt_end_iteration != {} } {
+        lappend drt_arguments "-droute_end_iter" $drt_end_iteration
+    }
+    lappend drt_arguments -drc_report_iter_step [sc_cfg_tool_task_get {var} drt_report_interval]
+
+    set sc_minmetal [sc_cfg_get asic minlayer]
+    if { $sc_minmetal == {} } {
+        set sc_minmetal [sc_cfg_get library $sc_pdk pdk minlayer]
+    }
+
+    set sc_maxmetal [sc_cfg_get asic maxlayer]
+    if { $sc_maxmetal == {} } {
+        set sc_maxmetal [sc_cfg_get library $sc_pdk pdk maxlayer]
+    }
+    set sc_minmetal [sc_get_layer_name $sc_minmetal]
+    set sc_maxmetal [sc_get_layer_name $sc_maxmetal]
+
+    if { [sc_check_version 24 3 7648] } {
+        set_routing_layers -signal "${sc_minmetal}-${sc_maxmetal}"
+    } else {
+        lappend drt_arguments -bottom_routing_layer $sc_minmetal
+        lappend drt_arguments -top_routing_layer $sc_maxmetal
+    }
+
+    lappend drt_arguments \
+        -save_guide_updates \
+        -output_drc "reports/checks/${sc_topmodule}.drc.rpt" \
+        -verbose 1
+
+    return $drt_arguments
+}
+
+###########################
+# Antenna repair
+###########################
+
+# Repair antenna violations with the main library's antenna cell.
+#
+# Filler cells have to come out first so the inserted diodes have sites to be
+# placed in, and go back in afterwards. Both the pre-route and post-route antenna
+# steps need that bracketing, which is why it lives here rather than in either
+# script.
+#
+#   -iterations <n>          passed to repair_antennas as -iterations
+#   -reroute_iterations <n>  bound on the repair/reroute loop, at least 1, defaults to 1
+#   -reroute <script>        evaluated in the caller's scope after each repair that
+#                            inserted diodes, to route the modified nets
+#
+# Returns 1 if a repair was attempted, 0 if there is no antenna cell to use.
+proc sc_repair_antennas { args } {
+    sta::parse_key_args "sc_repair_antennas" args \
+        keys {-iterations -reroute_iterations -reroute} \
+        flags {}
+    sta::check_argc_eq0 "sc_repair_antennas" $args
+
+    global sc_mainlib
+
+    set antenna_cells [sc_cfg_get library $sc_mainlib asic cells antenna]
+    if { [llength $antenna_cells] == 0 } {
+        utl::info FLW 1 "No antenna cell available, skipping antenna repair"
+        return 0
+    }
+    set antenna_cell [lindex $antenna_cells 0]
+
+    set reroute_iterations 1
+    if { [info exists keys(-reroute_iterations)] } {
+        set reroute_iterations $keys(-reroute_iterations)
+    }
+
+    set repair_args [list $antenna_cell -ratio_margin [sc_cfg_tool_task_get {var} ant_margin]]
+    if { [info exists keys(-iterations)] } {
+        lappend repair_args -iterations $keys(-iterations)
+    }
+
+    # Remove filler cells so the diodes have sites to be placed in
+    remove_fillers
+
+    for { set iter 1 } { $iter <= $reroute_iterations } { incr iter } {
+        if { $iter > 1 && [check_antennas] == 0 } {
+            break
+        }
+        puts "Starting antenna repair iteration $iter of $reroute_iterations\
+            with ${antenna_cell} cell"
+        sc_report_args -command repair_antennas -args $repair_args
+        if { ![repair_antennas {*}$repair_args] } {
+            utl::info FLW 1 "No diodes inserted, ending antenna repair"
+            break
+        }
+        if { [info exists keys(-reroute)] } {
+            uplevel 1 $keys(-reroute)
+        }
+    }
+
+    # Add filler cells back
+    sc_insert_fillers
+
+    return 1
+}
+
+###########################
+# Detailed Placement
+###########################
+
+proc sc_detailed_placement { args } {
+    sta::parse_key_args "sc_detailed_placement" args \
+        keys {-congestion_report} \
+        flags {}
+    sta::check_argc_eq0 "sc_detailed_placement" $args
+
+    set dpl_padding [sc_cfg_tool_task_get var pad_detail_place]
+
+    set_placement_padding -global \
+        -left $dpl_padding \
+        -right $dpl_padding
+
+    set incremental_route [expr { [sc_check_version 24 3 4486] && [grt::have_routes] }]
+
+    if { $incremental_route } {
+        global_route -start_incremental
+    }
+
+    detailed_placement \
+        -max_displacement [sc_cfg_tool_task_get var dpl_max_displacement] \
+        {*}[sc_dpl_legalizer_args]
+
+    if { $incremental_route } {
+        global_route -end_incremental \
+            -congestion_report_file $keys(-congestion_report) \
+            {*}[sc_grt_resistance_aware_args]
+    }
+
+    check_placement -verbose
+}
+
+###########################
+# Pin Placement
+###########################
+
+proc sc_pin_placement { args } {
+    sta::parse_key_args "sc_pin_placement" args \
+        keys {} \
+        flags {-random}
+    sta::check_argc_eq0 "sc_pin_placement" $args
+
+    foreach pin_constraint [sc_cfg_tool_task_get var ppl_constraints] {
+        puts "Sourcing pin constraints: ${pin_constraint}"
+        source $pin_constraint
+    }
+
+    set ppl_args []
+    if { [info exists flags(-random)] } {
+        lappend ppl_args "-random"
+    }
+
+    lappend ppl_args {*}[sc_cfg_tool_task_get var ppl_arguments]
+
+    set sc_hpinmetal [sc_cfg_tool_task_get var pin_layer_horizontal]
+    set sc_vpinmetal [sc_cfg_tool_task_get var pin_layer_vertical]
+
+    set ppl_args [list \
+        -hor_layers [sc_get_layer_name $sc_hpinmetal] \
+        -ver_layers [sc_get_layer_name $sc_vpinmetal] \
+        {*}$ppl_args]
+
+    sc_report_args -command place_pins -args $ppl_args
+    place_pins {*}$ppl_args
+}
+
+###########################
+# Check if OR has a GUI
+###########################
+
+proc sc_has_gui { } {
+    return [gui::supported]
+}
+
+###########################
+# Check if design has placed instances
+###########################
+
+proc sc_has_placed_instances { } {
+    foreach inst [[ord::get_db_block] getInsts] {
+        if { [$inst isPlaced] } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Check if design has unplaced instances
+###########################
+
+proc sc_has_unplaced_instances { } {
+    foreach inst [[ord::get_db_block] getInsts] {
+        if { ![$inst isPlaced] } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Check if design has routing
+###########################
+
+proc sc_has_routing { } {
+    foreach net [[ord::get_db_block] getNets] {
+        if { [$net getWire] != "NULL" } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Check if design has global routing
+###########################
+
+proc sc_has_global_routing { } {
+    foreach net [[ord::get_db_block] getNets] {
+        if { [llength [$net getGuides]] != 0 } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Design has unplaced macros
+###########################
+
+# Function adapted from OpenROAD:
+# https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts/blob/ca3004b85e0d4fbee3470115e63b83c498cfed85/flow/scripts/macro_place.tcl#L26
+proc sc_design_has_unplaced_macros { } {
+    foreach inst [[ord::get_db_block] getInsts] {
+        if { [$inst isBlock] && ![$inst isFixed] } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Print macros placement
+###########################
+
+proc sc_print_macro_information { { insts [] } } {
+    set print_header "true"
+    foreach inst [[ord::get_db_block] getInsts] {
+        if { [$inst isBlock] || [lsearch -exact $insts [$inst getName]] != -1 } {
+            set master [$inst getMaster]
+            set status [$inst getPlacementStatus]
+
+            if { $print_header == "true" } {
+                puts "Macro placement information:"
+                set print_header "false"
+            }
+            if { [$inst isPlaced] } {
+                set location [$inst getLocation]
+                set orient [$inst getOrient]
+                set xloc [ord::dbu_to_microns [lindex $location 0]]
+                set yloc [ord::dbu_to_microns [lindex $location 1]]
+                puts "  [$inst getName] ([$master getName]): $status at\
+                    ($xloc um, $yloc um) $orient"
+            } else {
+                utl::warn FLW 1 "  [$inst getName] ([$master getName]): UNPLACED"
+            }
+        }
+    }
+}
+
+###########################
+# Design has unplaced pads
+###########################
+
+proc sc_design_has_unplaced_pads { } {
+    foreach inst [[ord::get_db_block] getInsts] {
+        if { [$inst isPad] && ![$inst isFixed] } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Design has placable IOs
+###########################
+
+proc sc_design_has_placeable_ios { } {
+    foreach bterm [[ord::get_db_block] getBTerms] {
+        if {
+            [$bterm getFirstPinPlacementStatus] != "FIRM" &&
+            [$bterm getFirstPinPlacementStatus] != "LOCKED"
+        } {
+            return true
+        }
+    }
+    return false
+}
+
+proc sc_design_report_unplaced_pins { } {
+    set unfixed_ios 0
+    foreach bterm [[ord::get_db_block] getBTerms] {
+        if {
+            [$bterm getFirstPinPlacementStatus] != "FIRM" &&
+            [$bterm getFirstPinPlacementStatus] != "LOCKED"
+        } {
+            incr unfixed_ios
+            utl::warn FLW 2 "IO terminal [$bterm getName] has not been placed."
+        }
+    }
+    if { $unfixed_ios > 0 } {
+        utl::warn FLW 3 "Total unplaced IOs: $unfixed_ios"
+    }
+    return $unfixed_ios
+}
+
+proc sc_design_assert_ios_fixed { } {
+    if { [sc_design_report_unplaced_pins] > 0 } {
+        utl::error FLW 1 "Design has unfixed IOs. Please fix all IOs before proceeding."
+    }
+}
+
+###########################
+# Check if net has placed bpins
+###########################
+
+proc sc_bterm_has_placed_io { net } {
+    set net [[ord::get_db_block] findNet $net]
+
+    foreach bterm [$net getBTerms] {
+        if { [$bterm getFirstPinPlacementStatus] != "UNPLACED" } {
+            return true
+        }
+    }
+    return false
+}
+
+###########################
+# Get nets with unplaced bterms
+###########################
+
+proc sc_get_unplaced_io_nets { } {
+    set nets []
+    foreach bterm [[ord::get_db_block] getBTerms] {
+        if {
+            [$bterm getFirstPinPlacementStatus] == "UNPLACED" ||
+            [$bterm getFirstPinPlacementStatus] == "NONE"
+        } {
+            lappend nets [$bterm getNet]
+        }
+    }
+    return $nets
+}
+
+###########################
+# Find nets regex
+###########################
+
+proc sc_find_net_regex { net_name } {
+    set nets []
+
+    foreach net [[ord::get_db_block] getNets] {
+        if { [string match $net_name [$net getName]] } {
+            lappend nets [$net getName]
+        }
+    }
+
+    return $nets
+}
+
+###########################
+# Get supply nets in design
+###########################
+
+proc sc_supply_nets { } {
+    set nets []
+
+    foreach net [[ord::get_db_block] getNets] {
+        set type [$net getSigType]
+        if { $type == "POWER" || $type == "GROUND" } {
+            lappend nets [$net getName]
+        }
+    }
+
+    return $nets
+}
+
+###########################
+# Get nets for PSM to check
+###########################
+
+proc sc_psm_check_nets { } {
+    if { [sc_cfg_tool_task_get var psm_enable] } {
+        set psm_nets []
+
+        foreach net [sc_supply_nets] {
+            set skipped false
+            foreach skip_pattern [sc_cfg_tool_task_get var psm_skip_nets] {
+                if { [string match $skip_pattern $net] } {
+                    set skipped true
+                    break
+                }
+            }
+            if { !$skipped } {
+                lappend psm_nets $net
+            }
+        }
+
+        return $psm_nets
+    }
+
+    return []
+}
+
+###########################
+# Save an image
+###########################
+
+proc sc_save_image { args } {
+    sta::parse_key_args "sc_save_image" args \
+        keys {-title -gif -pixels} \
+        flags {}
+
+    sta::check_argc_eq1 "sc_save_image" $args
+
+    set title $keys(-title)
+    set path [lindex $args 0]
+
+    set pixels 1000
+    if { [info exists keys(-pixels)] } {
+        set pixels $keys(-pixels)
+    }
+
+    utl::info FLW 1 "Saving \"$title\" to $path"
+
+    save_image -resolution [sc_image_resolution $pixels] \
+        -area [sc_image_area] \
+        $path
+
+    if { [info exists keys(-gif)] && $keys(-gif) >= 0 } {
+        set gif_args []
+        if { [sc_check_version 24 3 11279] } {
+            lappend gif_args -key $keys(-gif)
+        }
+        save_animated_gif -add \
+            -resolution [sc_image_resolution $pixels] \
+            -area [sc_image_area] \
+            {*}$gif_args
+    }
+}
+
+###########################
+# Get the image bounding box
+###########################
+
+proc sc_image_area { } {
+    set box [[ord::get_db_block] getDieArea]
+    set width [$box dx]
+    set height [$box dy]
+
+    # apply 5% margin
+    set xmargin [expr { int(0.05 * $width) }]
+    set ymargin [expr { int(0.05 * $height) }]
+
+    set area []
+    lappend area [ord::dbu_to_microns [expr { [$box xMin] - $xmargin }]]
+    lappend area [ord::dbu_to_microns [expr { [$box yMin] - $ymargin }]]
+    lappend area [ord::dbu_to_microns [expr { [$box xMax] + $xmargin }]]
+    lappend area [ord::dbu_to_microns [expr { [$box yMax] + $ymargin }]]
+    return $area
+}
+
+###########################
+# Get the image resolution (um / pixel)
+###########################
+
+proc sc_image_resolution { pixels } {
+    set box [[ord::get_db_block] getDieArea]
+    return [expr { [ord::dbu_to_microns [$box maxDXDY]] / $pixels }]
+}
+
+###########################
+# Clear gui selections
+###########################
+
+proc sc_image_clear_selection { } {
+    gui::clear_highlights -1
+    gui::clear_selections
+}
+
+###########################
+# Setup default GUI setting for images
+###########################
+
+proc sc_image_setup_default { } {
+    gui::restore_display_controls
+
+    sc_image_clear_selection
+
+    gui::fit
+
+    # Setup initial visibility to avoid any previous settings
+    gui::set_display_controls "*" visible false
+    gui::set_display_controls "Layers/*" visible true
+    gui::set_display_controls "Nets/*" visible true
+    gui::set_display_controls "Instances/*" visible true
+    gui::set_display_controls "Shape Types/*" visible true
+    if { [llength [[ord::get_db_block] getBTerms]] > 10000 } {
+        # Avoid performance issues with too many IOs
+        gui::set_display_controls "Shape Types/Pins" visible false
+    }
+    gui::set_display_controls "Misc/Instances/*" visible true
+    gui::set_display_controls "Misc/Instances/Pin Names" visible false
+    gui::set_display_controls "Misc/Scale bar" visible true
+    gui::set_display_controls "Misc/Highlight selected" visible true
+    gui::set_display_controls "Misc/Detailed view" visible true
+    if { [sc_check_version 24 3 5987] } {
+        gui::set_display_controls "Misc/Labels" visible true
+    }
+}
+
+###########################
+# Count the logic depth of the critical path
+###########################
+
+proc sc_count_logic_depth { args } {
+    sta::parse_key_args "sc_count_logic_depth" args \
+        keys {-report} \
+        flags {}
+
+    set count 0
+    set drivers []
+    # Only the single worst path is needed, so ask for one setup path per
+    # group and pick the worst in Tcl instead of having OpenSTA sort across
+    # every group. The catch keeps a failed path search from taking the whole
+    # task down with it: this runs partway through reporting, so an error
+    # raised here loses every report that would follow.
+    set worst {}
+    if { ![catch { find_timing_paths -path_delay max -group_path_count 1 } ends] } {
+        foreach path_end $ends {
+            if { $worst eq {} || [$path_end slack] < [$worst slack] } {
+                set worst $path_end
+            }
+        }
+    }
+    if { $worst ne {} } {
+        set path_ref [$worst path]
+        set pins [$path_ref pins]
+        foreach pin $pins {
+            if { [$pin is_driver] } {
+                incr count
+                lappend drivers [get_full_name $pin]
+            }
+        }
+    }
+    # Subtract 1 to account for initial launch
+    set depth [expr { max($count - 1, 0) }]
+
+    if { [info exists keys(-report)] } {
+        set fid [open $keys(-report) w]
+        puts $fid "Logic depth: $depth"
+        if { [llength $drivers] > 0 } {
+            puts $fid ""
+            puts $fid "Critical path drivers:"
+            foreach driver $drivers {
+                puts $fid "  $driver"
+            }
+        }
+        close $fid
+    }
+
+    return $depth
+}
+
+###########################
+# Translate schema rotation
+###########################
+
+proc sc_convert_rotation { rot } {
+    if { [string match "MZ*" $rot] } {
+        utl::error FLW 1 "Z mirroring is not supported in OpenROAD"
+    }
+
+    switch $rot {
+        "R0" { return "R0" }
+        "R90" { return "R90" }
+        "R180" { return "R180" }
+        "R270" { return "R270" }
+        "MX" { return "MX" }
+        "MX_R90" { return "MXR90" }
+        "MX_R180" { return "MY" }
+        "MX_R270" { return "MYR90" }
+        "MY" { return "MY" }
+        "MY_R90" { return "MYR90" }
+        "MY_R180" { return "MX" }
+        "MY_R270" { return "MXR90" }
+        default { utl::error FLW 1 "$rot not recognized" }
+    }
+}
+
+proc sc_get_layer_name { name } {
+    if { [llength $name] > 1 } {
+        set layers []
+        foreach l $name {
+            lappend layers [sc_get_layer_name $l]
+        }
+        return $layers
+    }
+    if { [string length $name] == 0 } {
+        return ""
+    }
+    if { [string is integer $name] } {
+        set layer [[ord::get_db_tech] findRoutingLayer $name]
+        if { $layer == "NULL" } {
+            utl::error FLW 1 "$name is not a valid routing layer."
+        }
+        return [$layer getName]
+    }
+    return $name
+}
+
+proc sc_has_tie_cell { type } {
+    upvar sc_mainlib sc_mainlib
+
+    return [sc_cfg_exists library $sc_mainlib tool openroad tie${type}_cell]
+}
+
+proc sc_get_tie_cell { type } {
+    upvar sc_mainlib sc_mainlib
+
+    set cell_port [sc_cfg_get library $sc_mainlib tool openroad tie${type}_cell]
+    set cell [lindex $cell_port 0]
+    set port [lindex $cell_port 1]
+
+    return "$cell/$port"
+}
+
+proc sc_path_group { args } {
+    sta::parse_key_args "sc_path_group" args \
+        keys {-name -to -from} \
+        flags {}
+
+    sta::check_argc_eq0 "sc_path_group" $args
+
+    if { [llength $keys(-from)] == 0 } {
+        return
+    }
+    if { [llength $keys(-to)] == 0 } {
+        return
+    }
+    group_path -name $keys(-name) -from $keys(-from) -to $keys(-to)
+}
+
+proc sc_setup_sta { } {
+    set sta_early_timing_derate [sc_cfg_tool_task_get var sta_early_timing_derate]
+    set sta_late_timing_derate [sc_cfg_tool_task_get var sta_late_timing_derate]
+
+    # Setup timing derating
+    if { $sta_early_timing_derate != 0.0 } {
+        set_timing_derate -early $sta_early_timing_derate
+    }
+    if { $sta_late_timing_derate != 0.0 } {
+        set_timing_derate -late $sta_late_timing_derate
+    }
+
+    if { [sc_check_version 24 3 3783] } {
+        # Create path groups
+        if {
+            [sc_cfg_tool_task_get var sta_define_path_groups] &&
+            [llength [sta::path_group_names]] == 0
+        } {
+            sc_path_group -name in2out -from [all_inputs -no_clocks] -to [all_outputs]
+
+            if {
+                [llength [all_clocks]] == 1 ||
+                ![sc_cfg_tool_task_get var sta_unique_path_groups_per_clock]
+            } {
+                sc_path_group -name in2reg -from [all_inputs -no_clocks] -to [all_registers]
+                sc_path_group -name reg2reg -from [all_registers] -to [all_registers]
+                sc_path_group -name reg2out -from [all_registers] -to [all_outputs]
+            } else {
+                foreach clock [all_clocks] {
+                    set clk_name [get_property $clock name]
+                    sc_path_group -name in2reg.${clk_name} \
+                        -from [all_inputs -no_clocks] \
+                        -to [all_registers -clock $clock]
+                    sc_path_group -name reg2reg.${clk_name} \
+                        -from [all_registers -clock $clock] \
+                        -to [all_registers -clock $clock]
+                    sc_path_group -name reg2out.${clk_name} \
+                        -from [all_registers -clock $clock] \
+                        -to [all_outputs]
+                }
+            }
+        }
+        utl::info FLW 1 "Timing path groups: [sta::path_group_names]"
+    }
+
+    # Check timing setup
+    if { [sc_cfg_tool_task_check_in_list check_setup var reports] } {
+        sc_report_check_timing
+    }
+
+    if { [llength [all_clocks]] == 0 } {
+        utl::warn FLW 1 "No clocks defined."
+    }
+}
+
+proc sc_setup_global_routing { } {
+    global sc_tool
+    global sc_pdk
+
+    ## Setup global routing
+
+    set layerderate [dict create]
+    foreach derate [sc_cfg_get library $sc_pdk tool $sc_tool globalroutingderating] {
+        lassign $derate layer derate
+        dict set layerderate $layer $derate
+    }
+
+    # Adjust routing track density
+    foreach layer [[ord::get_db_tech] getLayers] {
+        if { [$layer getRoutingLevel] == 0 } {
+            continue
+        }
+
+        set layername [$layer getName]
+        if { ![dict exists $layerderate $layername] } {
+            utl::warn FLW 1 "Missing global routing adjustment for $layername"
+        } else {
+            set adjustment [dict get $layerderate $layername]
+            utl::info FLW 1 \
+                "Setting global routing adjustment for $layername to [expr { $adjustment * 100 }]%"
+            set_global_routing_layer_adjustment $layername $adjustment
+        }
+    }
+
+    if { [sc_cfg_tool_task_get var load_grt_setup] } {
+        set grt_macro_extension [sc_cfg_tool_task_get var grt_macro_extension]
+        if { $grt_macro_extension > 0 } {
+            utl::info FLW 1 "Setting global routing macro extension to $grt_macro_extension gcells"
+            set_macro_extension $grt_macro_extension
+        }
+
+        set openroad_grt_signal_min_layer \
+            [sc_get_layer_name [sc_cfg_tool_task_get var grt_signal_min_layer]]
+        set openroad_grt_signal_max_layer \
+            [sc_get_layer_name [sc_cfg_tool_task_get var grt_signal_max_layer]]
+        set openroad_grt_clock_min_layer \
+            [sc_get_layer_name [sc_cfg_tool_task_get var grt_clock_min_layer]]
+        set openroad_grt_clock_max_layer \
+            [sc_get_layer_name [sc_cfg_tool_task_get var grt_clock_max_layer]]
+
+        utl::info FLW 1 "Setting global routing signal routing layers to:\
+            ${openroad_grt_signal_min_layer}-${openroad_grt_signal_max_layer}"
+        set_routing_layers -signal \
+            "${openroad_grt_signal_min_layer}-${openroad_grt_signal_max_layer}"
+        utl::info FLW 1 "Setting global routing clock routing layers to:\
+            ${openroad_grt_signal_min_layer}-${openroad_grt_signal_max_layer}"
+        set_routing_layers -clock \
+            "${openroad_grt_clock_min_layer}-${openroad_grt_clock_max_layer}"
+    }
+}
+
+proc sc_setup_parasitics { } {
+    global sc_tool
+    global sc_pdk
+    global sc_scenarios
+
+    set sc_rc_signal [sc_get_layer_name [sc_cfg_get library $sc_pdk tool $sc_tool rclayer_signal]]
+    set sc_rc_clk [sc_get_layer_name [sc_cfg_get library $sc_pdk tool $sc_tool rclayer_clock]]
+
+    if { [sc_has_pexmap] } {
+        set default_corner [sc_cfg_tool_task_get var rsz_default_pex_corner]
+        if { $default_corner != {} } {
+            utl::info FLW 1 "Setting parasitic estimation for default scenes"
+            sc_setup_pex -pexcorner $default_corner
+        }
+        foreach scene $sc_scenarios {
+            set pexcorner [sc_cfg_get constraint timing scenario $scene pexcorner]
+            if { $pexcorner != {} } {
+                utl::info FLW 1 "Setting parasitic estimation for $scene"
+                sc_setup_pex -scene $scene -pexcorner $pexcorner
+            }
+        }
+    } else {
+        set sc_parasitics [sc_cfg_tool_task_get var rsz_parasitics]
+        utl::info FLW 1 "Sourcing parasitic estimation from: $sc_parasitics"
+        source $sc_parasitics
+    }
+
+    set_wire_rc -clock -layer $sc_rc_clk
+    set_wire_rc -signal -layer $sc_rc_signal
+    utl::info FLW 1 "Using $sc_rc_clk for clock parasitics estimation"
+    utl::info FLW 1 "Using $sc_rc_signal for signal parasitics estimation"
+}
+
+proc sc_insert_fillers { } {
+    global sc_logiclibs
+
+    set fillers []
+    if { [sc_cfg_tool_task_get var dpl_use_decap_fillers] } {
+        foreach lib $sc_logiclibs {
+            lappend fillers {*}[sc_cfg_get library $lib asic cells decap]
+        }
+    }
+
+    foreach lib $sc_logiclibs {
+        lappend fillers {*}[sc_cfg_get library $lib asic cells filler]
+    }
+
+    if { $fillers != "" } {
+        puts "Inserting filler cells: $fillers"
+        filler_placement -verbose $fillers
+    }
+
+    check_placement -verbose
+
+    global_connect
+}
+
+proc sc_check_version { min_major min_minor min_patch } {
+    set version [split [ord::openroad_version] "-"]
+    if { [lindex $version 0] == "v2.0" } {
+        if { [lindex $version 1] >= 27801 } {
+            set ord_major 26
+            set ord_minor 1
+            set ord_patch [expr { [lindex $version 1] - 27801 }]
+        } else {
+            set ord_major 24
+            set ord_minor 3
+            set ord_patch [expr { [lindex $version 1] - 15587 }]
+        }
+    } elseif { [string index [lindex $version 0] 2] == "Q" } {
+        set ord_major [string range [lindex $version 0] 0 1]
+        set ord_minor [string index [lindex $version 0] 3]
+        set ord_patch [lindex $version 1]
+    } else {
+        utl::error FLW 1 "Unknown OpenROAD version format: [ord::openroad_version]"
+    }
+
+    if { $ord_major > $min_major } {
+        return true
+    }
+    if { $ord_major == $min_major } {
+        if { $ord_minor > $min_minor } {
+            return true
+        }
+        if { $ord_minor == $min_minor } {
+            if { $ord_patch >= $min_patch } {
+                return true
+            }
+        }
+    }
+
+    return false
+}
+
+proc sc_has_sta_mcmm_support { } {
+    return [sc_check_version 26 1 1133]
+}
+
+# Returns the liberty files to read from the given filesets of a library. A
+# fileset that also carries binary liberty (.blib) is read from that instead,
+# when this OpenROAD can read it.
+proc sc_get_liberty_files { lib filesets } {
+    set use_binary [sc_check_version 26 4 509]
+
+    set files []
+    foreach fileset $filesets {
+        set binary_files []
+        if { $use_binary } {
+            set binary_files [sc_cfg_get_fileset $lib $fileset liberty-binary]
+        }
+        if { [llength $binary_files] > 0 } {
+            lappend files {*}$binary_files
+        } else {
+            lappend files {*}[sc_cfg_get_fileset $lib $fileset liberty]
+        }
+    }
+    return $files
+}
+
+proc sc_set_gui_title { } {
+    if { ![sc_check_version 24 3 2063] } {
+        return
+    }
+
+    global sc_tool
+    global sc_task
+
+    set step [sc_cfg_get arg step]
+    set index [sc_cfg_get arg index]
+    set job [sc_cfg_get option jobname]
+    if { [sc_cfg_exists "tool" $sc_tool "task" $sc_task "var" "show_step"] } {
+        set step [sc_cfg_get "tool" $sc_tool "task" $sc_task "var" "show_step"]
+    }
+    if { [sc_cfg_exists "tool" $sc_tool "task" $sc_task "var" "show_index"] } {
+        set index [sc_cfg_get "tool" $sc_tool "task" $sc_task "var" "show_index"]
+    }
+    if { [sc_cfg_exists "tool" $sc_tool "task" $sc_task "var" "show_job"] } {
+        set job [sc_cfg_get "tool" $sc_tool "task" $sc_task "var" "show_job"]
+    }
+    if { [string index $job 0] == "_" } {
+        set job [string range $job 1 end]
+    }
+
+    set title "OpenROAD - ${job} / ${step}${index}"
+    gui::set_title $title
+}
+
+proc sc_set_dont_use { args } {
+    sta::parse_key_args "sc_set_dont_use" args \
+        keys {-report} \
+        flags {-hold -clock -multibit -scanchain}
+
+    sta::check_argc_eq0 "sc_set_dont_use" $args
+
+    global sc_mainlib
+
+    if { [sc_check_version 24 3 2584] } {
+        reset_dont_use
+    }
+
+    set_dont_use [sc_cfg_get library $sc_mainlib asic cells dontuse]
+
+    set clk_groups "clkbuf clkgate clklogic"
+    foreach group $clk_groups {
+        set_dont_use [sc_cfg_get library $sc_mainlib asic cells $group]
+    }
+    set_dont_use [sc_cfg_get library $sc_mainlib asic cells hold]
+
+    if { [info exists flags(-hold)] } {
+        unset_dont_use [sc_cfg_get library $sc_mainlib asic cells hold]
+    }
+    if { [info exists flags(-clock)] } {
+        foreach group $clk_groups {
+            unset_dont_use [sc_cfg_get library $sc_mainlib asic cells $group]
+        }
+    }
+    if { [info exists flags(-clock)] } {
+        foreach group $clk_groups {
+            unset_dont_use [sc_cfg_get library $sc_mainlib asic cells $group]
+        }
+    }
+    # These are library properties, not task vars: the mainlib declares them via
+    # add_openroad_multibit_flipflops / add_openroad_scan_chain_cells.
+    if {
+        [info exists flags(-multibit)] &&
+        [sc_cfg_exists library $sc_mainlib tool openroad multibit_ff_cells]
+    } {
+        unset_dont_use [sc_cfg_get library $sc_mainlib tool openroad multibit_ff_cells]
+    }
+    if {
+        [info exists flags(-scanchain)] &&
+        [sc_cfg_exists library $sc_mainlib tool openroad scan_chain_cells]
+    } {
+        unset_dont_use [sc_cfg_get library $sc_mainlib tool openroad scan_chain_cells]
+    }
+
+    if { [info exists keys(-report)] } {
+        file mkdir reports/setup
+        puts "Dont use report: reports/setup/$keys(-report).rpt"
+        tee -quiet -file reports/setup/$keys(-report).rpt {report_dont_use}
+    }
+}
+
+proc sc_setup_detailed_route { } {
+    foreach via [sc_cfg_tool_task_get var detailed_route_default_via] {
+        utl::info FLW 1 "Marking $via a default routing via"
+        detailed_route_set_default_via $via
+    }
+    foreach layer [sc_cfg_tool_task_get var detailed_route_unidirectional_layer] {
+        set layer [sc_get_layer_name $layer]
+        utl::info FLW 1 "Marking $layer as a unidirectional routing layer"
+        detailed_route_set_unidirectional_layer $layer
+    }
+}
+
+proc sc_display_report { report } {
+    if { ![file exists $report] } {
+        return
+    }
+    set fid [open $report r]
+    set report_content [read $fid]
+    close $fid
+    puts $report_content
+}
+
+proc sc_report_check_timing { } {
+    sc_report_banner "Check timing setup"
+    file mkdir reports/constraints/check_timing
+    set checks "generated_clocks loops multiple_clock no_clock no_input_delay \
+        no_output_delay unconstrained_endpoints"
+    foreach check $checks {
+        puts "report: reports/constraints/check_timing/${check}.rpt"
+        tee -quiet -file reports/constraints/check_timing/${check}.rpt \
+            "check_setup -${check}"
+    }
+}
+
+proc sc_write_report_line { file line } {
+    set fid [open $file w]
+    puts $fid $line
+    close $fid
+}
+
+proc sc_timing_scenes { } {
+    global sc_scenarios
+
+    if { [sc_has_sta_mcmm_support] } {
+        set scenes $sc_scenarios
+    } else {
+        set scenes []
+        foreach corner [sta::corners] {
+            lappend scenes [$corner name]
+        }
+    }
+
+    # A single scene would just duplicate the combined timing reports
+    if { [llength $scenes] <= 1 } {
+        return []
+    }
+
+    return $scenes
+}
+
+# Worst slack and TNS have no public report command that accepts a scene, so they are
+# mirrored from the scene-aware accessors, which only exist in builds carrying the scene
+# timing model.
+proc sc_has_scene_slack { } {
+    return [expr { [info commands sta::worst_slack_scene] ne "" }]
+}
+
+# The reports sc_report_scene_timing will write, so the section banner can name them all
+# up front instead of announcing them one by one after the combined output.
+proc sc_scene_timing_reports { args } {
+    sta::parse_key_args "sc_scene_timing_reports" args \
+        keys {-name} \
+        flags {-unconstrained}
+
+    set reports []
+    foreach scene [sc_timing_scenes] {
+        set dir "reports/timing/scenarios/${scene}"
+        set base "${dir}/$keys(-name).${scene}"
+
+        lappend reports ${base}.rpt ${base}.topN.rpt
+
+        if { [info exists flags(-unconstrained)] } {
+            continue
+        }
+
+        lappend reports ${base}.failing.rpt ${base}.endpoints.rpt
+
+        if { [sc_has_scene_slack] } {
+            lappend reports \
+                ${dir}/worst_slack.$keys(-name).${scene}.rpt \
+                ${dir}/total_negative_slack.$keys(-name).${scene}.rpt
+        }
+    }
+
+    return $reports
+}
+
+proc sc_report_scene_timing { args } {
+    sta::parse_key_args "sc_report_scene_timing" args \
+        keys {-delay -name -fields -top_paths} \
+        flags {-unconstrained}
+
+    global sta_report_default_digits
+
+    set scenes [sc_timing_scenes]
+    if { [llength $scenes] == 0 } {
+        return
+    }
+
+    if { [sc_has_sta_mcmm_support] } {
+        set scene_arg "-scenes"
+    } else {
+        set scene_arg "-corner"
+    }
+
+    # Mirror the combined reports exactly, adding only the scene selector. Each scene gets
+    # its own directory, so the file names match their combined counterparts. Unconstrained
+    # paths have no failing/endpoints counterpart, so they stop after topN.
+    set unconstrained [info exists flags(-unconstrained)]
+    if { $unconstrained } {
+        set path_sel "-unconstrained"
+        set full_extra "-path_group unconstrained"
+    } else {
+        set path_sel "-path_delay $keys(-delay)"
+        set full_extra ""
+    }
+
+    # The scene is repeated in the file name, not just the directory, so reports gathered
+    # from several scenes into one place stay unique without renaming.
+    foreach scene $scenes {
+        set dir "reports/timing/scenarios/${scene}"
+        file mkdir $dir
+        set base "${dir}/$keys(-name).${scene}"
+
+        tee -quiet -file ${base}.rpt \
+            "report_checks -sort_by_slack -fields $keys(-fields) $path_sel \
+            -format full_clock_expanded $full_extra $scene_arg $scene"
+
+        tee -quiet -file ${base}.topN.rpt \
+            "report_checks -sort_by_slack -fields $keys(-fields) $path_sel \
+            -group_path_count $keys(-top_paths) $scene_arg $scene"
+
+        if { $unconstrained } {
+            continue
+        }
+
+        tee -quiet -file ${base}.failing.rpt \
+            "report_checks -sort_by_slack $path_sel -slack_max 0 -endpoint_path_count 1 \
+            -group_path_count $keys(-top_paths) -format short $scene_arg $scene"
+
+        tee -quiet -file ${base}.endpoints.rpt \
+            "report_checks -sort_by_slack $path_sel -endpoint_path_count 1 \
+            -group_path_count $keys(-top_paths) -format end $scene_arg $scene"
+
+        if { ![sc_has_scene_slack] } {
+            continue
+        }
+
+        set scene_obj [sta::find_scene $scene]
+        set scene_slack [sta::format_time \
+            [sta::worst_slack_scene $scene_obj $keys(-delay)] $sta_report_default_digits]
+        set scene_tns [sta::format_time \
+            [sta::total_negative_slack_scene_cmd $scene_obj $keys(-delay)] \
+            $sta_report_default_digits]
+
+        sc_write_report_line ${dir}/worst_slack.$keys(-name).${scene}.rpt \
+            "worst slack $keys(-delay) $scene_slack"
+        sc_write_report_line ${dir}/total_negative_slack.$keys(-name).${scene}.rpt \
+            "tns $keys(-delay) $scene_tns"
+    }
+}
+
+proc sc_report_scenarios { } {
+    global sc_sdc_files_read
+
+    file mkdir reports/constraints
+    set fid [open reports/constraints/scenarios.rpt w]
+
+    puts $fid "Timing scenarios:"
+    foreach scenario [dict keys [sc_cfg_get constraint timing scenario]] {
+        puts $fid "  ${scenario}:"
+        puts $fid "    libcorner: [sc_cfg_get constraint timing scenario $scenario libcorner]"
+        puts $fid "    pexcorner: [sc_cfg_get constraint timing scenario $scenario pexcorner]"
+        puts $fid "    mode: [sc_cfg_get constraint timing scenario $scenario mode]"
+        puts $fid "    checks: [sc_cfg_get constraint timing scenario $scenario check]"
+    }
+
+    puts $fid ""
+    puts $fid "SDC files loaded:"
+    if { [info exists sc_sdc_files_read] && [llength $sc_sdc_files_read] > 0 } {
+        foreach sdc $sc_sdc_files_read {
+            puts $fid "  $sdc"
+        }
+    } else {
+        puts $fid "  none"
+    }
+    close $fid
+
+    sc_display_report reports/constraints/scenarios.rpt
+}
+
+proc sc_report_banner { title args } {
+    set width 60
+    puts ""
+    puts [string repeat "=" $width]
+    puts "== $title"
+    foreach report $args {
+        puts "== report: $report"
+    }
+    puts [string repeat "=" $width]
+}
+
+proc sc_report_args { args } {
+    sta::parse_key_args "sc_report_args" args \
+        keys {-command -args} \
+        flags {}
+
+    sta::check_argc_eq0 "sc_report_args" $args
+
+    # Report the empty list explicitly. Most commands take no arguments by default, and
+    # staying silent there is indistinguishable from the command never running or from
+    # the reporting being broken.
+    set reported $keys(-args)
+    if { [llength $reported] == 0 } {
+        set reported "<none>"
+    }
+
+    puts "$keys(-command) siliconcompiler arguments: $reported"
+}
+
+proc sc_global_connections { args } {
+    sta::check_argc_eq0 "sc_global_connections" $args
+
+    set global_connect_files []
+    foreach global_connect_set [sc_cfg_tool_task_get var global_connect_fileset] {
+        lassign $global_connect_set lib fileset
+        foreach fs [sc_get_filesets -library $lib -filesets $fileset] {
+            lassign $fs fs_lib fs_name
+            foreach global_connect [sc_cfg_get_fileset $fs_lib $fs_name tcl] {
+                if { [lsearch -exact $global_connect_files $global_connect] != -1 } {
+                    continue
+                }
+                puts "Loading global connect configuration: ${global_connect}"
+                source $global_connect
+
+                lappend global_connect_files $global_connect
+            }
+        }
+    }
+    file mkdir reports/setup
+    tee -quiet -file reports/setup/global_connections.rpt {report_global_connect}
+}
+
+proc sc_format_area { area } {
+    return "([lindex $area 0], [lindex $area 1]) - ([lindex $area 2], [lindex $area 3])"
+}
+
+# Rewrite a "x0 y0 x1 y1" rectangle as the four corners of the same shape, walked
+# counter-clockwise. An outline that is already a polygon is returned untouched.
+proc sc_area_to_polygon { area } {
+    if { [llength $area] != 4 } {
+        return $area
+    }
+
+    lassign $area x0 y0 x1 y1
+    return [list $x0 $y0 $x1 $y0 $x1 $y1 $x0 $y1]
+}
+
+proc sc_is_scene_enabled { scene check } {
+    if { [lsearch -exact [sc_cfg_get constraint timing scenario $scene check] $check] != -1 } {
+        return true
+    } else {
+        return false
+    }
+}
+
+proc sc_is_inside_die { x y } {
+    set x [ord::microns_to_dbu $x]
+    set y [ord::microns_to_dbu $y]
+
+    set die_area [[ord::get_db_block] getDieArea]
+    if {
+        $x < [$die_area xMin] ||
+        $x > [$die_area xMax] ||
+        $y < [$die_area yMin] ||
+        $y > [$die_area yMax]
+    } {
+        return false
+    }
+    return true
+}
+
+proc sc_get_pexmap { map } {
+    global sc_pdk
+    global sc_tool
+    upvar $map pexmap
+
+    set pexmap [dict create]
+    foreach pex [sc_cfg_get library $sc_pdk tool $sc_tool rclayer] {
+        lassign $pex pex_corner pex_type pex_layer pex_res pex_cap
+        dict set pexmap $pex_type $pex_corner $pex_layer "$pex_res $pex_cap"
+    }
+}
+
+proc sc_get_corrmap { map } {
+    # Build the per-layer parasitic correction map:
+    #   corrmap[corner][layer] = [list res_factor cap_factor]
+    # Entries are keyed by layer name (names are unique across routing and via
+    # layers). Layers with no entry are left absent and default to 1.0 in
+    # sc_setup_pex, so an empty rccorrection is a no-op. An unprescribed factor
+    # is stored as None (empty) in the schema; it is normalized to 1.0 here so
+    # the map always holds numeric factors. Setting the task's
+    # 'apply_pex_correction' var to false forces the map empty, which is the
+    # escape hatch for running a node against the raw, uncorrected rclayer
+    # (see APRTask.set_openroad_applypexcorrection). The var is absent for
+    # non-APR tasks, in which case the correction applies.
+    global sc_pdk
+    global sc_tool
+    upvar $map corrmap
+
+    set corrmap [dict create]
+    if {
+        [sc_cfg_tool_task_exists var apply_pex_correction] &&
+        ![sc_cfg_tool_task_get var apply_pex_correction]
+    } {
+        return
+    }
+    if { ![sc_cfg_exists library $sc_pdk tool $sc_tool rccorrection] } {
+        return
+    }
+    foreach corr [sc_cfg_get library $sc_pdk tool $sc_tool rccorrection] {
+        lassign $corr corr_corner corr_layer corr_res corr_cap
+        # An unprescribed (None -> empty) factor is a no-op (1.0).
+        if { $corr_res eq {} } {
+            set corr_res 1.0
+        }
+        if { $corr_cap eq {} } {
+            set corr_cap 1.0
+        }
+        dict set corrmap $corr_corner $corr_layer [list $corr_res $corr_cap]
+    }
+}
+
+proc sc_has_pexmap { } {
+    sc_get_pexmap pexmap
+    return [expr { [dict size $pexmap] > 0 }]
+}
+
+proc sc_setup_pex { args } {
+    sta::parse_key_args "sc_setup_pex" args \
+        keys {-pexcorner -scene} \
+        flags {-verbose}
+    sta::check_argc_eq0 "sc_setup_pex" $args
+    set pexcorner $keys(-pexcorner)
+
+    set scene_name "default"
+    set corner_args []
+    if { [info exists keys(-scene)] } {
+        set scene_name $keys(-scene)
+        lappend corner_args -corner $keys(-scene)
+    }
+
+    sc_get_pexmap pexmap
+    sc_get_corrmap corrmap
+
+    if {
+        ![dict exists $pexmap routing $pexcorner] &&
+        ![dict exists $pexmap via $pexcorner]
+    } {
+        utl::warn FLW 10 "No parasitic estimation layers defined for pex corner\
+            '$pexcorner' (scene: $scene_name); skipping set_layer_rc for this corner"
+    }
+
+    # A correction naming a layer that has no rclayer entry silently does
+    # nothing, which is how a misspelled layer name hides. Surface it. This proc
+    # runs for the default corner and again per scene, so scenes sharing a pex
+    # corner repeat the message - a few extra lines is the right trade for a
+    # stateless check.
+    if { [dict exists $corrmap $pexcorner] } {
+        dict for {layer factors} [dict get $corrmap $pexcorner] {
+            if {
+                ![dict exists $pexmap routing $pexcorner $layer] &&
+                ![dict exists $pexmap via $pexcorner $layer]
+            } {
+                utl::warn FLW 10 "Parasitic correction for layer '$layer' (pex corner\
+                    '$pexcorner') has no matching rclayer entry and will be ignored"
+            }
+        }
+    }
+
+    if { [dict exists $pexmap routing $pexcorner] } {
+        dict for {layer pex} [dict get $pexmap routing $pexcorner] {
+            lassign $pex res cap
+
+            # Apply per-layer calibration correction. An absent layer is treated
+            # as factors of 1.0 (no correction).
+            if { [dict exists $corrmap $pexcorner $layer] } {
+                lassign [dict get $corrmap $pexcorner $layer] res_factor cap_factor
+                set res [expr { $res * $res_factor }]
+                if { $cap != {} } {
+                    set cap [expr { $cap * $cap_factor }]
+                }
+            }
+
+            if { [info exists flags(-verbose)] } {
+                if { $cap == {} } {
+                    utl::info FLW 10 "Setting routing RC | $scene_name | Layer: $layer |\
+                        Res: [sta::format_resistance $res 6]\
+                        [sta::unit_scale_abbrev_suffix resistance]/um"
+                } else {
+                    utl::info FLW 10 "Setting routing RC | $scene_name | Layer: $layer |\
+                        Res: [sta::format_resistance $res 6]\
+                        [sta::unit_scale_abbrev_suffix resistance]/um |\
+                        Cap: [sta::format_capacitance $cap 6]\
+                        [sta::unit_scale_abbrev_suffix capacitance]/um"
+                }
+            }
+            set res [sta::resistance_sta_ui $res]
+            if { $cap != {} } {
+                set cap [sta::capacitance_sta_ui $cap]
+            }
+            set rc_args []
+            if { $cap != {} } {
+                lappend rc_args -capacitance $cap
+            }
+            set_layer_rc {*}$corner_args -layer $layer -resistance $res {*}$rc_args
+        }
+    }
+
+    if { [dict exists $pexmap via $pexcorner] } {
+        dict for {layer pex} [dict get $pexmap via $pexcorner] {
+            lassign $pex res cap
+
+            # Apply per-layer calibration correction. An absent via is treated
+            # as a resistance factor of 1.0 (no correction). Capacitance does not
+            # apply to vias, so only the resistance factor is read.
+            if { [dict exists $corrmap $pexcorner $layer] } {
+                set res_factor [lindex [dict get $corrmap $pexcorner $layer] 0]
+                set res [expr { $res * $res_factor }]
+            }
+
+            if { [info exists flags(-verbose)] } {
+                utl::info FLW 10 "Setting via RC     | $scene_name | Via: $layer   |\
+                    Res: [sta::format_resistance $res 6]\
+                    [sta::unit_scale_abbrev_suffix resistance]"
+            }
+            set res [sta::resistance_sta_ui $res]
+            set_layer_rc {*}$corner_args -via $layer -resistance $res
+        }
+    }
+}
+
+proc sc_get_fill_rules { pdk } {
+    # Returns the PDK metal fill rules files, or an empty list when the PDK ships
+    # none. The task resolves which deck to use and records it in the fill_name
+    # variable, so only that one deck is read here.
+    if { [sc_cfg_tool_task_exists var fill_name] } {
+        set fill_name [sc_cfg_tool_task_get var fill_name]
+        if {
+            $fill_name != "" &&
+            [sc_cfg_exists library $pdk pdk fill runsetfileset openroad $fill_name]
+        } {
+            set fileset [sc_cfg_get library $pdk pdk fill runsetfileset openroad $fill_name]
+            return [sc_cfg_get_fileset $pdk $fileset fill]
+        }
+    }
+
+    # Deprecated: PDKs used to register the fill rules in the OpenROAD APR tech
+    # fileset. Keep reading that until those PDKs move to the fill runset section.
+    if { ![sc_cfg_exists library $pdk pdk aprtechfileset openroad] } {
+        return []
+    }
+    set aprfileset [sc_cfg_get library $pdk pdk aprtechfileset openroad]
+    return [sc_cfg_get_fileset $pdk $aprfileset fill]
+}

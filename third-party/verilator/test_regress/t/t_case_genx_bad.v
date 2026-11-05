@@ -1,0 +1,19 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2005-2007 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  parameter P = 32'b1000;
+
+  generate
+    case (P)
+      32'b0:    initial begin end
+      32'b1xxx: initial begin end
+      default   initial begin end  // No ':' to cover parser
+    endcase
+  endgenerate
+
+endmodule

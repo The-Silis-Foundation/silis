@@ -1,0 +1,27 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2020 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t (
+    input clk
+);
+
+  integer f;
+
+  always @(posedge clk) begin
+    if (!$feof(f)) begin
+      $display("Doing stuff with file.");
+    end
+    // Commenting out these two lines fixes the fault
+    else begin
+    end
+    if (!$feof(f)) begin
+    end
+    else begin
+      $display("Not doing stuff with file.");
+    end
+  end
+
+endmodule

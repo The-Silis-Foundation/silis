@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Silis Schematic Viewer (DigitalJS)</title>
+    <link rel="stylesheet" href="web/schematic_webview.css">
+    <style>
+        :root {
+            --silis-bg: #1e1e2e;
+            --silis-fg: #cdd6f4;
+            --silis-margin-bg: #181825;
+            --silis-sel: #585b70;
+            --silis-kw: #cba6f7;
+            --silis-ident: #89b4fa;
+        }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: var(--silis-bg); color: var(--silis-fg); overflow: hidden; }
+        #toolbar {
+            height: 35px;
+            background: var(--silis-margin-bg);
+            color: var(--silis-fg);
+            border-bottom: 1px solid var(--silis-sel);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 8px;
+            box-sizing: border-box;
+        }
+        #toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        #toolbar-nav-btns {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        .nav-btn {
+            background: transparent;
+            color: var(--silis-fg);
+            border: 1px solid transparent;
+            border-radius: 3px;
+            cursor: pointer;
+            padding: 3px 6px;
+            font-size: 12px;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 24px;
+            min-width: 24px;
+        }
+        .nav-btn:hover:not(:disabled) {
+            background: var(--silis-sel);
+            color: var(--silis-kw);
+        }
+        .nav-btn:disabled {
+            opacity: 0.35;
+            cursor: default;
+        }
+        #breadcrumb {
+            max-width: calc(100% - 70px);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: inline-block;
+            vertical-align: middle;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--silis-ident);
+            margin-left: 6px;
+        }
+        #toolbar-right {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            gap: 4px;
+        }
+        #paper-container { height: calc(100% - 60px); width: 100%; background: var(--silis-bg); }
+        #status { height: 25px; background: var(--silis-margin-bg); color: var(--silis-fg); border-top: 1px solid var(--silis-sel); }
+        .joint-paper-scroller { background: var(--silis-bg) !important; }
+    </style>
+</head>
+<body class="vscode-dark">
+<div id="toolbar">
+  <div id="toolbar-left">
+    <div id="toolbar-nav-btns">
+      <button id="schem-nav-back" class="nav-btn" title="Back in hierarchy" disabled>&lt;</button>
+      <button id="schem-nav-forward" class="nav-btn" title="Forward in hierarchy" disabled>&gt;</button>
+    </div>
+    <span id="breadcrumb"></span>
+  </div>
+  <span id="toolbar-right">
+    <button id="go-parent" class="codicon codicon-debug-step-out" title="Go to parent scope" disabled></button>
+    <button id="sv-find-btn" class="codicon codicon-search" title="Find (Ctrl+F)"></button>
+    <button id="zoom-out" class="codicon codicon-zoom-out" title="Zoom out"></button>
+    <button id="zoom-in" class="codicon codicon-zoom-in" title="Zoom in"></button>
+    <button id="zoom-fit" class="codicon codicon-screen-full" title="Fit"></button>
+    <span id="preset-toggle" class="sv-seg" title="Toggle RTL / Gate-Level view">
+      <span class="sv-seg-label active" data-side="rtl">RTL</span>
+      <label class="sv-switch"><input type="checkbox" id="preset-switch"><span class="sv-slider"></span></label>
+      <span class="sv-seg-label" data-side="gls">Gate-Level</span>
+    </span>
+    <button id="refresh" class="codicon codicon-refresh" title="Reload"></button>
+    <button id="export" class="codicon codicon-export" title="Export"></button>
+  </span>
+</div>
+<div id="paper-container"><div id="paper"></div></div>
+<div id="status"><span id="sv-taskbar"></span><span id="status-text"></span></div>
+    <script>
+        // Mock VSCode API for standalone WebEngine
+        let _silisMsgSeq = 0;
+        function acquireVsCodeApi() {
+            return {
+                postMessage: function(msg) {
+                    if (msg) {
+                        try {
+                            const serialized = JSON.stringify(msg);
+                            // Set document.title so Qt titleChanged event reliably notifies Python
+                            document.title = "SILIS_SCHEM_MSG:" + serialized + "#" + (_silisMsgSeq++);
+                        } catch (e) {
+                            console.error("Failed to stringify message for Qt title bridge:", e);
+                        }
+                        console.log("SILIS_SCHEM_MSG:" + JSON.stringify(msg));
+                    }
+                },
+                getState: function() { return {}; },
+                setState: function(state) {}
+            };
+        }
+    </script>
+    <script src="web/yosys_bridge.js"></script>
+    <script src="web/schematic_webview.js"></script>
+    <script>
+        function applyTheme(colors) {
+            if (!colors) return;
+            const root = document.documentElement;
+            // Set Silis CSS vars (used by our base stylesheet)
+            root.style.setProperty('--silis-bg', colors.bg);
+            root.style.setProperty('--silis-fg', colors.fg);
+            root.style.setProperty('--silis-margin-bg', colors.margin_bg);
+            root.style.setProperty('--silis-sel', colors.sel);
+            root.style.setProperty('--silis-kw', colors.kw);
+            root.style.setProperty('--silis-ident', colors.ident);
+            // Set VSCode CSS vars consumed by sv-pathfinder and DigitalJS
+            root.style.setProperty('--vscode-editor-background', colors.bg);
+            root.style.setProperty('--vscode-editor-foreground', colors.fg);
+            root.style.setProperty('--vscode-sideBar-background', colors.margin_bg);
+            root.style.setProperty('--vscode-editorWidget-background', colors.margin_bg);
+            root.style.setProperty('--vscode-editorWidget-border', colors.sel);
+            root.style.setProperty('--vscode-button-background', colors.ident);
+            root.style.setProperty('--vscode-button-hoverBackground', colors.kw);
+            root.style.setProperty('--vscode-button-foreground', colors.bg);
+            root.style.setProperty('--vscode-focusBorder', colors.kw);
+            root.style.setProperty('--vscode-textLink-foreground', colors.kw2);
+            root.style.setProperty('--vscode-panel-background', colors.bg);
+            root.style.setProperty('--vscode-panel-border', colors.sel);
+            // Force body/toolbar/status directly (overrides any inline defaults)
+            document.body.style.backgroundColor = colors.bg;
+            document.body.style.color = colors.fg;
+            const toolbar = document.getElementById('toolbar');
+            if (toolbar) { toolbar.style.background = colors.margin_bg; toolbar.style.color = colors.fg; toolbar.style.borderBottom = '1px solid ' + colors.sel; }
+            const status = document.getElementById('status');
+            if (status) { status.style.background = colors.margin_bg; status.style.color = colors.fg; }
+            
+            // Override hardcoded jointjs SVG colors
+            let styleId = 'silis-dynamic-theme';
+            let styleTag = document.getElementById(styleId);
+            if (!styleTag) {
+                styleTag = document.createElement('style');
+                styleTag.id = styleId;
+                document.head.appendChild(styleTag);
+            }
+            styleTag.innerHTML = `
+                .joint-paper-background { background-color: var(--silis-bg) !important; }
+                .joint-paper.joint-theme-dark { background-color: var(--silis-bg) !important; }
+                .joint-element .body { fill: var(--silis-margin-bg) !important; stroke: var(--silis-sel) !important; }
+                .joint-element text, .joint-element text.numvalue { fill: var(--silis-fg) !important; }
+                .joint-element foreignObject.tooltip body, div.wire_hover { background: var(--silis-bg) !important; color: var(--silis-fg) !important; border: 1px solid var(--silis-sel) !important; }
+                .joint-element path { stroke: var(--silis-sel) !important; }
+                .joint-element path.decor { fill: transparent !important; }
+            `;
+        }
+        window._silusTheme = null;
+        window._onThemeApply = null;
+
+        function loadSchematic(b64str) {
+            try {
+                const jsonStr = decodeURIComponent(escape(window.atob(b64str)));
+                const yosysData = JSON.parse(jsonStr);
+                
+                const digitaljsData = window.processYosys(yosysData, {});
+                // Detect top module by looking for Yosys attribute "top": 1 / "000...1"
+                let topName = null;
+                for (const [mname, mdata] of Object.entries(yosysData.modules || {})) {
+                    const attrs = (mdata && mdata.attributes) || {};
+                    if (attrs.top === '00000000000000000000000000000001' || attrs.top === 1 || attrs.top === '1') {
+                        topName = mname;
+                        break;
+                    }
+                }
+                if (!topName) {
+                    // Fallback: pick the module that does NOT start with $paramod if available
+                    for (const mname of Object.keys(yosysData.modules || {})) {
+                        if (!mname.startsWith('$paramod')) {
+                            topName = mname;
+                            break;
+                        }
+                    }
+                }
+                if (!topName) {
+                    topName = Object.keys(yosysData.modules || {})[0] || 'top';
+                }
+
+                if (!digitaljsData.devices && digitaljsData.subcircuits) {
+                    let topKey = topName;
+                    if (!digitaljsData.subcircuits[topKey]) {
+                        // find matching key in subcircuits
+                        const keys = Object.keys(digitaljsData.subcircuits);
+                        const matchKey = keys.find(k => k === topName || k.endsWith('\\' + topName) || k.replace(/^\\/, '') === topName);
+                        topKey = matchKey || keys[keys.length - 1] || keys[0];
+                    }
+                    if (topKey && digitaljsData.subcircuits[topKey]) {
+                        const topMod = digitaljsData.subcircuits[topKey];
+                        Object.assign(digitaljsData, topMod);
+                        delete digitaljsData.subcircuits[topKey];
+                    } else {
+                        digitaljsData.devices = {};
+                        digitaljsData.connectors = [];
+                    }
+                }
+                
+                // Fix for empty/blackbox subcircuits (like PDK cells) missing from definitions
+                if (!digitaljsData.subcircuits) digitaljsData.subcircuits = {};
+                function ensureSubcircuits(circ, modName) {
+                    if (!circ.devices) return;
+                    const yMod = yosysData.modules[modName] || {};
+                    const cells = yMod.cells || {};
+                    
+                    for (const [id, dev] of Object.entries(circ.devices)) {
+                        if (dev.type === 'Subcircuit' && !digitaljsData.subcircuits[dev.celltype]) {
+                            const subDef = { devices: {}, connectors: [] };
+                            digitaljsData.subcircuits[dev.celltype] = subDef;
+                            
+                            const cell = cells[dev.label] || cells[id] || {};
+                            const conns = cell.connections || {};
+                            const dirs = cell.port_directions || {};
+                            
+                            for (const [pname, pconn] of Object.entries(conns)) {
+                                const pdir = dirs[pname] || 'input';
+                                subDef.devices[pname] = {
+                                    type: (pdir === 'output' || pdir === 'out') ? 'Output' : 'Input',
+                                    net: pname,
+                                    order: Object.keys(subDef.devices).length,
+                                    bits: Array.isArray(pconn) ? pconn.length : 1
+                                };
+                            }
+                        }
+                    }
+                }
+                function cleanModuleName(name) {
+                    if (!name) return 'top';
+                    var s = String(name);
+                    // Match $paramod\mod_name\param=val or $paramod...
+                    if (s.startsWith('$paramod')) {
+                        var parts = s.split('\\');
+                        if (parts.length >= 2 && parts[1]) {
+                            var modBase = parts[1];
+                            var paramPart = parts.slice(2).join(' ');
+                            if (paramPart) {
+                                // Extract parameter name and convert binary/hex to decimal if possible
+                                paramPart = paramPart.replace(/=s32'0*([0-9a-fA-F]+)/, function(_, bits) {
+                                    return '=' + parseInt(bits, 2);
+                                });
+                                return modBase + ' (' + paramPart + ')';
+                            }
+                            return modBase;
+                        }
+                    }
+                    return s.replace(/^\\/, '');
+                }
+
+                ensureSubcircuits(digitaljsData, topName);
+                for (const [subName, sub] of Object.entries(digitaljsData.subcircuits)) {
+                    ensureSubcircuits(sub, subName);
+                }
+                
+                const rawModuleName = topName || Object.keys(yosysData.modules || {})[0] || 'top';
+                const cleanName = cleanModuleName(rawModuleName);
+                window.postMessage({
+                    type: 'loadSchematic',
+                    circuit: digitaljsData,
+                    scopePath: cleanName,
+                    moduleName: cleanName,
+                    hasParent: false,
+                    overview: 'scrollbars',
+                    spacing: 'comfortable'
+                }, '*');
+                // Re-apply theme after each schematic load
+                if (window._silusTheme) applyTheme(window._silusTheme);
+            } catch (err) {
+                console.error("Failed to load schematic:", err);
+            }
+        }
+        
+        // Live wire value update receiver from Silis waveform timeline
+        window.setSchematicWireValues = function(updates) {
+            if (!Array.isArray(updates) || updates.length === 0) return;
+            window.postMessage({
+                type: 'setValues',
+                updates: updates
+            }, '*');
+        };
+
+        window.clearSchematicWireValues = function() {
+            window.postMessage({ type: 'clearValues' }, '*');
+        };
+
+        // Cross-probing: Highlight a specific net or cell by name on the schematic
+        window._silisHighlightedElements = [];
+        window.highlightNetOrCell = function(targetName) {
+            if (!targetName) return;
+            var name = String(targetName).trim().toLowerCase();
+            
+            // Clean up previous highlights
+            if (window._silisHighlightedElements) {
+                window._silisHighlightedElements.forEach(function(el) {
+                    if (el && el.classList) {
+                        el.classList.remove('sv-find-current', 'sv-find-match');
+                    }
+                });
+            }
+            window._silisHighlightedElements = [];
+
+            // Search through all elements and wires on the SVG paper
+            var cells = document.querySelectorAll('.joint-cell, .joint-element, .joint-link');
+            var matchedView = null;
+
+            cells.forEach(function(el) {
+                var textNodes = el.querySelectorAll('text, tspan');
+                var match = false;
+                textNodes.forEach(function(t) {
+                    var str = (t.textContent || '').trim().toLowerCase();
+                    if (str === name || str === '\\' + name || str.endsWith('.' + name)) {
+                        match = true;
+                    }
+                });
+                if (match) {
+                    el.classList.add('sv-find-current');
+                    window._silisHighlightedElements.push(el);
+                    if (!matchedView) matchedView = el;
+                }
+            });
+
+            // Smooth scroll into view if found
+            if (matchedView) {
+                try {
+                    matchedView.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                } catch(e) {}
+            }
+        };
+        
+        window.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            
+            // Zoom: +, =, NumpadAdd
+            if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+                document.getElementById('zoom-in').click();
+            } 
+            // Zoom: -, _, NumpadSubtract
+            else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+                document.getElementById('zoom-out').click();
+            } 
+            // Pan: Arrows (both normal and numpad usually map to ArrowUp/etc. when numlock is off, but we can also check codes)
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.code.startsWith('Numpad')) {
+                // Find the actual scroller element which might be created by joint.ui.PaperScroller
+                const scroller = document.querySelector('.joint-paper-scroller') || document.getElementById('paper-container');
+                if (scroller) {
+                    const step = 40;
+                    if (e.key === 'ArrowUp' || e.code === 'Numpad8') { scroller.scrollTop -= step; e.preventDefault(); }
+                    if (e.key === 'ArrowDown' || e.code === 'Numpad2') { scroller.scrollTop += step; e.preventDefault(); }
+                    if (e.key === 'ArrowLeft' || e.code === 'Numpad4') { scroller.scrollLeft -= step; e.preventDefault(); }
+                    if (e.key === 'ArrowRight' || e.code === 'Numpad6') { scroller.scrollLeft += step; e.preventDefault(); }
+                }
+            }
+        });
+
+        // Hierarchy navigation back / forward buttons
+        const navBackBtn = document.getElementById('schem-nav-back');
+        const navForwardBtn = document.getElementById('schem-nav-forward');
+        if (navBackBtn) {
+            navBackBtn.addEventListener('click', function() {
+                if (window.acquireVsCodeApi) {
+                    acquireVsCodeApi().postMessage({ command: 'schemNavBack' });
+                }
+            });
+        }
+        if (navForwardBtn) {
+            navForwardBtn.addEventListener('click', function() {
+                if (window.acquireVsCodeApi) {
+                    acquireVsCodeApi().postMessage({ command: 'schemNavForward' });
+                }
+            });
+        }
+
+        window.updateNavButtons = function(canBack, canForward) {
+            if (navBackBtn) navBackBtn.disabled = !canBack;
+            if (navForwardBtn) navForwardBtn.disabled = !canForward;
+        };
+    </script>
+</body>
+</html>

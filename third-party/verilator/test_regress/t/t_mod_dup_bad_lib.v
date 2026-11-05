@@ -1,0 +1,18 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2008 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module a ();
+endmodule
+
+module test ();
+  a a ();
+endmodule
+
+module a ();
+endmodule
+
+module b ();
+endmodule

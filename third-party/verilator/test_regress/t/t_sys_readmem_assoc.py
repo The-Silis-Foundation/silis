@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('simulator')
+
+test.compile()
+
+test.execute()
+
+test.files_identical(test.obj_dir + "/t_sys_writemem_c_b.mem",
+                     "t/t_sys_readmem_assoc__c_b.mem.out")
+test.files_identical(test.obj_dir + "/t_sys_writemem_w_h.mem",
+                     "t/t_sys_readmem_assoc__w_h.mem.out")
+test.files_identical(test.obj_dir + "/t_sys_writemem_w_b.mem",
+                     "t/t_sys_readmem_assoc__w_b.mem.out")
+test.files_identical(test.obj_dir + "/t_sys_writemem_c_b2.mem",
+                     "t/t_sys_readmem_assoc__c_b2.mem.out")
+test.files_identical(test.obj_dir + "/t_sys_writemem_empty_b.mem",
+                     "t/t_sys_readmem_assoc__empty.mem.out")
+test.files_identical(test.obj_dir + "/t_sys_writemem_empty_h.mem",
+                     "t/t_sys_readmem_assoc__empty.mem.out")
+
+test.passes()

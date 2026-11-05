@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('dist')
+
+Messages = {}
+Outputs = {}
+Suppressed = {}
+Used_Suppressed = {}
+
+for s in [
+        # Cannot hit, and comment as to why
+        # Instead of adding here, consider adding a LCOV_EXCL_LINE/START/STOP to the sources on the message
+        '$VERILATOR_ROOT needs to be in environment',  # Would need special ./configure and build
+        'Assigned pin is neither input nor output',  # Instead earlier error
+        'Define missing argument \'',  # Instead get Define passed too many arguments
+        'Define or directive not defined: `',  # Instead V3ParseImp will warn
+        'Expecting define formal arguments. Found:',  # Instead define syntax error
+        'Need $SYSTEMC_INCLUDE in environment or when Verilator configured,',  # Would need ./configure
+        'Running subcommands is not supported on this platform:',  # Only hit on e.g. wasm
+        'Slices of arrays in assignments have different unpacked dimensions,',  # Instead V3Width error
+        'Syntax error: Range \':\', \'+:\' etc are not allowed in the instance',  # Instead get syntax error
+        'dynamic new() not expected in this context (expected under an assign)',  # Instead get syntax error
+        'exited with',  # Is hit; driver.py filters out
+        'expected non-complex non-double',  # V3Width warns and repairs earlier
+        'loading non-variable',  # Instead 'storing to parameter' or syntax error
+
+        # Not yet analyzed
+        '--pipe-filter protocol error, unexpected:',
+        '--pipe-filter returned bad status',
+        '--pipe-filter: stdin/stdout closed before pipe opened',
+        '--pipe-filter: write to closed file',
+        '%s: Unsupported callback type \'%s\'',
+        '%s: Unsupported type %s, ignoring',
+        '%s: Unsupported type %s, nothing will be returned',
+        '%s: Unsupported type (%d)',
+        '%s: Unsupported vltype (%d)',
+        '%s: Unsupported vpiHandle \'%p\' for type \'%s\', nothing will be returned',
+        '%s: VPI callback data pointer is null',
+        'Assigning >32 bit to unranged parameter (defaults to 32 bits)',
+        'Assignment pattern with no members',
+        'Ignoring vpi_get_time with nullptr value pointer',
+        'Ignoring vpi_put_value_array with null index pointer',
+        'Can\'t find varpin scope of',
+        'Can\'t read annotation file:',
+        'Can\'t resolve module reference: \'',
+        'Can\'t write file:',
+        'Circular logic when ordering code (non-cutable edge loop)',
+        'Expected data type, not a',
+        'Extern declaration\'s scope is not a defined class',
+        'File not found:',
+        'Format to $display-like function must have constant format string',
+        'Forward typedef used as class/package does not resolve to class/package:',
+        'Illegal +: or -: select; type already selected, or bad dimension:',
+        'Illegal bit or array select; type already selected, or bad dimension:',
+        'Illegal range select; type already selected, or bad dimension:',
+        'Instance pin connected by name with empty reference:',
+        'Interface port declaration',
+        'Invalid reference: Process might outlive variable',
+        'Modport item is not a function/task:',
+        'Modport item is not a variable:',
+        'Modport not referenced as <interface>.',
+        'Modport not referenced from underneath an interface:',
+        'Non-interface used as an interface:',
+        'Parameter type pin value isn\'t a type: Param',
+        'Parameter type variable isn\'t a type: Param',
+        'Pattern replication value of 0 is not legal.',
+        'Signals inside functions/tasks cannot be marked forceable',
+        'Slice size cannot be zero.',
+        'Symbol matching',
+        'Thread scheduler is unable to provide requested',
+        'Unsized numbers/parameters not allowed in streams.',
+        'Unsupported RHS tristate construct:',
+        'Unsupported or syntax error: Unsized range in instance or other declaration',
+        'Unsupported pullup/down (weak driver) construct.',
+        'Unsupported tristate construct (not in propagation graph):',
+        'Unsupported tristate port expression:',
+        'Unsupported/unknown built-in queue method',
+        'Unsupported: $bits for queue',
+        'Unsupported: 4-state numbers in this context',
+        'Unsupported: Assignments with signal strength with LHS of type:',
+        'Unsupported: Bind with instance list',
+        'Unsupported: Cast to',
+        'Unsupported: Concatenation to form',
+        'Unsupported: Creating tristate signal not underneath a module:',
+        'Unsupported: Default value on module inout/ref/constref:',
+        'Unsupported: Modport empty expression',
+        'Unsupported: Non-constant default value in missing argument',
+        'Unsupported: Only one PSL clock allowed per assertion',
+        'Unsupported: Public functions with >64 bit outputs;',
+        'Unsupported: Public functions with return > 64 bits wide.',
+        'Unsupported: Replication to form',
+        'Unsupported: Size-changing cast on non-basic data type',
+        'Unsupported: Slice of non-constant bounds',
+        'Unsupported: Using --protect-ids with public function',
+        'Unsupported: Verilog 1995 gate primitive:',
+        'Unsupported: [] dimensions',
+        'Unsupported: \'default :/\' constraint',
+        'Unsupported: assertion items in clocking blocks',
+        'Unsupported: don\'t know how to deal with',
+        'Unsupported: extern constraint definition with class-in-class',
+        'Unsupported: extern forkjoin',
+        'Unsupported: extern task',
+        'Unsupported: no_inline for tasks',
+        'Unsupported: property port \'local\'',
+        'Unsupported: randsequence production function variable',
+        'Unsupported: repeat event control',
+        'Unsupported: static cast to',
+        'Unsupported: super',
+        'Unsupported: with[] stream expression',
+        'loading other than unpacked-array variable',
+        'loading other than unpacked/dynamic/associative-array variable',
+        # These are safety limits requiring >1000 bins or >10000 members to trigger
+]:
+    Suppressed[s] = True
+
+
+def read_messages():
+    for filename in (test.glob_some(test.root + "/src/*") +
+                     test.glob_some(test.root + "/include/*")):
+        if not os.path.isfile(filename):
+            continue
+        if '#' in filename:
+            continue
+        with open(filename, 'r', encoding="utf8") as fh:
+            lineno = 0
+            statement = ""
+            statement_lineno = 0
+            excl = False
+            excl_next = False
+
+            for origline in fh:
+                line = origline
+                lineno += 1
+
+                excl = excl_next
+                if 'LCOV_EXCL_START' in line:
+                    excl = True
+                    excl_next = True
+                if 'LCOV_EXCL_STOP' in line:
+                    excl_next = False  # Reenables coverage on next line, not this one
+                if 'LCOV_EXCL_LINE' in line:
+                    excl = True
+                if excl:
+                    statement = ""
+                    continue
+
+                if re.match(r'^\s*//', line):
+                    continue
+                if re.match(r'^\s*/\*', line):
+                    continue
+                # print(('C ' if (statement != "") else 'L') + line)
+
+                line = re.sub(r'\\n', '', line)
+                line = re.sub(r'\s+//.*', '', line)
+                line = line.rstrip()
+
+                m = re.search(
+                    r'\b((v3error|v3warn|v3fatal|BBUNSUP|VL_FATAL|VL_FATAL_MT|VL_SVDPI_WARN_|VL_WARN|VL_WARN_MT|VL_VPI_ERROR_|VL_VPI_WARNING_)\b.*)',
+                    line)
+                if m:
+                    statement = m.group(1)
+                    statement_lineno = lineno
+
+                if statement == "":
+                    continue
+                statement += line
+
+                if ');' not in statement:
+                    continue  # Keep reading lines until get end of statement
+
+                if '\\"' in statement:
+                    continue  # Parser messes these up
+
+                # print("SSS " + statement)
+
+                m = re.search(r'"([^"]*)"', statement)
+                if m:
+                    msg = m.group(1)
+                    msg = re.sub(r'\s+$', '', msg)
+                    msg = re.sub(r'^\s+', '', msg)
+                    fileline = filename + ":" + str(statement_lineno)
+                    # print("FFFF " + fileline + ": " + msg + "   LL " + statement)
+                    Messages[msg] = {}
+                    Messages[msg]['fileline'] = fileline
+                    Messages[msg]['line'] = statement
+
+                statement = ""
+
+    print("Number of messages = " + str(len(Messages)))
+
+
+def read_outputs():
+    for filename in (test.glob_some(test.root + "/test_regress/t/*.py") +
+                     test.glob_some(test.root + "/test_regress/t/*.out") +
+                     test.glob_some(test.root + "/docs/gen/*.rst")):
+        if "t_dist_warn_coverage" in filename:  # Avoid our own suppressions
+            continue
+        is_python = re.search(r'\.py$', filename)
+        with open(filename, 'r', encoding="latin-1") as fh:
+            for line in fh:
+                # File suppressions based on magic content
+                if re.match(r'^\$version', line):  # Assume it is a VCD file
+                    break
+                if re.match(r'^# SystemC::Coverage', line):  # Coverage data
+                    break
+                if re.match(r'^//.*verilator_coverage annotation', line):  # Coverage data
+                    break
+                if re.match(r'^{"type":"NETLIST"', line):  # JSON
+                    break
+                if re.match(r'^// *Generated by verilated_saif', line):  # SAIF
+                    break
+                # Line suppressions
+                if is_python and re.match(r'^#', line):  # Assume it is a VCD file
+                    continue
+                line = line.lstrip().rstrip()
+                Outputs[line] = True
+
+    print("Number of outputs = " + str(len(Outputs)))
+
+
+def check_msg(msg):
+    fileline = Messages[msg]['fileline']
+    # Fast first - exact match
+    for output in Outputs:
+        if msg in output:
+            # print(fileline+": M '" + msg + "' HIT '" + output)
+            return
+
+    # Try regexp, with %s in message changed to .*?
+    if re.search(r'%[%a-z]', msg):
+        msg_re = re.escape(msg)
+        msg_re = re.sub(r'^%[a-z]', r'', msg_re)
+        msg_re = re.sub(r'%[a-z]$', r'', msg_re)
+        msg_re = re.sub(r'%[a-z]', r'.*?', msg_re)
+        msg_re = re.sub(r'%%', r'%', msg_re)
+        # print("msg_re='%s'" % (msg_re))
+        m = re.compile(msg_re)
+        for output in Outputs:
+            if re.search(m, output):
+                # print(fileline+": M '" + msg + "' HIT '" + output)
+                return
+
+    # Some exceptions
+    if re.match(r'internal:', msg, re.IGNORECASE):
+        return
+
+    line = Messages[msg]['line']
+    line = line.lstrip().rstrip()
+
+    if msg in Suppressed:
+        Used_Suppressed[msg] = True
+        if test.verbose:
+            print(fileline + ": Suppressed check for message in source: '" + msg + "'")
+    else:
+        test.error_keep_going(fileline +
+                              ": Missing test_regress/t/*.out test for message in source: '" +
+                              msg + "'")
+        if test.verbose:
+            print("  Line is: " + line)
+
+
+def check():
+    read_messages()
+    read_outputs()
+
+    print("Number of suppressions = " + str(len(Suppressed)))
+    print("Coverage = %3.1f%%" % (100 - (100 * len(Suppressed) / len(Messages))))
+    print()
+
+    print("Checking for v3error/v3warn messages in sources without")
+    print("coverage in test_regress/t/*.out:")
+    print("(Developers: If a message is impossible to test, consider using")
+    print("UASSERT or v3fatalSrc instead of v3error)")
+    print()
+
+    for msg in sorted(Messages.keys()):
+        check_msg(msg)
+
+    print()
+    for msg in sorted(Suppressed.keys()):
+        if msg not in Used_Suppressed:
+            print("Suppression not used: '" + msg + "'")
+    print()
+
+
+if not os.path.exists(test.root + "/.git"):
+    test.skip("Not in a git repository")
+
+check()
+
+test.passes()
+
+# Local Variables:
+# compile-command:"./t_dist_warn_coverage.py"
+# End:

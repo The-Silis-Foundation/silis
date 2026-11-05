@@ -1,0 +1,339 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of either the GNU Lesser General Public License Version 3
+// or the Perl Artistic License Version 2.0.
+// SPDX-FileCopyrightText: 2010 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+// Call the C++-linkage wrapper of a test function, as $c cannot declare an extern "C" function
+`define CPP_CALL(f) $c32(`"[] { extern int f``_cpp(); return f``_cpp(); }()`")
+
+`ifdef USE_VPI_NOT_DPI
+//We call it via $c so we can verify DPI isn't required - see bug572
+`else
+import "DPI-C" context function int mon_check();
+`endif
+
+module t (/*AUTOARG*/
+  // Outputs
+  x,
+  // Inputs
+  clk, a, unpacked_struct_port, unpacked_union_port, nested_struct_port,
+  struct_array_port, struct_matrix_port, struct_with_packed_arrays_port,
+  wire_unpacked_struct_port, wire_struct_array_port
+  );
+
+  input clk;
+
+  input [7:0] a;
+  output reg [7:0] x;
+
+  reg          onebit          /*verilator public_flat_rw @(posedge clk) */;
+  reg [2:1]    twoone          /*verilator public_flat_rw @(posedge clk) */;
+  reg [2:1]    fourthreetwoone[4:3] /*verilator public_flat_rw @(posedge clk) */;
+  reg LONGSTART_a_very_long_name_which_will_get_hashed_a_very_long_name_which_will_get_hashed_a_very_long_name_which_will_get_hashed_a_very_long_name_which_will_get_hashed_LONGEND /*verilator public_flat_rw*/;
+
+  // verilator lint_off ASCRANGE
+  reg [0:61]   quads[2:3]      /*verilator public_flat_rw @(posedge clk) */;
+  reg [8:19]   rev   /*verilator public_flat_rw @(posedge clk) */;
+  // verilator lint_on ASCRANGE
+
+  reg [31:0]      count        /*verilator public_flat */;
+  reg [31:0]      half_count   /*verilator public_flat_rd */ = 0;
+  reg [31:0]      delayed      /*verilator public_flat_rw */;
+  reg [31:0]      delayed_mem [16] /*verilator public_flat_rw */;
+  reg [7:0]       \escaped_with_brackets[3]  /*verilator public_flat_rw */;
+  reg [7:0]       mem_2d[3:0][7:0]  /*verilator public_flat_rw */;  // Descending indices
+  // verilator lint_off ASCRANGE
+  reg [0:95]      mem_3d[0:1][1:0][0:1]  /*verilator public_flat_rw */;  // Mixed: asc, desc, asc
+
+  reg [0:15][0:3][7:0] multi_packed[2:0]  /*verilator public_flat_rw */;
+  reg [0:1][0:3][0:2]      multi_packed_bit /*verilator public_flat_rw */;
+  reg [1:-1][2:1]      multi_packed_endian /*verilator public_flat_rw */;
+  reg [-1:1][1:2]      multi_packed_little_endian /*verilator public_flat_rw */;
+  reg [0:1][0:7]      multi_packed_short /*verilator public_flat_rw */;
+  reg [0:1][0:127]      multi_packed_wide /*verilator public_flat_rw */;
+  reg multi_unpacked_bit[0:1][0:3][0:7]      /*verilator public_flat_rw */;
+  reg [8:-7] [3:-4] negative_multi_packed[0:-2]  /*verilator public_flat_rw */;
+  // verilator lint_on ASCRANGE
+  reg             unpacked_only[7:0];
+
+  typedef struct {
+    logic [6:0] member_a;
+    logic member_b;
+    logic [15:0] member_c;
+  } unpacked_struct_t;
+
+  input unpacked_struct_t unpacked_struct_port /*verilator public_flat_rw*/;
+  input wire unpacked_struct_t wire_unpacked_struct_port /*verilator public_flat_rw*/;
+
+  typedef union {
+    logic [7:0] union_byte0;
+    logic [7:0] union_byte1;
+  } unpacked_union_t;
+
+  input unpacked_union_t unpacked_union_port /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [3:0] inner_x;
+    logic [3:0] inner_y;
+  } inner_struct_t;
+
+  typedef struct {
+    logic [7:0] outer_a;
+    inner_struct_t outer_inner;
+  } nested_struct_t;
+
+  input nested_struct_t nested_struct_port /*verilator public_flat_rw*/;
+
+  input unpacked_struct_t struct_array_port [1:0] /*verilator public_flat_rw*/;
+  input unpacked_struct_t struct_matrix_port [1:0][2:0] /*verilator public_flat_rw*/;
+  input wire unpacked_struct_t wire_struct_array_port [1:0] /*verilator public_flat_rw*/;
+  unpacked_struct_t struct_array_signal [1:0] /*verilator public_flat_rw*/;
+
+  // Unpacked array of a packed (not unpacked) struct element
+  typedef struct packed {
+    logic [6:0] packed_member_a;
+    logic packed_member_b;
+  } packed_leaf_struct_t;
+
+  packed_leaf_struct_t packed_struct_array_signal [1:0] /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [6:0] unsigned_member;
+    logic signed [6:0] signed_member;
+    bit bit_member;
+  } member_flags_struct_t;
+
+  member_flags_struct_t member_flags_struct_signal /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [7:0] child_leaf;
+  } child_struct_t;
+
+  typedef struct {
+    logic [15:0] scalar;
+    child_struct_t children [3:2];
+    logic [7:0] tail_array [2:5];
+    child_struct_t trailing_children [3:2];
+  } parent_struct_t;
+
+  parent_struct_t parent_struct_array [1:0] /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [7:0] \a.b ;
+    logic [7:0] plain_after;
+  } escaped_member_struct_t;
+
+  escaped_member_struct_t escaped_member_struct_signal /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [31:0] word_member;
+    logic [63:0] quad_member;
+    real real_member;
+    string string_member;
+    child_struct_t nested_member;
+  } aligned_struct_t;
+
+  aligned_struct_t aligned_struct_array [1:0] /*verilator public_flat_rw*/;
+
+  typedef struct {
+    logic [63:0] quad_leaf;
+    logic [7:0] byte_tail;
+  } stride_inner_struct_t;
+
+  typedef struct {
+    logic [7:0] lead;
+    stride_inner_struct_t nested;
+    logic [7:0] tail;
+  } stride_outer_struct_t;
+
+  stride_outer_struct_t alignment_stride_array [1:0] /*verilator public_flat_rw*/;
+
+  // verilator lint_off ASCRANGE
+  typedef struct {
+    logic [0:15][0:3][7:0] packed_matrix;
+    logic [8:-7][3:-4] reverse_matrix;
+  } struct_with_packed_arrays_t;
+  // verilator lint_on ASCRANGE
+
+  input struct_with_packed_arrays_t struct_with_packed_arrays_port /*verilator public_flat_rw*/;
+
+  reg [7:0]       text_byte    /*verilator public_flat_rw @(posedge clk) */;
+  reg [15:0]      text_half    /*verilator public_flat_rw @(posedge clk) */;
+  reg [31:0]      text_word    /*verilator public_flat_rw @(posedge clk) */;
+  reg [63:0]      text_long    /*verilator public_flat_rw @(posedge clk) */;
+  reg [511:0]     text         /*verilator public_flat_rw @(posedge clk) */;
+  reg [2047:0]    big      /*verilator public_flat_rw @(posedge clk) */;
+
+  integer        status;
+
+  bit            bit1           /*verilator public_flat_rw */;
+  integer        integer1       /*verilator public_flat_rw */;
+  byte           byte1          /*verilator public_flat_rw */;
+  shortint       short1         /*verilator public_flat_rw */;
+  int            int1           /*verilator public_flat_rw */;
+  longint        long1          /*verilator public_flat_rw */;
+  real           real1          /*verilator public_flat_rw */;
+  string         str1           /*verilator public_flat_rw */;
+  localparam int nullptr        /*verilator public_flat */ = 123;
+
+  logic [31:0] some_mem [4] /* verilator public_flat_rd */ = {0, 0, 0, 432};
+
+  generate
+    for (genvar i = 0; i < 1; i++) begin : gen
+     wire [7:0] gen_sig /*verilator public_flat_rw*/ = 8'hAB;
+    end
+  endgenerate
+
+  sub sub();
+
+  // Test loop
+  initial begin
+    count = 0;
+    delayed = 0;
+    onebit = 1'b0;
+    fourthreetwoone[3] = 0; // stop icarus optimizing away
+    text_byte = "B";
+    text_half = "Hf";
+    text_word = "Word";
+    text_long = "Long64b";
+    text = "Verilog Test module";
+    big = "some text";
+
+    bit1 = 1;
+    integer1 = 123;
+    byte1 = 123;
+    short1 = 123;
+    int1 = 123;
+    long1 = 123;
+    real1 = 1.0;
+    str1 = "hello";
+    \escaped_with_brackets[3]  = 8'h5a;
+
+    rev = 12'habc;
+
+    for (int i = 0; i < 4; i++) begin
+      for (int j = 0; j < 8; j++) begin
+        mem_2d[i][j] = 8'(((i * 8) + j));
+      end
+    end
+
+    for (int i = 0; i < 2; i++) begin
+      for (int j = 0; j < 2; j++) begin
+        for (int k = 0; k < 2; k++) begin
+          mem_3d[i][j][k] = 96'(((i * 4) + (j * 2) + k));
+        end
+      end
+    end
+
+    for (int i = 0; i < 3; i++) begin
+      for (int j = 0; j < 16; j++) begin
+        for (int k = 0; k < 4; k++) begin
+          multi_packed[i][j][k] = 8'(((i * 64) + (j * 4) + k));
+        end
+      end
+    end
+
+    for (int i = -2; i <= 0; i++) begin
+      for (int j = -7; j <= 8; j++) begin
+        negative_multi_packed[i][j] = 8'(((i + 2) * 4) + (j + 2));
+      end
+    end
+
+`ifdef T_VPI_FORCEABLE_VAR
+    #0; // TODO: Workaround to force signal initialization, else `gen_sig` stays at 0
+`endif
+
+`ifdef VERILATOR
+    status = `CPP_CALL(mon_check);
+`endif
+`ifdef IVERILOG
+    status = $mon_check();
+`endif
+`ifndef USE_VPI_NOT_DPI
+    status = mon_check();
+`endif
+    if (status !=0 ) begin
+      $write("%%Error: t_vpi_var.cpp:%0d: C Test failed\n", status);
+      $stop;
+    end
+    $write("%%Info: Checking results\n");
+    if (onebit != 1'b1) $stop;
+    if (quads[2] != 62'h12819213_abd31a1c) $stop;
+    if (quads[3] != 62'h1c77bb9b_3784ea09) $stop;
+    if (text_byte != "A") $stop;
+    if (text_half != "T2") $stop;
+    if (text_word != "Tree") $stop;
+    if (text_long != "44Four44") $stop;
+    if (text != "lorem ipsum") $stop;
+    if (str1 != "something a lot longer than hello") $stop;
+    if (real1 > 123456.7895 || real1 < 123456.7885 ) $stop;
+    if (alignment_stride_array[1].tail != 8'hc3) $stop;
+  end
+
+  always @(posedge clk) begin
+    count <= count + 2;
+    if (count[1])
+      half_count <= half_count + 2;
+
+    if (count == 1000) begin
+      if (delayed != 123) $stop;
+      if (delayed_mem[7] != 456) $stop;
+      $write("*-* All Finished *-*\n");
+      $finish;
+    end
+  end
+
+  genvar i;
+  generate
+  for (i=1; i<=6; i=i+1) begin : arr
+    arr #(.LENGTH(i)) arr();
+  end
+  endgenerate
+
+  genvar k;
+  generate
+  for (k=1; k<=6; k=k+1) begin : subs
+    sub subsub();
+  end
+  endgenerate
+
+  arr #(.LENGTH(8)) \escaped.inst[0] ();
+
+endmodule : t
+
+module sub;
+  reg subsig1 /*verilator public_flat_rw*/;
+  reg subsig2 /*verilator public_flat_rd*/;
+`ifdef IVERILOG
+  // stop icarus optimizing signals away
+  wire redundant = subsig1 | subsig2;
+`endif
+endmodule : sub
+
+module arr;
+
+  parameter LENGTH = 1;
+
+  reg [LENGTH-1:0] sig /*verilator public_flat_rw*/;
+  reg [LENGTH-1:0] rfr /*verilator public_flat_rw*/;
+  reg [LENGTH-1:0] \escaped_sig[1]  /*verilator public_flat_rw*/;
+
+  reg            check /*verilator public_flat_rw*/;
+  reg          verbose /*verilator public_flat_rw*/;
+
+  initial begin
+    sig = {LENGTH{1'b0}};
+    rfr = {LENGTH{1'b0}};
+    \escaped_sig[1]  = {LENGTH{1'b0}};
+  end
+
+  always @(posedge check) begin
+    if (verbose) $display("%m : %x %x", sig, rfr);
+    if (check && sig != rfr) $stop;
+    check <= 0;
+  end
+
+endmodule : arr

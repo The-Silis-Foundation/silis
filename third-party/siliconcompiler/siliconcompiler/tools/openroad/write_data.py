@@ -1,0 +1,211 @@
+from typing import Optional
+
+from siliconcompiler.tools.openroad._apr import APRTask
+from siliconcompiler.tools.openroad._apr import OpenROADSTAParameter, OpenROADPSMParameter
+
+
+class WriteViewsTask(APRTask, OpenROADSTAParameter, OpenROADPSMParameter):
+    '''
+    Write output files
+    '''
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("ord_abstract_lef_bloat_layers", "bool",
+                           "true/false, fill all layers when writing the abstract lef",
+                           defvalue=True)
+        self.add_parameter("ord_abstract_lef_bloat_factor", "int<1..>",
+                           "Factor to apply when writing the abstract lef", defvalue=10)
+
+        self.add_parameter("write_cdl", "bool",
+                           "true/false, when true enables writing the CDL file for the design",
+                           defvalue=False)
+        self.add_parameter("write_spef", "bool",
+                           "true/false, when true enables writing the SPEF file for the design",
+                           defvalue=True)
+        self.add_parameter("use_spef", "bool",
+                           "true/false, when true enables reading in SPEF files.")
+        self.add_parameter("write_liberty", "bool",
+                           "true/false, when true enables writing the liberty timing model for "
+                           "the design", defvalue=True)
+        self.add_parameter("write_sdf", "bool",
+                           "true/false, when true enables writing the SDF timing model for the "
+                           "design", defvalue=True)
+
+        self.add_parameter("pex_corners", "{str}", "set of pex corners to perform extraction on")
+
+    def set_openroad_abstractlefbloatlayers(self, enable: bool,
+                                            step: Optional[str] = None,
+                                            index: Optional[str] = None):
+        """
+        Enables or disables filling all layers when writing the abstract LEF.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ord_abstract_lef_bloat_layers", enable, step=step, index=index)
+
+    def set_openroad_abstractlefbloatfactor(self, factor: int,
+                                            step: Optional[str] = None,
+                                            index: Optional[str] = None):
+        """
+        Sets the bloat factor to apply when writing the abstract LEF.
+
+        Args:
+            factor (int): The bloat factor.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ord_abstract_lef_bloat_factor", factor, step=step, index=index)
+
+    def set_openroad_writecdl(self, enable: bool,
+                              step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables writing the CDL file.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "write_cdl", enable, step=step, index=index)
+
+    def set_openroad_writespef(self, enable: bool,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables writing the SPEF file.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "write_spef", enable, step=step, index=index)
+
+    def set_openroad_writeliberty(self, enable: bool,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables writing the Liberty timing model.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "write_liberty", enable, step=step, index=index)
+
+    def set_openroad_writesdf(self, enable: bool,
+                              step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables writing the SDF timing model.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "write_sdf", enable, step=step, index=index)
+
+    def task(self):
+        return "write_data"
+
+    def setup(self):
+        super().setup()
+
+        self.set_script("apr/sc_write_data.tcl")
+
+        # Every corner a timing scenario asks for. Corners are never dropped
+        # here: the SPEF is a deliverable that STA reads back per scenario
+        # (use_spef), so a missing corner is an error below, not something to
+        # silently skip.
+        self.set("var", "pex_corners", sorted(set(self._get_pex_mapping().values())))
+
+        self._set_reports([
+            'setup',
+            'hold',
+            'unconstrained',
+            'clock_skew',
+            'power',
+            'drv_violations',
+            'fmax',
+            'floating_nets',
+            'overdriven_nets',
+            "logicdepth",
+            'design_stats',
+            'scenarios',
+
+            # Images
+            'snapshot',
+            'placement_view',
+            'routing_view',
+            'markers_view',
+            'placement_density',
+            'routing_congestion',
+            'power_density',
+            'ir_drop',
+            'clock_placement',
+            'clock_trees',
+            'optimization_placement'
+        ])
+
+        # Setup outputs
+        self.add_output_file(ext="lef")
+        self.add_output_file(ext="lvs.vg")
+
+        # The PDK ships no extraction deck at all, so SPEF is simply unavailable.
+        # write_spef defaults on, so turn it off rather than failing every run on
+        # such a PDK. A PDK that does ship decks but is missing the one a
+        # scenario asks for is a misconfiguration and errors below.
+        if not self._has_openrcx():
+            self.set("var", "write_spef", False)
+
+        self.set("var", "use_spef", self.get("var", "write_spef"))
+
+        if self.get("var", "write_cdl"):
+            self.add_output_file(ext="cdl")
+        if self.get("var", "write_spef"):
+            self.add_required_key("var", "pex_corners")
+            self.add_required_key("var", "use_spef")
+            for corner in self.get("var", "pex_corners"):
+                # Only the filesets that carry a deck: a corner may also list
+                # auxiliary filesets (a Tcl estimate model, say) with no openrcx
+                # file, and requiring those would fail setup on a valid PDK.
+                filesets = self._get_openrcx_filesets(corner)
+                if not filesets:
+                    raise ValueError(
+                        f"write_data cannot extract pex corner '{corner}': the PDK ships no "
+                        "OpenRCX extraction deck (pdk 'pexmodelfileset' / 'openrcx' file) for "
+                        "it. Add a deck for this corner, point the timing scenario at a corner "
+                        "that has one, or disable write_spef.")
+                self.add_required_key(self.pdk, "pdk", "pexmodelfileset", "openroad", corner)
+                for fileset in filesets:
+                    self.add_required_key(self.pdk, "fileset", fileset, "file", "openrcx")
+            for corner in self.get("var", "pex_corners"):
+                self.add_output_file(ext=f"{corner}.spef")
+        if self.get("var", "write_liberty"):
+            for corner in self.project.getkeys("constraint", "timing", "scenario"):
+                self.add_output_file(ext=f"{corner}.lib")
+        if self.get("var", "write_sdf"):
+            for corner in self.project.getkeys("constraint", "timing", "scenario"):
+                self.add_output_file(ext=f"{corner}.sdf")
+
+        self.add_required_key("var", "ord_abstract_lef_bloat_layers")
+        self.add_required_key("var", "ord_abstract_lef_bloat_factor")
+        self.add_required_key("var", "write_cdl")
+        if self.get("var", "write_cdl"):
+            # sc_write_data.tcl reads the CDL masters from each asiclib's
+            # aprfileset, resolving aliases and depfilesets; mirror that here so
+            # the files are hashed (cache) and copied (remote runs).
+            for lib in self.project.get("asic", "asiclib"):
+                libobj = self.project.get_library(lib)
+                filesets = libobj.get("asic", "aprfileset")
+                if not filesets:
+                    continue
+                for fs_lib, fs in self.project.get_filesets(library=libobj, filesets=filesets):
+                    if fs_lib.has_file(fileset=fs, filetype="cdl"):
+                        self.add_required_key(fs_lib, "fileset", fs, "file", "cdl")
+        self.add_required_key("var", "write_spef")
+        self.add_required_key("var", "write_liberty")
+        self.add_required_key("var", "write_sdf")

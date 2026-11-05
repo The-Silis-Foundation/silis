@@ -1,0 +1,477 @@
+{
+  "name": "sv-pathfinder",
+  "publisher": "heyfey",
+  "displayName": "sv-pathfinder",
+  "description": "SystemVerilog design navigation and RTL-tracing for VS Code. Seamlessly integrates with waveform viewer for post-simulation debug.",
+  "icon": "media/icon.png",
+  "version": "0.3.0",
+  "repository": "https://github.com/heyfey/sv-pathfinder",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "SystemVerilog",
+    "Verilog",
+    "RTL",
+    "GLS",
+    "Testbench",
+    "Debuggers",
+    "Waveform",
+    "Logic Simulation",
+    "Logic Analyzer"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "sv-pathfinder",
+      "properties": {
+        "sv-pathfinder.sourcePathFrom": {
+          "type": "string",
+          "scope": "window",
+          "markdownDescription": "Source-path prefix to rewrite when jumping to source. Useful when the design database was generated on another machine, so the paths it records don't exist locally: paths starting with this prefix have it swapped for `#sv-pathfinder.sourcePathTo#`. Takes effect only when `#sv-pathfinder.sourcePathTo#` is also set."
+        },
+        "sv-pathfinder.sourcePathTo": {
+          "type": "string",
+          "scope": "window",
+          "markdownDescription": "Local replacement for `#sv-pathfinder.sourcePathFrom#` — the prefix that makes the remapped path resolve on your machine. Takes effect only when `#sv-pathfinder.sourcePathFrom#` is also set."
+        },
+        "sv-pathfinder.compiler": {
+          "type": "string",
+          "enum": [
+            "slang-server",
+            "Surelog"
+          ],
+          "default": "slang-server",
+          "markdownDescription": "Compiler backend to parse and elaborate the `.f` files.\nPrerequisites:\n - [slang-server](https://github.com/hudson-trading/slang-server): Requires the VS Code extension [slang-server: Verilog/SystemVerilog LSP](https://marketplace.visualstudio.com/items?itemName=Hudson-River-Trading.vscode-slang) to be installed and properly configured.\n - [Surelog](https://github.com/chipsalliance/Surelog): Requires Surelog to be installed. Or specify surelog path in setting: `#sv-pathfinder.surelogPath#`.",
+          "markdownEnumDescriptions": [
+            "[slang-server](https://github.com/hudson-trading/slang-server): A SystemVerilog language server based on the Slang library.",
+            "[Surelog](https://github.com/chipsalliance/Surelog): SystemVerilog 2017 Pre-processor, Parser, Elaborator, UHDM Compiler."
+          ]
+        },
+        "sv-pathfinder.surelogPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Surelog executable. If empty, 'surelog' will be resolved from your system PATH. This setting is only relevant when `#sv-pathfinder.compiler#` is set to 'Surelog'."
+        },
+        "sv-pathfinder.showModulesView": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the Modules view (every module in the design; expand one to see its instances). Reload the window to apply."
+        },
+        "sv-pathfinder.ossCadSuitePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build) installation directory (the folder containing `bin/yosys`). OSS CAD Suite bundles Yosys with the [yosys-slang](https://github.com/povik/yosys-slang) SystemVerilog frontend, which the schematic feature uses as its primary backend. If empty, `yosys` is resolved from PATH; `yowasp-yosys` (`pip install yowasp-yosys`) is the zero-install fallback for simple designs."
+        },
+        "sv-pathfinder.schematicAccentColor": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Accent color for the schematic viewer (child-instance fills and hover highlights). Any CSS color (e.g. `#4cc2ff`, `dodgerblue`). If empty, a theme-aware color is used (`--vscode-charts-blue`)."
+        },
+        "sv-pathfinder.schematicSpacing": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "comfortable",
+            "spacious"
+          ],
+          "enumDescriptions": [
+            "Tightest layout — smallest canvas, densest packing.",
+            "More room between blocks and around signal names.",
+            "Most generous spacing — easiest to read, largest canvas."
+          ],
+          "default": "comfortable",
+          "markdownDescription": "Layout density for the schematic: block spacing, the clearance around wire net-name labels, and box padding. Applies on the next render (reopen or refresh the schematic)."
+        },
+        "sv-pathfinder.schematicIncludeDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra include directories for the schematic's Yosys elaboration (passed as `-I`/`-y`). Usually unnecessary — the filelist's own directory, each source file's directory, and any `+incdir+` in the `.f` are searched automatically. Add a directory here only when an `\\`include` header or sibling module lives outside those (e.g. vendored headers a curated filelist references but doesn't include). The schematic error points here when an include/module can't be found."
+        },
+        "sv-pathfinder.schematicShowDanglingNets": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show declared-but-unconnected named nets (no driver and no load) as dashed, floating labels in the schematic. Off by default; normally such nets have nothing to draw and are omitted. Applies on the next render (reopen or refresh the schematic)."
+        },
+        "sv-pathfinder.schematicElaborationMode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "shallow"
+          ],
+          "enumDescriptions": [
+            "Elaborate the scope you open once, then render it and everything under it (step-into/expand, and stepping back up) from that single elaboration without re-elaborating. Only going ABOVE what you've opened re-elaborates. Best for small/medium designs.",
+            "Elaborate only the selected scope plus one level (direct children as boxes); stepping in or expanding re-elaborates the next level on demand. Cheaper to start on very large designs."
+          ],
+          "default": "shallow",
+          "markdownDescription": "How much of the design the schematic elaborates at once (see the options below). Defaults to **shallow** — cheapest to start on large designs; switch to **full** on small/medium designs to step in and out without re-elaborating. Applies on the next render (reopen or refresh the schematic)."
+        },
+        "sv-pathfinder.valueAnnotationFormat": {
+          "type": "string",
+          "enum": [
+            "hexadecimal",
+            "decimal",
+            "binary"
+          ],
+          "enumDescriptions": [
+            "Bus values in hexadecimal (e.g. 0x1a). Bits that are x/z render as x/z digits.",
+            "Bus values in decimal. Values containing x/z fall back to binary (a 4-state value has no decimal).",
+            "Bus values in binary (the raw bit vector)."
+          ],
+          "default": "hexadecimal",
+          "markdownDescription": "Number format for bus (multi-bit) value annotations shown inline in the editor and in the hierarchy view. Single-bit signals are always shown as `0`/`1`/`x`/`z`."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "svPathfinderActivityBar",
+          "title": "sv-pathfinder",
+          "icon": "media/activityBar.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "openedDesignsView",
+        "contents": "Open a design database (.uhdm, .f or .daidir)\n[Open Design](command:sv-pathfinder.openDesign)\nLearn more on [GitHub](https://github.com/heyfey/sv-pathfinder)\nTry with an [example design](command:sv-pathfinder.openExampleDesign) (Linux64)"
+      }
+    ],
+    "views": {
+      "svPathfinderActivityBar": [
+        {
+          "id": "openedDesignsView",
+          "name": "Designs"
+        },
+        {
+          "id": "hierarchyView",
+          "name": "Hierarchy"
+        },
+        {
+          "id": "driversView",
+          "name": "Drivers",
+          "when": "sv-pathfinder.driversViewVisible"
+        },
+        {
+          "id": "loadsView",
+          "name": "Loads",
+          "when": "sv-pathfinder.loadsViewVisible"
+        },
+        {
+          "id": "moduleInstancesView",
+          "name": "Modules",
+          "when": "sv-pathfinder.moduleInstancesViewVisible"
+        }
+      ]
+    },
+    "menus": {
+      "editor/title/context": [],
+      "view/title": [
+        {
+          "command": "sv-pathfinder.openDesign",
+          "when": "view == openedDesignsView",
+          "group": "navigation"
+        },
+        {
+          "command": "sv-pathfinder.searchDesign",
+          "when": "view == hierarchyView",
+          "group": "navigation@0"
+        },
+        {
+          "command": "sv-pathfinder.goBack",
+          "when": "view == hierarchyView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sv-pathfinder.goForward",
+          "when": "view == hierarchyView",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sv-pathfinder.openWaveform",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "inline@0"
+        },
+        {
+          "command": "sv-pathfinder.reloadDesign",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "inline@1"
+        },
+        {
+          "command": "sv-pathfinder.closeDesign",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "inline@2"
+        },
+        {
+          "command": "sv-pathfinder.closeWaveform",
+          "when": "view == 'openedDesignsView' && viewItem == 'waveformItem'",
+          "group": "inline"
+        },
+        {
+          "command": "sv-pathfinder.openWaveform",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "0_default@0"
+        },
+        {
+          "command": "sv-pathfinder.copyDesignPath",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "0_default@1"
+        },
+        {
+          "command": "sv-pathfinder.reloadDesign",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "1_default@0"
+        },
+        {
+          "command": "sv-pathfinder.closeDesign",
+          "when": "view == 'openedDesignsView' && viewItem == 'designItem'",
+          "group": "1_default@1"
+        },
+        {
+          "command": "sv-pathfinder.closeWaveform",
+          "when": "view == 'openedDesignsView' && viewItem == 'waveformItem'",
+          "group": "0_default@4"
+        },
+        {
+          "command": "sv-pathfinder.revealWaveform",
+          "when": "view == 'openedDesignsView' && viewItem == 'waveformItem'",
+          "group": "0_default@3"
+        },
+        {
+          "command": "sv-pathfinder.gotoDefinition",
+          "when": "view == 'hierarchyView' || view == 'moduleInstancesView'",
+          "group": "0_default@3"
+        },
+        {
+          "command": "sv-pathfinder.gotoInstantiation",
+          "when": "(view == 'hierarchyView' && viewItem == 'scopeItem') || (view == 'moduleInstancesView' && viewItem == 'instanceItem')",
+          "group": "0_default@4"
+        },
+        {
+          "command": "sv-pathfinder.copyName",
+          "when": "view == 'hierarchyView' || view == 'moduleInstancesView'",
+          "group": "0_default@5"
+        },
+        {
+          "command": "sv-pathfinder.addToWaveform",
+          "when": "view == 'hierarchyView' && viewItem == 'varItem'",
+          "group": "0_default@6"
+        },
+        {
+          "command": "sv-pathfinder.addAllInScopeToWaveform",
+          "when": "view == 'hierarchyView' && viewItem == 'scopeItem'",
+          "group": "0_default@7"
+        },
+        {
+          "command": "sv-pathfinder.showSchematic",
+          "when": "(view == 'hierarchyView' && viewItem == 'scopeItem') || (view == 'moduleInstancesView' && viewItem == 'instanceItem')",
+          "group": "0_default@8"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sv-pathfinder.selectInstance",
+          "when": "(resourceLangId == verilog || resourceLangId == systemverilog) && sv-pathfinder.moduleInstancesViewVisible",
+          "group": "1_designNavigation@0"
+        },
+        {
+          "command": "sv-pathfinder.traceDriver",
+          "when": "(resourceLangId == verilog || resourceLangId == systemverilog) && sv-pathfinder.driversViewVisible",
+          "group": "1_designNavigation@1"
+        },
+        {
+          "command": "sv-pathfinder.traceLoad",
+          "when": "(resourceLangId == verilog || resourceLangId == systemverilog) && sv-pathfinder.loadsViewVisible",
+          "group": "1_designNavigation@2"
+        },
+        {
+          "command": "sv-pathfinder.showInHierarchyView",
+          "when": "resourceLangId == verilog || resourceLangId == systemverilog",
+          "group": "1_designNavigation@3"
+        },
+        {
+          "command": "sv-pathfinder.copyHierarchyName",
+          "when": "resourceLangId == verilog || resourceLangId == systemverilog",
+          "group": "1_designNavigation@4"
+        },
+        {
+          "command": "sv-pathfinder.addToWaveformViewer",
+          "when": "resourceLangId == verilog || resourceLangId == systemverilog",
+          "group": "1_designNavigation@5"
+        },
+        {
+          "command": "sv-pathfinder.showSchematicFromEditor",
+          "when": "resourceLangId == verilog || resourceLangId == systemverilog",
+          "group": "1_designNavigation@6"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "sv-pathfinder.searchDesign",
+        "title": "Find Instance",
+        "category": "sv-pathfinder",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sv-pathfinder.openDesign",
+        "title": "Open Design",
+        "icon": "$(file-directory-create)"
+      },
+      {
+        "command": "sv-pathfinder.openExampleDesign",
+        "title": "Open Example Design"
+      },
+      {
+        "command": "sv-pathfinder.closeDesign",
+        "title": "Close Design",
+        "icon": "$(close)"
+      },
+      {
+        "command": "sv-pathfinder.reloadDesign",
+        "title": "Reload Design",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sv-pathfinder.openWaveform",
+        "title": "Open Waveform",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sv-pathfinder.copyDesignPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "sv-pathfinder.closeWaveform",
+        "title": "Close Waveform",
+        "icon": "$(close)"
+      },
+      {
+        "command": "sv-pathfinder.revealWaveform",
+        "title": "Reveal Waveform"
+      },
+      {
+        "command": "sv-pathfinder.selectDesign",
+        "title": "Select Design"
+      },
+      {
+        "command": "sv-pathfinder.gotoDefinition",
+        "title": "Go to Definition"
+      },
+      {
+        "command": "sv-pathfinder.gotoInstantiation",
+        "title": "Go to Instantiation"
+      },
+      {
+        "command": "sv-pathfinder.copyName",
+        "title": "Copy Name"
+      },
+      {
+        "command": "sv-pathfinder.addToWaveform",
+        "title": "Show in Waveform"
+      },
+      {
+        "command": "sv-pathfinder.addAllInScopeToWaveform",
+        "title": "Add All Variables in Scope to Waveform"
+      },
+      {
+        "command": "sv-pathfinder.selectInstance",
+        "title": "Select Instance"
+      },
+      {
+        "command": "sv-pathfinder.traceDriver",
+        "title": "Trace Driver"      },
+      {
+        "command": "sv-pathfinder.traceLoad",
+        "title": "Trace Load"      },
+      {
+        "command": "sv-pathfinder.showInHierarchyView",
+        "title": "Show in Hierarchy View"      },
+      {
+        "command": "sv-pathfinder.addToWaveformViewer",
+        "title": "Show in Waveform"      },
+      {
+        "command": "sv-pathfinder.copyHierarchyName",
+        "title": "Copy Hierarchy Name"      },
+      {
+        "command": "sv-pathfinder.goBack",
+        "title": "Go Back",
+        "icon": "$(arrow-left)",
+        "enablement": "sv-pathfinder.isGoBackEnabled"
+      },
+      {
+        "command": "sv-pathfinder.goForward",
+        "title": "Go Forward",
+        "icon": "$(arrow-right)",
+        "enablement": "sv-pathfinder.isGoForwardEnabled"
+      },
+      {
+        "command": "sv-pathfinder.showSchematic",
+        "title": "Show Schematic",
+        "icon": "$(circuit-board)"
+      },
+      {
+        "command": "sv-pathfinder.showSchematicFromEditor",
+        "title": "Show Schematic",
+        "icon": "$(circuit-board)"      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile-addon": "node-gyp rebuild",
+    "compile": "npm run compile-addon && npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run compile-addon && npm run check-types && npm run lint && node esbuild.js --production",
+    "gen-licenses": "npx --yes generate-license-file --input package.json --output THIRD_PARTY_LICENSES.txt --overwrite --no-spinner",
+    "vendor-slang-server": "node scripts/vendor-slang-server.mjs",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "test:unit": "npm run compile-tests && mocha --ui tdd \"out/test/*.test.js\" --ignore \"out/test/extension.test.js\"",
+    "test:converter": "npm run compile-tests && mocha --ui tdd out/test/converter.test.js",
+    "test:webview": "node esbuild.js && node test/webview/run.mjs",
+    "test:all": "npm run check-types && npm run lint && npm run test:unit && npm run test:webview",
+    "bench": "node esbuild.js && node test/webview/perf.mjs",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.40.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.93.0",
+    "@typescript-eslint/eslint-plugin": "^8.22.0",
+    "@typescript-eslint/parser": "^8.22.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.19.0",
+    "npm-run-all": "^4.1.5",
+    "playwright-core": "^1.60.0",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.45",
+    "3vl": "^1.0.1",
+    "digitaljs": "^0.14.2",
+    "web-tree-sitter": "^0.25.6",
+    "yosys2digitaljs": "^0.10.3"
+  }
+}

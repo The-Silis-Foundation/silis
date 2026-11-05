@@ -1,0 +1,49 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Liam Braun
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+  mailbox #(int) m;
+
+  task automatic test_get;
+    int v;
+    m.get(v);
+    // Only one thread should be here at a time (mailbox empty)
+    $display("[%0t] mailbox read", $time);
+    #1;
+    m.put(v);
+  endtask
+
+  task automatic test_put;
+    int v;
+    m.put(42);
+    // Only one thread should be here at a time (mailbox full)
+    $display("[%0t] mailbox write", $time);
+    #1;
+    m.get(v);
+  endtask
+
+  initial begin
+    m = new(1);
+    m.put(42);
+
+    fork
+      test_get();
+      test_get();
+      test_get();
+    join
+
+    m = new(1);
+
+    fork
+      test_put();
+      test_put();
+      test_put();
+    join
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

@@ -1,0 +1,28 @@
+// DESCRIPTION: Verilator: Demonstrate struct literal param assignment problem
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+package Some_pkg;
+  typedef struct packed {int foo;} some_struct_t;
+endpackage
+
+module sub #(
+    parameter Some_pkg::some_struct_t the_some_struct
+) ();
+endmodule
+
+module t (
+    input clk
+);
+
+  // finish report
+  always @(posedge clk) begin
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+  sub #(.the_some_struct(Some_pkg::some_struct_t'{foo: 1})) the_sub ();
+
+endmodule

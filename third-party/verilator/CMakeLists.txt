@@ -1,0 +1,236 @@
+#*****************************************************************************
+#
+# DESCRIPTION: Script for build tool cmake on both unix and windows
+#
+#*****************************************************************************
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2003-2025 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+#
+#****************************************************************************/
+
+cmake_minimum_required(VERSION 3.15)
+cmake_policy(SET CMP0091 NEW) # Use MSVC_RUNTIME_LIBRARY to select the runtime
+project(
+    Verilator
+    VERSION 5.053
+    HOMEPAGE_URL https://verilator.org
+    LANGUAGES CXX
+)
+
+# Set default build type to Release if not specified
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+endif()
+
+option(
+    DEBUG_AND_RELEASE_AND_COVERAGE
+    "Builds debug and release binaries for Verilator and coverage, overriding CMAKE_BUILD_TYPE. Not supported under MSBuild."
+)
+
+find_package(Python3 COMPONENTS Interpreter)
+# Windows often installs python under "Program Files", which GNU make cannot
+# use unquoted in verilated.mk; use the space-free 8.3 short name instead.
+string(REPLACE "Program Files" "PROGRA~1" PYTHON3 "${Python3_EXECUTABLE}")
+# See also CMake built-in; CMAKE_INSTALL_PREFIX is applied by the install command.
+set(CMAKE_INSTALL_DATADIR .)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+include(CheckStructHasMember)
+include(ExternalProject)
+include(FindThreads)
+
+if(NOT WIN32)
+    message(WARNING "CMake support on Linux/OSX is experimental.")
+endif()
+
+if(WIN32)
+    if(DEFINED ENV{WIN_FLEX_BISON})
+        set(WIN_FLEX_BISON "$ENV{WIN_FLEX_BISON}")
+    endif()
+    if(NOT WIN_FLEX_BISON)
+        message(
+            FATAL_ERROR
+            "Please install https://github.com/lexxmark/winflexbison and set WIN_FLEX_BISON environment variable. Please use install cmake target after a successful build."
+        )
+    elseif(IS_DIRECTORY "${WIN_FLEX_BISON}")
+        list(APPEND CMAKE_PREFIX_PATH "${WIN_FLEX_BISON}")
+    else()
+        message(
+            FATAL_ERROR
+            "The path specified by WIN_FLEX_BISON environment variable is not an existing folder: ${WIN_FLEX_BISON}"
+        )
+    endif()
+    set(CMAKE_CXX_STANDARD 20)
+endif()
+
+set(OBJCACHE "" CACHE STRING "Path for ccache, auto-detected if empty")
+option(OBJCACHE_ENABLED "Compile Verilator with ccache" ON)
+
+if(OBJCACHE_ENABLED)
+    if(OBJCACHE STREQUAL "")
+        find_program(OBJCACHE_PATH ccache)
+        if(OBJCACHE_PATH STREQUAL "OBJCACHE_PATH-NOTFOUND")
+            set(OBJCACHE_PATH "")
+        endif()
+    else()
+        set(OBJCACHE_PATH "${OBJCACHE}")
+    endif()
+    if(NOT OBJCACHE_PATH STREQUAL "")
+        execute_process(
+            COMMAND "${OBJCACHE_PATH}" --version
+            OUTPUT_VARIABLE objcache_version
+        )
+        string(REGEX MATCH "[^\n\r]+" objcache_version "${objcache_version}")
+        message(
+            STATUS
+            "Found ccache: ${OBJCACHE_PATH} (\"${objcache_version}\")"
+        )
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${OBJCACHE_PATH}")
+    endif()
+endif()
+
+find_package(BISON)
+# Prefer the header installed with the selected generator, including through
+# symlinks such as Homebrew's bin/flex. Explicit cache entries take precedence.
+find_program(
+    FLEX_EXECUTABLE
+    NAMES flex win-flex win_flex
+    DOC "Path to the flex executable"
+)
+if(NOT FLEX_EXECUTABLE)
+    message(
+        FATAL_ERROR
+        "Cannot find Flex; set FLEX_EXECUTABLE to its executable path"
+    )
+endif()
+get_filename_component(flex_real_executable "${FLEX_EXECUTABLE}" REALPATH)
+get_filename_component(flex_bin_dir "${flex_real_executable}" DIRECTORY)
+find_path(
+    FLEX_INCLUDE_DIR
+    FlexLexer.h
+    PATHS "${flex_bin_dir}/../include" "${flex_bin_dir}"
+    NO_DEFAULT_PATH
+    DOC "Path to the flex headers"
+)
+find_path(FLEX_INCLUDE_DIR FlexLexer.h)
+if(NOT FLEX_INCLUDE_DIR)
+    message(
+        FATAL_ERROR
+        "Cannot find FlexLexer.h; set FLEX_INCLUDE_DIR to its directory"
+    )
+endif()
+mark_as_advanced(FLEX_EXECUTABLE FLEX_INCLUDE_DIR)
+
+# Build
+#set_property(GLOBAL PROPERTY JOB_POOLS one_job=1)
+
+if(DEBUG_AND_RELEASE_AND_COVERAGE)
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio ")
+        error("%Error: The DEBUG_AND_RELEASE_AND_COVERAGE option is not supported in MSBuild-based builds.")
+    endif()
+    set(saved_build_type ${CMAKE_BUILD_TYPE})
+    set(CMAKE_BUILD_TYPE Debug)
+    add_subdirectory(src build-Debug)
+    set(CMAKE_BUILD_TYPE Release)
+    add_subdirectory(src build-Release)
+    set(CMAKE_BUILD_TYPE Coverage)
+    add_subdirectory(src build-Coverage)
+    set(CMAKE_BUILD_TYPE CoverageRelease)
+    add_subdirectory(src build-CoverageRelease)
+    set(CMAKE_BUILD_TYPE ${saved_build_type})
+else()
+    add_subdirectory(src)
+endif()
+
+# Configuration and Installation
+
+set(PACKAGE_NAME ${PROJECT_NAME})
+set(PACKAGE_VERSION ${PROJECT_VERSION})
+set(CXX ${CMAKE_CXX_COMPILER})
+set(AR ${CMAKE_AR})
+
+# Compiler precompiled header options, same detection as configure.ac
+execute_process(
+    COMMAND ${CMAKE_CXX_COMPILER} --help
+    OUTPUT_VARIABLE cxx_help
+    ERROR_QUIET
+)
+if(cxx_help MATCHES "include-pch")
+    # clang
+    set(CFG_CXXFLAGS_PCH_I -include-pch)
+    set(CFG_GCH_IF_CLANG .gch)
+else()
+    # GCC
+    set(CFG_CXXFLAGS_PCH_I -include)
+    set(CFG_GCH_IF_CLANG "")
+endif()
+
+configure_file(include/verilated_config.h.in include/verilated_config.h @ONLY)
+configure_file(include/verilated.mk.in include/verilated.mk @ONLY)
+
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/include/verilated_config.h
+    DESTINATION include
+)
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/include/verilated.mk
+    DESTINATION include
+)
+
+configure_package_config_file(
+    verilator-config.cmake.in
+    verilator-config.cmake
+    INSTALL_DESTINATION .
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/verilator-config.cmake DESTINATION .)
+
+configure_package_config_file(
+    verilator-config-version.cmake.in
+    verilator-config-version.cmake
+    INSTALL_DESTINATION .
+)
+
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/verilator-config-version.cmake
+    DESTINATION .
+)
+
+foreach(
+    program
+    verilator
+    verilator_ccache_report
+    verilator_coverage
+    verilator_difftree
+    verilator_gantt
+    verilator_includer
+    verilator_profcfunc
+)
+    install(PROGRAMS bin/${program} TYPE BIN)
+endforeach()
+
+install(
+    DIRECTORY examples
+    TYPE DATA
+    FILES_MATCHING
+    PATTERN "examples/*/*.[chv]*"
+    PATTERN "examples/*/Makefile*"
+    PATTERN "examples/*/CMakeLists.txt"
+)
+
+install(
+    DIRECTORY include
+    TYPE DATA
+    FILES_MATCHING
+    PATTERN "include/verilated_config.h"
+    PATTERN "include/*.[chv]"
+    PATTERN "include/*.cpp"
+    PATTERN "include/*.vlt"
+    PATTERN "include/*.sv"
+    PATTERN "include/fstcpp/*.[chv]*"
+    PATTERN "include/vltstd/*.[chv]*"
+)

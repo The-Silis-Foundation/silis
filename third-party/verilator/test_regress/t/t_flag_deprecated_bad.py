@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2024 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('vlt')
+
+test.lint(verilator_flags2=[
+    "--trace-fst-thread --trace-threads 2 --order-clock-delay --clk foo --no-clk bar -fno-dfg-pre-inline -fno-dfg-post-inline -fno-dfg-scoped -fno-dfg-break-cycles -fno-lift-expr -fno-merge-const-pool -fno-var-split --assert-unroll-limit 1024",
+],
+          fails=True,
+          expect_filename=test.golden_filename)
+
+test.passes()

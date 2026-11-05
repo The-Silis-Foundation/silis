@@ -1,0 +1,28 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2015 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+  function integer bottom_4bits;
+    input [7:0] i;
+    bottom_4bits = 0;
+    bottom_4bits[3:0] = i[3:0];
+  endfunction
+
+  function integer bottom_2_unknown;
+    input [7:0] i;
+    // bottom_4bits = 0;  'x
+    bottom_2_unknown[1:0] = i[1:0];
+  endfunction
+
+  localparam P = bottom_4bits(8'h13);
+  localparam BU = bottom_2_unknown(8'h13);
+
+  initial begin
+    if (P != 3) $stop;
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

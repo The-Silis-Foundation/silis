@@ -1,0 +1,132 @@
+---
+# DESCRIPTION: Github actions config
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+name: reusable-build
+
+on:
+  workflow_call:
+    inputs:
+      cc:
+        description: "Compiler to use: 'gcc' or 'clang'"
+        required: true
+        type: string
+      ccwarn:
+        description: "Build Verilator with warnings treated as errors (--enable-ccwarn)"
+        required: false
+        default: true
+        type: boolean
+      dev-asan:
+        description: "Build Verilator with the address sanitizer (--enable-dev-asan)"
+        required: false
+        default: false
+        type: boolean
+      dev-gcov:
+        description: "Build Verilator with gcov instrumentation (--enable-dev-gcov)"
+        required: false
+        default: false
+        type: boolean
+      install:
+        description: "Archive the Verilator installation, not the repo tree"
+        required: false
+        default: false
+        type: boolean
+      runs-on:
+        description: "Runner to build on, e.g. ubuntu-##.04"
+        required: true
+        type: string
+      sha:
+        description: "Commit SHA to build"
+        required: true
+        type: string
+    outputs:
+      archive:
+        description: "Name of the built archive artifact"
+        value: ${{ jobs.build.outputs.archive }}
+
+env:
+  CACHE_BASE_KEY: build-${{ inputs.runs-on }}-${{ inputs.cc }}${{ inputs.ccwarn && '-ccwarn' || '' }}${{ inputs.dev-asan && '-asan' || '' }}${{ inputs.dev-gcov && '-gcov' || '' }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+defaults:
+  run:
+    shell: bash
+    working-directory: repo
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      archive: ${{ steps.create-archive.outputs.archive }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          path: repo
+          ref: ${{ inputs.sha }}
+          # Coverage needs full history; install needs it for the 'git describe'
+          # behind 'verilator --version'
+          fetch-depth: ${{ (inputs.install || inputs.dev-gcov) && '0' || '1' }}
+
+      - name: Configure ccache
+        run: |
+          # ccache is unreliable on macOS
+          if [ "${{ startsWith(inputs.runs-on, 'macos') }}" = true ]; then
+            echo "CCACHE_DISABLE=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Cache $CCACHE_DIR
+        if: ${{ env.CCACHE_DISABLE != '1' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        env:
+          CACHE_KEY: ${{ env.CACHE_BASE_KEY }}-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CACHE_KEY }}-${{ inputs.sha }}
+          restore-keys: |
+            ${{ env.CACHE_KEY }}
+
+      - name: Install packages for build
+        uses: ./repo/.github/actions/install-deps
+        with:
+          stage: build
+
+      - name: Build
+        run: |
+          ./ci/ci-build.bash \
+            --prefix ${{ github.workspace }}/install \
+            --compiler ${{ inputs.cc }} \
+            --light-debug \
+            ${{ inputs.ccwarn && '--ccwarn' || '' }} \
+            ${{ inputs.dev-asan && '--asan' || '' }} \
+            ${{ inputs.dev-gcov && '--gcov' || '' }}
+
+      - name: Install
+        if: ${{ inputs.install }}
+        run: make install
+
+      - name: Create archive
+        id: create-archive
+        working-directory: ${{ github.workspace }}
+        run: |
+          # Archive name, unique per build; flavour tags mark non-default builds
+          ARCHIVE="verilator-${{ inputs.sha }}-${{ inputs.runs-on }}-${{ inputs.cc }}"
+          ARCHIVE="$ARCHIVE${{ inputs.ccwarn && '-ccwarn' || '' }}"
+          ARCHIVE="$ARCHIVE${{ inputs.dev-asan && '-asan' || '' }}"
+          ARCHIVE="$ARCHIVE${{ inputs.dev-gcov && '-gcov' || '' }}"
+          ARCHIVE="$ARCHIVE.tar.zst"
+          # zstd compresses faster than gzip and decompresses far faster in the many downstream jobs
+          ZSTD_NBTHREADS=0 tar --posix --zstd -c -f "$ARCHIVE" ${{ inputs.install && 'install' || 'repo' }}
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          path: ${{ github.workspace }}/${{ steps.create-archive.outputs.archive }}
+          name: ${{ steps.create-archive.outputs.archive }}
+          overwrite: true
+          # Archive is already zstd-compressed; skip upload-artifact's zip pass
+          compression-level: 0

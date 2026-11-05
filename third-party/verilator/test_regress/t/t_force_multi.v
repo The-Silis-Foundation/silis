@@ -1,0 +1,43 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2021 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
+// verilog_format: on
+
+module t (  /*AUTOARG*/
+    // Inputs
+    input clk
+);
+
+  integer cyc = 0;
+
+  logic [3:0] busa;
+  logic [3:0] busb;
+
+  // Test loop
+  always @(posedge clk) begin
+    cyc <= cyc + 1;
+    if (cyc == 0) begin
+      busa <= 4'b0101;
+      busb <= 4'b0111;
+    end
+    else if (cyc == 1) begin
+      force {busa, busb} = 8'b1111_1101;
+    end
+    else if (cyc == 2) begin
+      `checkh(busa, 4'b1111);
+      `checkh(busb, 4'b1101);
+    end
+    //
+    else if (cyc == 99) begin
+      $write("*-* All Finished *-*\n");
+      $finish;
+    end
+  end
+
+endmodule

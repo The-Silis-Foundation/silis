@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        html, body, #container {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+        }
+        /* Glowing pulse animation for schematic -> editor jump */
+        .silis-pulse-line {
+            background: rgba(74, 156, 255, 0.28) !important;
+            border-left: 3px solid #4a9cff !important;
+            transition: background 1.5s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <script>
+        // All values below are injected at runtime by Python — do NOT hardcode any of these.
+        var MONACO_LOCAL = window.__MONACO_LOCAL__ || '';
+        var MONACO_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs';
+        var SILIS_THEME = window.__SILIS_THEME__ || null;
+        var SILIS_FONT_FAMILY = window.__SILIS_FONT_FAMILY__ || 'Consolas';
+        var SILIS_FONT_SIZE = window.__SILIS_FONT_SIZE__ || 13;
+        var SILIS_LANG = window.__SILIS_LANG__ || 'plaintext';
+
+        var _docText = '';
+        var _editorReady = false;
+
+        // Immediately available fallbacks so getText/setText never throw or return blank prematurely
+        window.setText = function(b64) {
+            try {
+                _docText = decodeURIComponent(escape(atob(b64)));
+            } catch(e) {
+                try {
+                    _docText = atob(b64);
+                } catch(e2) {
+                    _docText = b64;
+                }
+            }
+            if (editor && _editorReady) {
+                editor.setValue(_docText);
+            }
+        };
+
+        window.getText = function() {
+            if (editor && _editorReady) {
+                return editor.getValue();
+            }
+            return _docText;
+        };
+
+        window.setLanguage = function(lang) {
+            SILIS_LANG = lang;
+            if (editor && monaco && _editorReady) {
+                monaco.editor.setModelLanguage(editor.getModel(), lang);
+            }
+        };
+
+        window.setTheme = function(theme) {
+            if (monaco && _editorReady) {
+                monaco.editor.setTheme(theme);
+            }
+        };
+
+        var _pendingReveal = null;
+        var _pulseDecorations = [];
+        window.revealLine = function(line, col, pulse) {
+            var l = parseInt(line, 10) || 1;
+            var c = parseInt(col, 10) || 1;
+            var shouldPulse = pulse !== false;
+            if (editor && _editorReady) {
+                editor.revealLineInCenter(l);
+                editor.setPosition({ lineNumber: l, column: c });
+                editor.focus();
+                _pendingReveal = null;
+                
+                if (shouldPulse) {
+                    _pulseDecorations = editor.deltaDecorations(_pulseDecorations, [
+                        {
+                            range: new monaco.Range(l, 1, l, 1),
+                            options: {
+                                isWholeLine: true,
+                                className: 'silis-pulse-line'
+                            }
+                        }
+                    ]);
+                    setTimeout(function() {
+                        if (editor) {
+                            _pulseDecorations = editor.deltaDecorations(_pulseDecorations, []);
+                        }
+                    }, 1800);
+                }
+            } else {
+                _pendingReveal = { line: l, col: c, pulse: shouldPulse };
+            }
+        };
+
+        // Diagnostic squiggles API for HDL linter
+        window.setMarkers = function(markers) {
+            if (editor && monaco && _editorReady) {
+                var model = editor.getModel();
+                if (model) {
+                    var mList = (markers || []).map(function(m) {
+                        return {
+                            startLineNumber: m.startLineNumber || m.line || 1,
+                            startColumn: m.startColumn || m.col || 1,
+                            endLineNumber: m.endLineNumber || m.line || 1,
+                            endColumn: m.endColumn || 1000,
+                            message: m.message || 'Syntax issue',
+                            severity: m.severity === 'warning' ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error
+                        };
+                    });
+                    monaco.editor.setModelMarkers(model, 'silis-linter', mList);
+                }
+            }
+        };
+
+        // Live wire value table and radix preference for Monaco Hover Inspector
+        window._silisLiveWireValues = {};
+        window._silisRadixPref = 'hex'; // 'hex' or 'bin'
+        window.setHoverSignalValues = function(vals, radixPref) {
+            window._silisLiveWireValues = vals || {};
+            if (radixPref) window._silisRadixPref = radixPref;
+        };
+
+        function formatWireValueDisplay(valStr, radix) {
+            if (valStr === undefined || valStr === null) return 'N/A';
+            var s = String(valStr).trim();
+            if (s === '') return 'N/A';
+            if (/[xz]/i.test(s)) return "'" + s.toLowerCase() + "'";
+            if (s.length === 1) return "1'b" + s;
+            try {
+                var num = parseInt(s, 2);
+                if (isNaN(num)) return s;
+                var hexDigits = Math.ceil(s.length / 4);
+                var hexStr = num.toString(16).toUpperCase().padStart(hexDigits, '0');
+                if (radix === 'bin') {
+                    return s.length + "'b" + s + " (0x" + hexStr + ")";
+                } else {
+                    return "0x" + hexStr + " (" + s.length + "'b" + s + ")";
+                }
+            } catch(e) {
+                return s;
+            }
+        }
+
+        // Document change sequence bridge for Qt dirty tracking
+        var _silisEditSeq = 0;
+        function notifyDocEdited() {
+            try {
+                document.title = "SILIS_DOC_EDITED:" + (++_silisEditSeq);
+            } catch (e) {}
+        }
+
+        window.setFont = function(family, size) {
+            SILIS_FONT_FAMILY = family;
+            SILIS_FONT_SIZE = size;
+            if (editor && _editorReady) {
+                editor.updateOptions({ fontFamily: family, fontSize: size });
+            }
+        };
+
+        function loadMonaco(vsPath) {
+            var script = document.createElement('script');
+            script.src = vsPath + '/loader.js';
+            script.onload = function() {
+                require.config({ paths: { 'vs': vsPath } });
+                initEditor();
+            };
+            script.onerror = function() {
+                if (vsPath !== MONACO_CDN) {
+                    console.warn('Local Monaco not found, falling back to CDN...');
+                    loadMonaco(MONACO_CDN);
+                } else {
+                    document.getElementById('container').innerText = 'Monaco Editor failed to load.';
+                }
+            };
+            document.body.appendChild(script);
+        }
+
+        var editor;
+        function initEditor() {
+            require(['vs/editor/editor.main'], function() {
+                // Register custom Silis theme from colorconfig.json colors
+                var monacoThemeName = 'silis-theme';
+                var baseTheme = 'vs-dark';
+                var colors = SILIS_THEME;
+
+                if (colors) {
+                    // Detect if it's a dark or light theme by bg luminance
+                    var bg = colors.bg || '#1e1e1e';
+                    var r = parseInt(bg.slice(1,3),16), g = parseInt(bg.slice(3,5),16), b = parseInt(bg.slice(5,7),16);
+                    var lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+                    baseTheme = lum < 0.5 ? 'vs-dark' : 'vs';
+
+                    monaco.editor.defineTheme(monacoThemeName, {
+                        base: baseTheme,
+                        inherit: true,
+                        rules: [
+                            { token: '',            foreground: colors.fg.replace('#',''),   background: colors.bg.replace('#','') },
+                            { token: 'keyword',     foreground: colors.kw.replace('#',''),   fontStyle: 'bold' },
+                            { token: 'keyword.flow',foreground: colors.kw2.replace('#',''),  fontStyle: 'bold' },
+                            { token: 'string',      foreground: colors.str.replace('#','') },
+                            { token: 'comment',     foreground: colors.comment.replace('#',''), fontStyle: 'italic' },
+                            { token: 'number',      foreground: colors.num.replace('#','') },
+                            { token: 'identifier',  foreground: colors.ident.replace('#','') },
+                            { token: 'type',        foreground: colors.ident.replace('#','') },
+                            { token: 'variable',    foreground: colors.fg.replace('#','') },
+                        ],
+                        colors: {
+                            'editor.background':            colors.bg,
+                            'editor.foreground':            colors.fg,
+                            'editor.lineHighlightBackground': colors.sel,
+                            'editor.selectionBackground':   colors.sel,
+                            'editorLineNumber.foreground':  colors.margin_fg,
+                            'editorGutter.background':      colors.margin_bg,
+                            'editorCursor.foreground':      colors.fg,
+                            'editorWidget.background':      colors.margin_bg,
+                            'editorWidget.border':          colors.sel,
+                            'input.background':             colors.margin_bg,
+                            'input.foreground':             colors.fg,
+                            'focusBorder':                  colors.kw,
+                            'scrollbar.shadow':             colors.bg,
+                            'scrollbarSlider.background':   colors.sel + '88',
+                            'scrollbarSlider.hoverBackground': colors.sel,
+                        }
+                    });
+                } else {
+                    monacoThemeName = baseTheme;
+                }
+
+                editor = monaco.editor.create(document.getElementById('container'), {
+                    value: _docText || '',
+                    language: SILIS_LANG,
+                    theme: monacoThemeName,
+                    automaticLayout: true,
+                    fontFamily: SILIS_FONT_FAMILY,
+                    fontSize: SILIS_FONT_SIZE,
+                    fontLigatures: true,
+                    renderWhitespace: 'selection',
+                    minimap: { enabled: true },
+                    scrollBeyondLastLine: false,
+                    smoothScrolling: true,
+                    cursorBlinking: 'smooth',
+                    cursorSmoothCaretAnimation: 'on',
+                });
+
+                _editorReady = true;
+
+                // Execute any pending line reveal
+                if (_pendingReveal) {
+                    window.revealLine(_pendingReveal.line, _pendingReveal.col, _pendingReveal.pulse);
+                    _pendingReveal = null;
+                }
+
+                // Sync text if setText was called during initialization
+                if (_docText && editor.getValue() !== _docText) {
+                    editor.setValue(_docText);
+                }
+
+                // Register HDL Snippets
+                try {
+                    registerHdlSnippets();
+                } catch(e) {
+                    console.warn("Could not register HDL snippets:", e);
+                }
+
+                // Register Signal Value Hover Provider
+                try {
+                    registerSignalHoverProvider();
+                } catch(e) {
+                    console.warn("Could not register hover provider:", e);
+                }
+
+                // Register Quick-Add to Waveform context menu action
+                try {
+                    editor.addAction({
+                        id: 'silis-add-to-waveform',
+                        label: 'Add to Waveform Viewer',
+                        contextMenuGroupId: 'navigation',
+                        contextMenuOrder: 1.5,
+                        run: function(ed) {
+                            var word = ed.getModel().getWordAtPosition(ed.getPosition());
+                            if (word && word.word) {
+                                document.title = "SILIS_ADD_WAVE_SIGNAL:" + word.word;
+                            }
+                        }
+                    });
+                } catch(e) {}
+
+                // Cross-probing: Cursor position changed -> notify schematic to highlight net/cell
+                var _probeDebounce = null;
+                editor.onDidChangeCursorPosition(function(e) {
+                    if (_probeDebounce) clearTimeout(_probeDebounce);
+                    _probeDebounce = setTimeout(function() {
+                        var word = editor.getModel().getWordAtPosition(e.position);
+                        if (word && word.word) {
+                            var token = word.word.trim();
+                            // Filter out language keywords
+                            var keywords = ['module', 'endmodule', 'input', 'output', 'wire', 'reg', 'assign', 'always', 'begin', 'end', 'if', 'else', 'case', 'endcase', 'entity', 'architecture', 'is', 'port', 'signal', 'component'];
+                            if (keywords.indexOf(token.toLowerCase()) === -1 && token.length > 0) {
+                                document.title = "SILIS_CROSS_PROBE:" + token;
+                            }
+                        }
+                    }, 200);
+                });
+
+                // Continuously keep _docText in sync with user edits & notify dirty state
+                editor.onDidChangeModelContent(function() {
+                    _docText = editor.getValue();
+                    notifyDocEdited();
+                });
+            });
+        }
+
+        function registerHdlSnippets() {
+            var languages = ['systemverilog', 'verilog'];
+            languages.forEach(function(lang) {
+                monaco.languages.registerCompletionItemProvider(lang, {
+                    provideCompletionItems: function(model, position) {
+                        var suggestions = [
+                            {
+                                label: 'module',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: [
+                                    'module ${1:module_name} (',
+                                    '\tinput  wire ${2:clk},',
+                                    '\tinput  wire ${3:rst_n},',
+                                    '\tinput  wire [${4:3}:0] ${5:din},',
+                                    '\toutput reg  [${4:3}:0] ${6:dout}',
+                                    ');',
+                                    '\n\t$0\n',
+                                    'endmodule'
+                                ].join('\n'),
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                documentation: 'Standard Verilog/SystemVerilog module definition'
+                            },
+                            {
+                                label: 'always_ff',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: [
+                                    'always_ff @(posedge ${1:clk} or negedge ${2:rst_n}) begin',
+                                    '\tif (!${2:rst_n}) begin',
+                                    '\t\t${3:q} <= \'0;',
+                                    '\tend else begin',
+                                    '\t\t${3:q} <= ${4:d};',
+                                    '\tend',
+                                    'end'
+                                ].join('\n'),
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                documentation: 'Sequential logic clocked block (SystemVerilog always_ff)'
+                            },
+                            {
+                                label: 'always_comb',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: [
+                                    'always_comb begin',
+                                    '\t${1:out} = ${2:in};',
+                                    'end'
+                                ].join('\n'),
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                documentation: 'Combinational logic block (SystemVerilog always_comb)'
+                            },
+                            {
+                                label: 'instantiation',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: [
+                                    '${1:module_name} ${2:u_inst} (',
+                                    '\t.${3:clk}   (${4:clk}),',
+                                    '\t.${5:rst_n} (${6:rst_n}),',
+                                    '\t.${7:in}    (${8:in}),',
+                                    '\t.${9:out}   (${10:out})',
+                                    ');'
+                                ].join('\n'),
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                documentation: 'Named port module instantiation'
+                            },
+                            {
+                                label: 'fsm_3state',
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: [
+                                    'typedef enum logic [1:0] {',
+                                    '\tIDLE  = 2\'b00,',
+                                    '\tRUN   = 2\'b01,',
+                                    '\tDONE  = 2\'b10',
+                                    '} state_t;',
+                                    'state_t state, next_state;',
+                                    '',
+                                    'always_ff @(posedge ${1:clk} or negedge ${2:rst_n}) begin',
+                                    '\tif (!${2:rst_n}) state <= IDLE;',
+                                    '\telse state <= next_state;',
+                                    'end',
+                                    '',
+                                    'always_comb begin',
+                                    '\tnext_state = state;',
+                                    '\tcase (state)',
+                                    '\t\tIDLE: if (${3:start}) next_state = RUN;',
+                                    '\t\tRUN:  if (${4:finish}) next_state = DONE;',
+                                    '\t\tDONE: next_state = IDLE;',
+                                    '\t\tdefault: next_state = IDLE;',
+                                    '\tendcase',
+                                    'end'
+                                ].join('\n'),
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                documentation: '3-State FSM template with enum typedef'
+                            }
+                        ];
+                        return { suggestions: suggestions };
+                    }
+                });
+            });
+        }
+
+        function registerSignalHoverProvider() {
+            var languages = ['systemverilog', 'verilog', 'plaintext'];
+            languages.forEach(function(lang) {
+                monaco.languages.registerHoverProvider(lang, {
+                    provideHover: function(model, position) {
+                        var word = model.getWordAtPosition(position);
+                        if (!word || !word.word) return null;
+                        var token = word.word;
+                        
+                        var vals = window._silisLiveWireValues || {};
+                        // 1. Strict exact case match first (e.g. 'Sum' 4-bit bus vs 'sum' 1-bit wire)
+                        var foundVal = vals[token];
+                        if (foundVal === undefined) {
+                            // 2. Exact match at end of hierarchical path
+                            var dotToken = '.' + token;
+                            for (var k in vals) {
+                                if (k.endsWith(dotToken)) {
+                                    foundVal = vals[k];
+                                    break;
+                                }
+                            }
+                        }
+                        if (foundVal === undefined) {
+                            // 3. Fallback to case-insensitive match only if no exact match exists
+                            var lower = token.toLowerCase();
+                            var dotLower = '.' + lower;
+                            for (var k in vals) {
+                                var kLower = k.toLowerCase();
+                                if (kLower === lower || kLower.endsWith(dotLower)) {
+                                    foundVal = vals[k];
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (foundVal !== undefined) {
+                            var formatted = formatWireValueDisplay(foundVal, window._silisRadixPref || 'hex');
+                            return {
+                                range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+                                contents: [
+                                    { value: '**Signal**: `' + token + '`' },
+                                    { value: '**Current Timeline Value**: `' + formatted + '`' },
+                                    { value: '*(Synchronized with Waveform Cursor)*' }
+                                ]
+                            };
+                        }
+                        return null;
+                    }
+                });
+            });
+        }
+
+        loadMonaco(MONACO_LOCAL || MONACO_CDN);
+    </script>
+</body>
+</html>

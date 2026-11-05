@@ -1,0 +1,696 @@
+#!/usr/bin/env perl
+######################################################################
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2025-2026 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+#
+######################################################################
+
+require 5.006_001;
+use warnings;
+use Getopt::Long;
+use FindBin qw($RealBin $RealScript);
+use IO::File;
+use Pod::Usage;
+use Cwd qw(realpath);
+
+use strict;
+use vars qw($Debug @Opt_Verilator_Sw);
+
+#######################################################################
+#######################################################################
+# main
+
+autoflush STDOUT 1;
+autoflush STDERR 1;
+
+# Guard against unbounded recursive re-entry. Hierarchical / --build flows
+# legitimately re-enter the wrapper a few levels deep (wrapper -> verilator_bin
+# -> make -> wrapper -> ...); a misconfigured VERILATOR_BIN, VERILATOR_GDB or
+# VERILATOR_VALGRIND that points back at this wrapper, however, recurses
+# without bound and exhausts the OS PID table. Use VERILATOR_RUNNING as a
+# depth counter and cap it well above any real nesting.
+my $verilator_running_max = 16;
+my $verilator_running_depth = ($ENV{VERILATOR_RUNNING} || 0) + 1;
+if ($verilator_running_depth > $verilator_running_max) {
+    die "%Error: verilator: re-entered $verilator_running_depth levels deep"
+        . " via \$VERILATOR_RUNNING; check that VERILATOR_BIN, VERILATOR_GDB"
+        . " and VERILATOR_VALGRIND do not resolve back to this wrapper script.\n";
+}
+$ENV{VERILATOR_RUNNING} = $verilator_running_depth;
+
+$Debug = 0;
+my $opt_aslr;
+my $opt_gdb;
+my $opt_rr;
+my $opt_gdbbt;
+my $opt_quiet_exit;
+my $opt_unlimited_stack = 1;
+my $opt_valgrind;
+
+# No arguments can't do anything useful.  Give help
+if ($#ARGV < 0) {
+    pod2usage(-exitstatus => 2, -verbose => 0);
+}
+
+# Insert debugging options up front
+# (VERILATOR_TEST_FLAGS is not a documented nor official supported feature)
+push @ARGV, (split ' ', $ENV{VERILATOR_TEST_FLAGS} || "");
+
+# We sneak a look at the flags so we can do some pre-environment checks
+# All flags will hit verilator...
+foreach my $sw (@ARGV) {
+    push @Opt_Verilator_Sw, $sw;
+}
+
+Getopt::Long::config("no_auto_abbrev", "pass_through");
+if (! GetOptions(
+          # Major operating modes
+          "help"             => \&usage,
+          "debug"            => \&debug,
+          # "version!"       => \&version,   # Also passthru'ed
+          # Switches
+          "aslr!"            => \$opt_aslr,
+          "gdb!"             => \$opt_gdb,
+          "gdbbt!"           => \$opt_gdbbt,
+          "quiet!"           => \$opt_quiet_exit,  # As -quiet implies -quiet-exit
+          "quiet-exit!"      => \$opt_quiet_exit,
+          "rr!"              => \$opt_rr,
+          "unlimited-stack!" => \$opt_unlimited_stack,
+          "valgrind!"        => \$opt_valgrind,
+          # Additional parameters
+          "<>"               => sub {},      # Ignored
+    )) {
+    pod2usage(-exitstatus => 2, -verbose => 0);
+}
+
+# WARNING: $verilator_pkgdatadir_relpath is substituted during Verilator 'make install'
+my $verilator_pkgdatadir_relpath = "..";
+my $verilator_root = realpath("$RealBin/$verilator_pkgdatadir_relpath");
+if (defined $ENV{VERILATOR_ROOT}) {
+    if ((!-d $ENV{VERILATOR_ROOT}) || $verilator_root ne realpath($ENV{VERILATOR_ROOT})) {
+        warn "%Error: verilator: VERILATOR_ROOT is set to inconsistent path. Suggest leaving it unset.\n";
+        warn "%Error: VERILATOR_ROOT=$ENV{VERILATOR_ROOT}\n";
+        exit 1;
+    }
+} else {
+    print "export VERILATOR_ROOT='$verilator_root'\n" if $Debug;
+    $ENV{VERILATOR_ROOT} = $verilator_root;
+}
+
+my $lldb_selected = 0;
+if (($opt_gdb || $opt_gdbbt) && !gdb_works()) {
+    if (lldb_works()) {
+        $lldb_selected = 1;
+    } else {
+        warn "-Info: --gdb or --gdbbt ignored: gdb doesn't seem to be working\n" if $Debug;
+        $opt_gdbbt = 0;
+        $opt_gdb = 0;
+    }
+}
+
+# Determine runtime flags and run
+# Opt_Verilator_Sw is what we want verilator to see on its argc/argv.
+# Starting with that, escape all special chars for the shell;
+# The shell will undo the escapes and the verilator binary should
+# then see exactly the contents of @Opt_Verilator_Sw.
+my @quoted_sw = map { sh_escape($_) } @Opt_Verilator_Sw;
+if ($opt_gdb) {
+    # Note, we must use double-quotes ("run <switches>")
+    # and not single ('run <switches>') below. Bash swallows
+    # escapes as you would expect in a double-quoted string.
+    # That's not true for a single-quoted string, where \'
+    # actually terminates the string -- not what we want!
+    if ($lldb_selected) {
+        # Generic lldb interactive
+        run (ulimit_stack_unlimited()
+             . aslr(0)
+             . ($ENV{VERILATOR_GDB} || "lldb")
+             . " " . verilator_bin()
+             # Note, uncomment to set breakpoints before running:
+             #  . " -o 'b main'"
+             . " -o 'b exit'"  # Need break to keep process active for bt
+             . " -o \"run " . join(' ', @quoted_sw) . "\""
+             . " -o 'settings set term-width 1024'"
+             . " -o 'bt'");
+    } else {
+        # Generic GDB interactive
+        run (ulimit_stack_unlimited()
+             . aslr(0)
+             . ($ENV{VERILATOR_GDB} || "gdb")
+             . " " . verilator_bin()
+             # Note, uncomment to set breakpoints before running:
+             #  . " -ex 'break main'"
+             . " -ex \"run " . join(' ', @quoted_sw) . "\""
+             . " -ex 'set width 0'"
+             . " -ex 'bt'");
+    }
+} elsif ($opt_rr) {
+    # Record with rr
+    run (ulimit_stack_unlimited()
+         . aslr(0)
+         . "rr record " . verilator_bin()
+         . " " . join(' ', @quoted_sw));
+} elsif ($opt_gdbbt && $Debug) {
+    # Run under debugger to get gdbbt
+    if ($lldb_selected) {
+        run (ulimit_stack_unlimited()
+             . aslr(0)
+             . ($ENV{VERILATOR_GDB} || "lldb")
+             . " " . verilator_bin()
+             . " -o 'b exit'"  # Need break to keep process active for bt
+             . " --batch --source-quietly"
+             . " -o \"run " . join(' ', @quoted_sw)."\""
+             . " -o 'settings set term-width 1024'"
+             . " -o 'bt' -o 'quit'");
+    } else {
+        run (ulimit_stack_unlimited()
+             . aslr(0)
+             . ($ENV{VERILATOR_GDB} || "gdb")
+             . " " . verilator_bin()
+             . " --batch --quiet --return-child-result"
+             . " -ex \"run " . join(' ', @quoted_sw)."\""
+             . " -ex 'set width 0'"
+             . " -ex 'bt' -ex 'quit'");
+    }
+} elsif ($opt_valgrind) {
+    # Run under valgrind
+    my $valgrind_bin = ($ENV{VERILATOR_VALGRIND} || "valgrind --error-exitcode=1 --max-stackframe=2815880"
+        # Magic number suggested by Valgrind, may need to be increased in future
+        # if you get warnings. See: https://valgrind.org/docs/manual/manual-core.html#opt.max-stackframe
+        );
+
+    run (ulimit_stack_unlimited()
+         . aslr(0)
+         . $valgrind_bin
+         . " " . verilator_bin()
+         . " " . join(' ', @quoted_sw));
+} elsif ($Debug) {
+    # Debug
+    run(ulimit_stack_unlimited()
+        . aslr(0)
+        . verilator_bin()
+        . " " . join(' ', @quoted_sw));
+} else {
+    # Normal, non-gdb
+    run(ulimit_stack_unlimited() . aslr(1) . verilator_bin() . " " . join(' ', @quoted_sw));
+}
+
+#----------------------------------------------------------------------
+
+sub usage {
+    pod2usage(-verbose => 2, -exitval => 0, -output => \*STDOUT);
+}
+
+sub debug {
+    shift;
+    my $level = shift;
+    $Debug = $level || 3;
+}
+
+#######################################################################
+#######################################################################
+# Builds
+
+sub verilator_bin {
+    my $basename = ($ENV{VERILATOR_BIN}
+                    || ($Debug ? "verilator_bin_dbg" : "verilator_bin"));
+    if (-x "$RealBin/$basename" || -x "$RealBin/$basename.exe") {
+        return "$RealBin/$basename";
+    } else {
+        return $basename;  # Find in PATH
+    }
+}
+
+#######################################################################
+#######################################################################
+# Utilities
+
+sub gdb_works {
+    $! = undef;  # Cleanup -x
+    system("gdb /bin/sh"
+           . " --batch-silent --quiet --return-child-result"
+           . " -ex 'run -c exit'"  # `/bin/sh -c exit
+           . " -ex 'set width 0'"
+           . " -ex 'bt'"
+           . " -ex 'quit'");
+    my $status = $?;
+    return $status == 0;
+}
+
+sub lldb_works {
+    $! = undef;  # Cleanup -x
+    # macOS system integrity stops attach to system binaries like /bin/sh
+    system("lldb --version"
+           . " --batch --source-quietly"
+           . " -o 'settings set term-width 1024'"
+           . " -o 'bt'"
+           . " -o 'quit'");
+    my $status = $?;
+    return $status == 0;
+}
+
+sub aslr {
+    my $want_on = shift;
+    $want_on = $opt_aslr if defined $opt_aslr;
+    if (!$want_on) {
+        my $ok = `setarch --addr-no-randomize echo ok 2>/dev/null` || "";
+        if ($ok =~ /ok/) {
+            return "setarch --addr-no-randomize ";
+        }
+    }
+    return "";
+}
+
+sub ulimit_stack_unlimited {
+    return "" if !$opt_unlimited_stack;
+    my $limit = "unlimited";
+    # AddressSanitizer doesn't work with 'ulimit -s unlimted'
+    if (`${\(verilator_bin())} --get-supported DEV_ASAN` eq "1\n") {
+        # Use host 'physical memory / #cores / 8' instead
+        if ($^O eq "darwin") {
+            my $membytes = `sysctl -n hw.memsize`;
+            chomp $membytes;
+            my $ncpu = `sysctl -n hw.ncpu`;
+            chomp $ncpu;
+            $limit = int(int($membytes / 1024) / $ncpu / 8);
+        } else {
+            open(my $fh, "<", "/proc/meminfo") || die "Can't read host memory for asan";
+            while (<$fh>) {
+                if (m/MemTotal:\s+(\d+)\s+kB/) {
+                    $limit = int(int($1)/`nproc`/8);
+                    last;
+                }
+            }
+            close($fh);
+        }
+    }
+    system("ulimit -s $limit 2>/dev/null");
+    my $status = $?;
+    if ($status == 0) {
+        return "ulimit -s $limit 2>/dev/null; exec ";
+    } else {
+        return "";
+    }
+}
+
+sub run {
+    # Run command, check errors
+    my $command = shift;
+    $! = undef;  # Cleanup -x
+    print "\t$command\n" if $Debug >= 3;
+    system($command);
+    my $status = $?;
+    if ($status) {
+        if ($! =~ /no such file or directory/i) {
+            warn "%Error: verilator: Misinstalled, or VERILATOR_ROOT might need to be in environment\n";
+        }
+        if ($Debug) {  # For easy rerunning
+            warn "%Error: export VERILATOR_ROOT=" . ($ENV{VERILATOR_ROOT} || "") . "\n";
+            warn "%Error: $command\n";
+        }
+        my $signal = ($status & 127);
+        if ($signal) {
+            if ($signal == 4  # SIGILL
+                || $signal == 8  # SIGFPA
+                || $signal == 11) {  # SIGSEGV
+                warn "%Error: Verilator internal fault, sorry. "
+                    . "Suggest trying --debug --gdbbt\n" if !$Debug;
+            } elsif ($signal == 6) {  # SIGABRT
+                warn "%Error: Verilator aborted. "
+                    . "Suggest trying --debug --gdbbt\n" if !$Debug;
+            } else {
+                warn "%Error: Verilator threw signal $signal. "
+                    . "Suggest trying --debug --gdbbt\n" if !$Debug;
+            }
+        }
+        if (!$opt_quiet_exit && ($status != 256 || $Debug)) {  # i.e. not normal exit(1)
+            warn "%Error: Command Failed $command\n";
+        }
+        exit $! if $!;  # errno
+        exit $? >> 8 if $? >> 8;  # pass along child exit code
+        exit 128 + $signal;  # last resort
+    }
+}
+
+sub sh_escape {
+    my ($arg) = @_;
+
+    # This is similar to quotemeta() but less aggressive.
+    # There's no need to escape hyphens, periods, or forward slashes
+    # for the shell as these have no special meaning to the shell.
+    $arg =~ s/([^0-9a-zA-Z_\-\+\=\.\/:])/\\$1/g;
+    return $arg;
+}
+
+#######################################################################
+#######################################################################
+package main;
+__END__
+
+=pod
+
+=head1 NAME
+
+Verilator - Lint, compile and simulate SystemVerilog code using C++/SystemC
+
+=head1 SYNOPSIS
+
+    verilator --help
+    verilator --version
+    verilator --binary -j 0 [options] [source_files.v]... [opt_c_files.cpp/c/cc/a/o/so]
+    verilator --cc [options] [source_files.v]... [opt_c_files.cpp/c/cc/a/o/so]
+    verilator --sc [options] [source_files.v]... [opt_c_files.cpp/c/cc/a/o/so]
+    verilator --lint-only -Wall [source_files.v]...
+
+
+=head1 DESCRIPTION
+
+The "Verilator" package converts all synthesizable, and many behavioral,
+Verilog and SystemVerilog designs into a C++ or SystemC model that after
+compiling can be executed.  Verilator is not a traditional simulator, but a
+compiler.
+
+For documentation see L<https://verilator.org/verilator_doc.html>.
+
+
+=head1 ARGUMENT SUMMARY
+
+This is a short summary of the arguments to the "verilator" executable.
+See L<https://verilator.org/guide/latest/exe_verilator.html> for the
+detailed descriptions of these arguments.
+
+=for VL_SPHINX_EXTRACT "_build/gen/args_verilator.rst"
+
+    <file.v>                    Verilog package, module, and top module filenames
+    <file.c/cc/cpp>             Optional C++ files to compile in
+    <file.a/o/so>               Optional C++ files to link in
+
+     +1364-1995ext+<ext>        Use Verilog 1995 with file extension <ext>
+     +1364-2001ext+<ext>        Use Verilog 2001 with file extension <ext>
+     +1364-2005ext+<ext>        Use Verilog 2005 with file extension <ext>
+     +1800-2005ext+<ext>        Use SystemVerilog 2005 with file extension <ext>
+     +1800-2009ext+<ext>        Use SystemVerilog 2009 with file extension <ext>
+     +1800-2012ext+<ext>        Use SystemVerilog 2012 with file extension <ext>
+     +1800-2017ext+<ext>        Use SystemVerilog 2017 with file extension <ext>
+     +1800-2023ext+<ext>        Use SystemVerilog 2023 with file extension <ext>
+    --no-aslr                   Disable address space layout randomization
+    --no-assert                 Disable all assertions
+    --no-assert-case            Disable unique/unique0/priority-case assertions
+    --assert-unroll-limit <iter> Max SVA assertion repetition before erroring
+    --autoflush                 Flush streams after all $displays
+    --bbox-sys                  Blackbox unknown $system calls
+    --bbox-unsup                Blackbox unsupported language features
+    --binary                    Build model binary
+    --build                     Build model executable/library after Verilation
+    --build-dep-bin <filename>  Override build dependency Verilator binary
+    --build-jobs <jobs>         Parallelism for --build
+    --cc                        Create C++ output
+     -CFLAGS <flags>            C++ compiler arguments for makefile
+    --compiler <compiler-name>  Tune for specified C++ compiler
+    --compiler-include          Include additional header in the precompiled one
+    --constraint-array-limit <size>   Maximum array size for constraint array reduction
+    --converge-limit <loops>    Tune convergence settle time
+    --coverage                  Enable all coverage
+    --coverage-branch           Enable branch coverage
+    --coverage-expr             Enable expression coverage
+    --coverage-expr-max <value>     Maximum permutations allowed for an expression
+    --coverage-fsm              Enable FSM state/arc coverage
+    --coverage-fsm-expand <mode>       Set mode of fsm arcs expansion
+    --coverage-fsm-max-arcs <value>    Maximum amount of transitions of expanded FSM
+    --coverage-line                    Enable line coverage
+    --coverage-max-bins <value>        Maximum bins of an integral coverpoint bins declaration
+    --coverage-max-real-bins <value>   Maximum bins of a real coverpoint bins declaration
+    --coverage-max-width <width>   Maximum array depth for coverage
+    --coverage-merge-instances  Default covergroups to merge their instances
+    --coverage-per-instance     Enable per-instance coverage counters
+    --coverage-toggle           Enable toggle coverage
+    --coverage-underscore       Enable coverage of _signals
+    --coverage-user             Enable SVL user coverage
+     -D<var>[=<value>]          Set preprocessor define
+    --debug                     Enable debugging
+    --debug-check               Enable debugging assertions
+    --no-debug-leak             Disable leaking memory in --debug mode
+    --debugi <level>            Enable debugging at a specified level
+    --debugi-<srcfile> <level>  Enable debugging a source file at a level
+    --no-decoration             Disable comments and lower spacing level
+    --decorations <level>       Set output comment and spacing level
+    --default-language <lang>   Default language to parse
+     +define+<var>=<value>      Set preprocessor define
+    --diagnostics-sarif         Enable SARIF diagnostics output
+    --diagnostics-sarif-output <filename>  Set SARIF diagnostics output file
+    --dpi-hdr-only              Only produce the DPI header file
+    --dump-<srcfile>            Enable dumping everything in source file
+    --dump-ast-patterns         Enable dumping Ast pattern statistics
+    --dump-defines              Show preprocessor defines with -E
+    --dump-dfg                  Enable dumping DfgGraphs to .dot files
+    --dump-dfg-patterns         Enable dumping Dfg pattern statistics
+    --dump-graph                Enable dumping V3Graphs to .dot files
+    --dump-inputs               Enable dumping preprocessed input files
+    --dump-tree                 Enable dumping Ast .tree files
+    --dump-tree-addrids         Use short identifiers instead of addresses
+    --dump-tree-dot             Enable dumping Ast .tree.dot debug files
+    --dump-tree-json            Enable dumping Ast .tree.json files and .tree.meta.json file
+    --dumpi-<srcfile> <level>   Enable dumping everything in source file at level
+    --dumpi-dfg <level>         Enable dumping DfgGraphs to .dot files at level
+    --dumpi-graph <level>       Enable dumping V3Graphs to .dot files at level
+    --dumpi-tree <level>        Enable dumping Ast .tree files at level
+    --dumpi-tree-json <level>   Enable dumping Ast .tree.json files at level
+     -E                         Preprocess, but do not compile
+    --emit-accessors            Emit getter and setter methods for model top class
+    --error-limit <value>       Abort after this number of errors
+    --exe                       Link to create executable
+    --expand-limit <value>      Set expand optimization limit
+     -F <file>                  Parse arguments from a file, relatively
+     -f <file>                  Parse arguments from a file
+     -FI <file>                 Force include of a file
+    --flatten                   Force inlining of all modules, tasks and functions
+    --fourstate                 Enable fourstate logic
+    --no-fourstate              Disable fourstate logic
+    --func-recursion-depth <value>  Maximum recursive constant function depth
+    --future0 <option>          Ignore an option for compatibility
+    --future1 <option>          Ignore an option with argument for compatibility
+     -fno-<optimization>        Disable internal optimization stage
+     -G<name>=<value>           Overwrite top-level parameter
+    --gate-stmts <value>        Tune gate optimizer depth
+    --gdb                       Run Verilator under GDB interactively
+    --gdbbt                     Run Verilator under GDB for backtrace
+    --generate-key              Create random key for --protect-key
+    --get-supported <feature>   Get if feature is supported
+    --getenv <var>              Get environment variable with defaults
+    --help                      Show this help
+    --hierarchical              Enable hierarchical Verilation
+    --hierarchical-block <block>  Internal use only for --hierarchical
+    --hierarchical-child <block>  Internal use only for --hierarchical
+    --hierarchical-params-file <name>  Internal option that specifies parameters file for hier blocks
+    --hierarchical-threads <threads>  Number of threads for hierarchical scheduling
+     -I<dir>                    Directory to search for includes
+    --if-depth <value>          Tune IFDEPTH warning
+     +incdir+<dir>              Directory to search for includes
+    --inline-cfuncs <value>     Inline CFuncs with <=value nodes (0=off)
+    --inline-cfuncs-product <value>  Inline CFuncs if size*calls <= value
+    --inline-mult <value>       Tune module inlining
+    --instr-count-dpi <value>   Assumed dynamic instruction count of DPI imports
+     -j <jobs>                  Parallelism for --build-jobs/--verilate-jobs
+    --no-json-edit-nums         Don't dump editNum in .tree.json files
+    --no-json-ids               Don't use short identifiers instead of addresses/paths in .tree.json
+    --json-only                 Create JSON parser output (.tree.json and .meta.json)
+    --json-only-meta-output <filename>  Set .tree.meta.json output filename
+    --json-only-output <filename>       Set .tree.json output filename
+    --l2-name <value>           Verilog scope name of the top module
+    --language <lang>           Default language standard to parse
+     -LDFLAGS <flags>           Linker pre-object arguments for makefile
+     -libmap                    Specify library mapping file
+    --lib-create <name>         Create a DPI library
+     +libext+<ext>+[ext]...     Extensions for finding modules
+     +librescan                 Ignored for compatibility
+    --lint-only                 Lint, but do not make output
+    --localize-max-size <value>  Tune localize optimization variable size
+    --main                      Generate C++ main() file
+    --main-top-name             Specify top name passed to Verilated model in generated C++ main
+    --make <build-tool>         Generate scripts for specified build tool
+     -MAKEFLAGS <flags>         Arguments to pass to make during --build
+    --max-num-width <value>     Maximum number width (default: 64K)
+    --Mdir <directory>          Name of output object directory
+    --MMD                       Create .d dependency files
+    --mod-prefix <topname>      Name to prepend to lower classes
+    --MP                        Create phony dependency targets
+     +notimingchecks            Ignored
+     -o <executable>            Name of final executable
+     -O0                        Disable optimizations
+     -O1                        Default optimizations
+     -O2                        Stronger optimizations
+     -O3                        High-performance optimizations
+     -O<optimization-letter>    Selectable optimizations
+    --output-groups <numfiles>  Group .cpp files into larger ones
+    --output-groups-size <bytes>     Limit size of grouped .cpp files
+    --output-split <statements>          Split .cpp files into pieces
+    --output-split-cfuncs <statements>   Split model functions
+    --output-split-ctrace <statements>   Split tracing functions
+     -P                         Disable line numbers and blanks with -E
+    --pins-bv <bits>            Specify types for top-level ports
+    --pins-inout-enables        Specify that __en and __out signals be created for inouts
+    --pins-sc-biguint           Specify types for top-level ports
+    --pins-sc-uint              Specify types for top-level ports
+    --pins-sc-uint-bool         Specify types for top-level ports
+    --pins-uint8                Specify types for top-level ports
+    --no-pins64                 Don't use uint64_t's for 33-64 bit sigs
+    --pipe-filter <command>     Filter all input through a script
+    --prefix <topname>          Name of top-level class
+    --preproc-comments          Include preprocessor comments in the output with -E
+    --preproc-defines           Include preprocessor defines in the output with -E
+    --preproc-resolve           Include all found modules in the output with -E
+    --preproc-token-limit       Maximum tokens on a line allowed by preprocessor
+    --private                   Debugging; see docs
+    --prof-c                    Compile C++ code with profiling
+    --prof-cfuncs               Name functions for profiling
+    --prof-exec                 Enable generating execution profile for gantt chart
+    --prof-pgo                  Enable generating profiling data for PGO
+    --protect-ids               Hash identifier names for obscurity
+    --protect-key <key>         Key for symbol protection
+    --protect-lib <name>        Create a DPI protected library
+    --public                    Mark signals as public; see docs
+    --public-depth <level>      Mark public to specified module depth
+    --public-flat-rw            Mark all variables, etc as public_flat_rw
+    --public-ignore             Ignore all public comment markings
+    --public-params             Mark all parameters as public_flat
+     -pvalue+<name>=<value>     Overwrite toplevel parameter
+    --quiet                     Minimize additional printing
+    --quiet-build               Don't print build progress
+    --quiet-exit                Don't print the command on failure
+    --quiet-stats               Don't print statistics
+    --relative-includes         Resolve includes relative to current file
+    --reloop-limit <value>      Minimum iterations for forming loops
+    --replication-limit <value> Replication concatenation limit (default: 8k)
+    --report-unoptflat          Extra diagnostics for UNOPTFLAT
+    --rr                        Run Verilator and record with rr
+    --runtime-debug             Enable model runtime debugging
+    --savable                   Enable model save-restore
+    --sc                        Create SystemC output
+    --sched-zero-delay          Specify #0 delay support
+    --no-skip-identical         Disable skipping identical output
+    --stats                     Create statistics file
+    --stats-vars                Provide statistics on variables
+    --no-std                    Prevent loading standard files
+    --no-std-package            Prevent parsing standard package
+    --no-std-waiver             Prevent parsing standard lint waivers
+    --no-stop-fail              Do not call $stop when assertion fails
+     -sv                        Enable SystemVerilog parsing
+     +systemverilogext+<ext>    Synonym for +1800-2023ext+<ext>
+    --threads <threads>         Enable multithreading
+    --threads-dpi <mode>        Enable multithreaded DPI
+    --threads-max-mtasks <mtasks>  Tune maximum mtask partitioning
+    --timescale <timescale>     Sets default timescale
+    --timescale-override <timescale>  Overrides all timescales
+    --timing                    Enable timing support
+    --no-timing                 Disable timing support
+    --top <topname>             Alias of --top-module
+    --top-module <topname>      Name of top-level input module
+    --trace                     Enable VCD waveform creation
+    --trace-coverage            Enable tracing of coverage
+    --trace-depth <levels>      Depth of tracing
+    --trace-fst                 Enable FST waveform creation
+    --trace-max-array <depth>   Maximum array depth for tracing
+    --trace-max-width <width>   Maximum bit width for tracing
+    --trace-params              Enable tracing of parameters
+    --trace-saif                Enable SAIF file creation
+    --trace-structs             Enable tracing structure names
+    --no-trace-top              Do not emit traces for signals in the top module generated by verilator
+    --trace-underscore          Enable tracing of _signals
+    --trace-vcd                 Enable VCD waveform creation
+     -U<var>                    Undefine preprocessor define
+    --no-unlimited-stack        Don't disable stack size limit
+    --unroll-count <loops>      Tune maximum loop iterations
+    --unroll-limit <loops>      Maximum loop iterations before assuming infinite loop
+    --unroll-stmts <stmts>      Tune maximum loop body size
+    --unused-regexp <regexp>    Tune UNUSED lint signals
+     -V                         Verbose version and config
+     -v <filename>              Verilog library
+    --valgrind                  Run Verilator under valgrind
+    --no-verilate               Skip Verilation and just compile previously Verilated code
+    --verilate-jobs             Job threads for Verilation stage
+     +verilog1995ext+<ext>      Synonym for +1364-1995ext+<ext>
+     +verilog2001ext+<ext>      Synonym for +1364-2001ext+<ext>
+    --version                   Show program version and exits
+    --vpi                       Enable VPI compiles
+    --waiver-multiline          Create multiline --match for waivers
+    --waiver-output <filename>  Create a waiver file based on linter warnings
+     -Wall                      Enable all style warnings
+     -Werror-<message>          Convert warnings to errors
+     -Wfuture-<message>         Disable unknown message warnings
+     -Wno-<message>             Disable warning
+     -Wno-context               Disable source context on warnings
+     -Wno-fatal                 Disable fatal exit on warnings
+     -Wno-lint                  Disable all lint warnings
+     -Wno-style                 Disable all style warnings
+     -work <libname>            Set config library for following files
+     -Wpedantic                 Warn on compliance-test issues
+     -Wwarn-<message>           Enable specified warning message
+     -Wwarn-lint                Enable lint warning message
+     -Wwarn-style               Enable style warning message
+    --x-assign <mode>           Assign non-initial Xs to this value
+    --x-initial <mode>          Assign initial Xs to this value
+    --x-initial-edge            Enable initial X->0 and X->1 edge triggers
+     -y <dir>                   Directory to search for modules
+
+This is a short summary of the simulation runtime arguments, i.e. for the
+final Verilated simulation runtime models.  See
+L<https://verilator.org/guide/latest/exe_verilator.html> for the detailed
+description of these arguments.
+
+=for VL_SPHINX_EXTRACT "_build/gen/args_verilated.rst"
+
+     +verilator+assert+lock                Lock assertion status changes at startup
+     +verilator+coverage+file+<filename>   Set coverage output filename
+     +verilator+debug                      Enable debugging
+     +verilator+debugi+<value>             Enable debugging at a level
+     +verilator+error+limit+<value>        Set error limit
+     +verilator+help                       Show help
+     +verilator+log+file+<filename>        Log stdout and stderr output to filename
+     +verilator+noassert                   Disable assert checking
+     +verilator+prof+exec+file+<filename>  Set execution profile filename
+     +verilator+prof+exec+start+<value>    Set execution profile starting point
+     +verilator+prof+exec+window+<value>   Set execution profile duration
+     +verilator+prof+vlt+file+<filename>   Set PGO profile filename
+     +verilator+quiet                      Minimize additional printing
+     +verilator+rand+reset+<value>         Set random reset technique
+     +verilator+seed+<value>               Set random seed
+     +verilator+solver+file+<filename>     Set random solver log filename
+     +verilator+V                          Show verbose version and config
+     +verilator+version                    Show version and exit
+     +verilator+vpi+<library>[:<bootstrap>]  Load VPI shared library
+     +verilator+wno+unsatconstr+<value>    Disable constraint warnings
+
+
+=head1 DISTRIBUTION
+
+The latest version is available from L<https://verilator.org>.
+
+Copyright 2003-2026 by Wilson Snyder. This program is free software; you can
+redistribute it and/or modify the Verilator internals under the terms of
+either the GNU Lesser General Public License Version 3 or the Perl Artistic
+License Version 2.0.
+
+All Verilog and C++/SystemC code quoted within this documentation file are
+released as Creative Commons Public Domain (CC0).  Many example files and
+test files are likewise released under CC0 into effectively the Public
+Domain as described in the files themselves.
+
+
+=head1 SEE ALSO
+
+L<verilator_coverage>, L<verilator_gantt>, L<verilator_profcfunc>, L<make>,
+
+L<verilator --help> which is the source for this document,
+
+and L<https://verilator.org/verilator_doc.html> for detailed documentation.
+
+=cut
+
+######################################################################
+# Local Variables:
+# fill-column: 75
+# End:

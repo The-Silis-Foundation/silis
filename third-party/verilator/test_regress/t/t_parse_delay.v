@@ -1,0 +1,22 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2014 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  // verilator lint_off WIDTH
+  reg [6:0] myreg1;
+
+  initial begin
+    // verilog_format: off
+    myreg1 = # 100 7'd0;
+    myreg1 = # 100 'b0; // [#] [100] ['b0]
+    myreg1 = #100'b0; // [#] [100] ['b0]
+    myreg1 = 100'b0;
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

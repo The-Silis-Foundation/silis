@@ -1,0 +1,23 @@
+name: 'Tool Updater'
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    # Through the same workflow packages call for their own pins, so this run is
+    # also what tests it.
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/update_tools.yml
+    with:
+      manifest: siliconcompiler/toolscripts/_tools.json
+      app-client-id: ${{ vars.SC_BOT_APP_CLIENT_ID }}
+    secrets:
+      app-private-key: ${{ secrets.SC_BOT_APP_PRIVATE_KEY }}

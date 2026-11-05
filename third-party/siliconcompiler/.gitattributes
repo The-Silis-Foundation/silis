@@ -1,0 +1,3 @@
+*.v			linguist-language=Verilog
+*.vh			linguist-language=Verilog
+asic/virtual/**		linguist-vendored

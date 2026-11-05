@@ -1,0 +1,52 @@
+#!/bin/bash
+# Silis AppRun for AppImage & portable execution
+set -e
+
+# Resolve base directories
+if [ -z "$APPDIR" ]; then
+    APPDIR="$(cd "$(dirname "$0")" && pwd)"
+fi
+
+export APPDIR
+export REPO_ROOT="$APPDIR"
+
+# 1. PDK Root default inside AppDir bundle (self-contained fallback)
+export PDK_ROOT="${PDK_ROOT:-$HOME/.silis/pdks}"
+mkdir -p "$PDK_ROOT"
+
+# 2. Dynamic Library Paths
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib:$APPDIR/opt/python/lib:$APPDIR/terminal:$APPDIR/clocktreeviewer:$APPDIR/synthengine:$APPDIR/backendflow/fast_viewer:$APPDIR/editor:$APPDIR/schematicviewer:$APPDIR/third-party/GDS3D:$LD_LIBRARY_PATH"
+
+# 3. Python Environment
+export PYTHONPATH="$APPDIR:$APPDIR/core:$APPDIR/third-party:$PYTHONPATH"
+
+# 4. Qt6 & QtWebEngine Discovery
+if [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
+    export QTWEBENGINEPROCESS_PATH="$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess"
+    export QTWEBENGINE_RESOURCES_PATH="$APPDIR/usr/share/qt6/resources"
+    export QTWEBENGINE_LOCALES_PATH="$APPDIR/usr/share/qt6/translations/qtwebengine_locales"
+fi
+
+# 5. Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
+export PATH="$APPDIR/third-party/bin:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
+export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
+
+# 6. Python Binary Selection
+PYTHON_BIN="$(which python3 2>/dev/null || echo "python3")"
+if [ -f "$APPDIR/usr/bin/python3" ]; then
+    PYTHON_BIN="$APPDIR/usr/bin/python3"
+fi
+
+# 7. Dedicated CLI switches for SDK and First-Boot handling
+if [ "$1" == "--install-sdk" ]; then
+    exec "$PYTHON_BIN" "$APPDIR/core/sdk_installer.py" --force "$APPIMAGE"
+fi
+
+if [ "$1" == "--first-boot" ]; then
+    exec "$PYTHON_BIN" -c "import sys; sys.path.insert(0, '$APPDIR'); sys.path.insert(0, '$APPDIR/core'); from core.setup_wizard import run_first_boot_if_needed; run_first_boot_if_needed()"
+fi
+
+# Auto-bootstrap host site-packages bridge if not registered
+"$PYTHON_BIN" -c "import sys; sys.path.insert(0, '$APPDIR/core'); from sdk_installer import check_and_auto_bootstrap; check_and_auto_bootstrap('$APPIMAGE')" 2>/dev/null || true
+
+exec "$PYTHON_BIN" "$APPDIR/silis.py" "$@"

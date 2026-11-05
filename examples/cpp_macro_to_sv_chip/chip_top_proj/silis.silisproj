@@ -1,0 +1,19 @@
+{
+    "project_name": "chip_top",
+    "top_module": "chip_top",
+    "pdk": "sky130",
+    "macros": [
+        "simple_alu"
+    ],
+    "auto_sdc": false,
+    "rtl_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/chip_top.sv",
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/simple_alu.v"
+    ],
+    "sdc_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/chip_top.sdc"
+    ],
+    "tb_files": [
+        "/home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/tb_chip_top.v"
+    ]
+}

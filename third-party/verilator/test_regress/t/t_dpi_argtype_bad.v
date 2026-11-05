@@ -1,0 +1,22 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of either the GNU Lesser General Public License Version 3
+// or the Perl Artistic License Version 2.0.
+// SPDX-FileCopyrightText: 2021 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+module t;
+
+  typedef union {
+    int a;
+    int b;
+  } foo_t;
+
+  import "DPI-C" task dpix_twice(foo_t arg);
+  foo_t f;
+  initial begin
+    dpix_twice(f);
+    $stop;
+  end
+endmodule

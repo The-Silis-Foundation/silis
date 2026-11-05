@@ -1,0 +1,20 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2011 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+//bug485, but see t_gen_forif.v for an OK example.
+
+module t;
+
+  always_comb begin
+    integer i;
+
+    for (i = 0; i < 10; i++) begin : COMB
+    end
+
+    for (i = 0; i < 9; i++) begin : COMB
+    end
+  end
+endmodule

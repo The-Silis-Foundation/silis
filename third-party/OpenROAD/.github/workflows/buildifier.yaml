@@ -1,0 +1,49 @@
+name: Lint Bazel
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  buildifier:
+    runs-on: ${{ vars.USE_SELF_HOSTED == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          # Drive buildifier from `git ls-files` instead of `-r .` so the
+          # scan stays inside this repo. With `-r .` buildifier was
+          # recursing into submodule contents (third-party/slang-elab/...)
+          # left on disk by self-hosted runners — files we can't fix from
+          # here since they're upstream-managed.
+          - name: Buildifier format
+            run: "git ls-files -z ':(glob)**/*.bzl' ':(glob)**/*.bazel' ':(glob)**/BUILD' ':(glob)**/WORKSPACE' | xargs -0 -r ./buildifier -mode=check -lint=off"
+          - name: Buildifier lint
+            run: "git ls-files -z ':(glob)**/*.bzl' ':(glob)**/*.bazel' ':(glob)**/BUILD' ':(glob)**/WORKSPACE' | xargs -0 -r ./buildifier -lint=warn"
+    name: ${{ matrix.check.name }}
+    env:
+      BUILDIFIER_VERSION: v8.2.1
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Cache buildifier
+        id: cache-buildifier
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ./buildifier
+          key: ${{ runner.os }}-buildifier-${{ env.BUILDIFIER_VERSION }}
+
+      - name: Download buildifier
+        if: steps.cache-buildifier.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/bazelbuild/buildtools/releases/download/${BUILDIFIER_VERSION}/buildifier-linux-amd64 -O buildifier
+          chmod +x buildifier
+
+      - name: ${{ matrix.check.name }}
+        run: ${{ matrix.check.run }}

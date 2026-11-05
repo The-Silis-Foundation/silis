@@ -1,0 +1,217 @@
+from typing import Optional, Union
+from siliconcompiler import Task
+from siliconcompiler.tools._common import distinct
+
+
+class CompileTask(Task):
+    '''
+    Compile the input verilog into a vvp file that can be simulated.
+    '''
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("verilog_generation", "<1995,2001,2001-noconfig,2005,2005-sv,2009,2012>",
+                           'Select Verilog language generation for Icarus to use. Legal values are '
+                           '"1995", "2001", "2001-noconfig", "2005", "2005-sv", "2009", or "2012". '
+                           'See the corresponding "-g" flags in the Icarus manual for more "'
+                           '"information.')
+
+        self.add_parameter("trace", "bool",
+                           'Enable waveform tracing. When enabled, a VCD dump module is '
+                           'auto-generated and compiled with the design to capture all signals.',
+                           defvalue=False)
+
+        self.add_parameter("timescale", "(str,str)",
+                           'default simulation timescale as a (unit, precision) pair (e.g. '
+                           '("1ns", "1ps")). When set, an Icarus command file with the '
+                           'corresponding "+timescale+" directive is auto-generated and '
+                           'passed to iverilog.')
+
+    def set_icarus_veriloggeneration(self, gen: str,
+                                     step: Optional[str] = None,
+                                     index: Optional[str] = None):
+        """
+        Sets the Verilog language generation for Icarus.
+
+        Args:
+            gen (str): The Verilog generation to use.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "verilog_generation", gen, step=step, index=index)
+
+    def set_trace_enabled(self, enabled: bool = True,
+                          step: Optional[str] = None,
+                          index: Optional[Union[str, int]] = None):
+        """
+        Enables or disables waveform tracing.
+
+        When enabled, a VCD dump module is auto-generated and compiled with
+        the design. The waveform file will be written to reports/<topmodule>.vcd.
+
+        Args:
+            enabled (bool): Whether to enable tracing. Defaults to True.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "trace", enabled, step=step, index=index)
+
+    def set_icarus_timescale(self, unit: str, precision: str,
+                             step: Optional[str] = None,
+                             index: Optional[Union[str, int]] = None):
+        """
+        Sets the default simulation timescale.
+
+        When set, an Icarus command file containing ``+timescale+<unit>/<precision>``
+        is auto-generated and passed to iverilog via ``-f``. This sets the default
+        time unit and precision for modules that do not specify their own
+        ``timescale`` directive.
+
+        Args:
+            unit (str): The time unit (e.g. "1ns").
+            precision (str): The time precision (e.g. "1ps").
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "timescale", (unit, precision), step=step, index=index)
+
+    def tool(self):
+        return "icarus"
+
+    def task(self):
+        return "compile"
+
+    def parse_version(self, stdout):
+        # First line: Icarus Verilog version 10.1 (stable) ()
+        return stdout.split()[3]
+
+    def setup(self):
+        super().setup()
+
+        self.set_exe("iverilog", vswitch="-V")
+        self.add_version(">=10.3")
+
+        self.set_threads()
+
+        self.add_output_file(ext="vvp")
+
+        self.add_required_key("option", "design")
+        self.add_required_key("option", "fileset")
+        if self.project.get("option", "alias"):
+            self.add_required_key("option", "alias")
+
+        # Mark required
+        for lib, fileset in self.project.get_filesets():
+            if lib.has_idir(fileset):
+                self.add_required_key(lib, "fileset", fileset, "idir")
+            if lib.get("fileset", fileset, "define"):
+                self.add_required_key(lib, "fileset", fileset, "define")
+            if lib.has_file(fileset=fileset, filetype="commandfile"):
+                self.add_required_key(lib, "fileset", fileset, "file", "commandfile")
+            if lib.has_file(fileset=fileset, filetype="systemverilog"):
+                self.add_required_key(lib, "fileset", fileset, "file", "systemverilog")
+            if lib.has_file(fileset=fileset, filetype="verilog"):
+                self.add_required_key(lib, "fileset", fileset, "file", "verilog")
+
+        fileset = self.project.get("option", "fileset")[0]
+        design = self.project.design
+        for param in design.getkeys("fileset", fileset, "param"):
+            self.add_required_key(design, "fileset", fileset, "param", param)
+
+        if self.get("var", "verilog_generation"):
+            self.add_required_key("var", "verilog_generation")
+
+        if self.get("var", "timescale"):
+            self.add_required_key("var", "timescale")
+
+    def pre_process(self):
+        super().pre_process()
+
+        # Generate VCD dump module if tracing is enabled
+        if self.get("var", "trace"):
+            self._generate_trace_module()
+
+        # Generate a command file setting the default timescale if requested
+        if self.get("var", "timescale"):
+            self._generate_timescale_file()
+
+    def _generate_trace_module(self):
+        trace_file = f"reports/{self.design_topmodule}.vcd"
+        dump_module = f"""// Auto-generated waveform dump module
+module sc_trace_dump();
+initial begin
+    $dumpfile("{trace_file}");
+    $dumpvars(0, {self.design_topmodule});
+end
+endmodule
+"""
+        with open("sc_trace_dump.v", "w") as f:
+            f.write(dump_module)
+
+    def _generate_timescale_file(self):
+        unit, precision = self.get("var", "timescale")
+        with open("sc_timescale.f", "w") as f:
+            f.write(f"+timescale+{unit}/{precision}\n")
+
+    def runtime_options(self):
+        options = super().runtime_options()
+
+        options.extend(["-o", f"outputs/{self.design_topmodule}.vvp"])
+        options.extend(["-s", self.design_topmodule])
+
+        verilog_gen = self.get("var", "verilog_generation")
+        if verilog_gen:
+            options.append(f'-g{verilog_gen}')
+
+        filesets = self.project.get_filesets()
+        idirs = []
+        defines = []
+        params = []
+        for lib, fileset in filesets:
+            idirs.extend(lib.get_idir(fileset))
+            defines.extend(lib.get("fileset", fileset, "define"))
+        idirs = distinct(idirs)
+        defines = distinct(defines)
+        fileset = self.project.get("option", "fileset")[0]
+
+        design = self.project.design
+        for param in design.getkeys("fileset", fileset, "param"):
+            params.append((param, design.get("fileset", fileset, "param", param)))
+
+        # Set up user-provided parameters to ensure we elaborate the correct modules
+        for param, value in params:
+            options.append(f"-P{self.design_topmodule}.{param}={value}")
+
+        for idir in idirs:
+            options.append('-I' + idir)
+
+        for define in defines:
+            options.append('-D' + define)
+
+        # add siliconcompiler specific defines
+        options.append("-DSILICONCOMPILER_TRACE_DIR=\"reports\"")
+        options.append(f"-DSILICONCOMPILER_TRACE_FILE=\"reports/{self.design_topmodule}.vcd\"")
+
+        # Auto-generated timescale command file (see pre_process)
+        if self.get("var", "timescale"):
+            options.extend(['-f', 'sc_timescale.f'])
+
+        cmdfiles = []
+        for lib, fileset in filesets:
+            cmdfiles.extend(lib.get_file(fileset=fileset, filetype="commandfile"))
+        for value in distinct(cmdfiles):
+            options.extend(['-f', value])
+
+        sources = []
+        for filetype in ("systemverilog", "verilog"):
+            for lib, fileset in filesets:
+                sources.extend(lib.get_file(fileset=fileset, filetype=filetype))
+        for value in distinct(sources):
+            options.append(value)
+
+        # Add trace dump module if tracing is enabled
+        if self.get("var", "trace"):
+            options.append("sc_trace_dump.v")
+            options.extend(["-s", "sc_trace_dump"])
+
+        return options

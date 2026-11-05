@@ -1,0 +1,28 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain
+// SPDX-FileCopyrightText: 2025 Antmicro
+// SPDX-License-Identifier: CC0-1.0
+
+interface ifc;
+  int v;
+endinterface
+
+module GenericModule (
+    interface a
+);
+  initial begin
+    #1;
+    if (a.get() != 4) $stop;
+  end
+endmodule
+
+module t;
+  ifc inf_inst ();
+  GenericModule genericModule (inf_inst);
+  initial begin
+    inf_inst.v = 4;
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

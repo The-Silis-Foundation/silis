@@ -1,0 +1,524 @@
+"""
+synthesisscripts/synthesisthread.py
+Synthesis dashboard, report parser, and tab widget.
+"""
+import os
+import re
+import datetime
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+
+
+
+class ReportEngine:
+    """Parses generated report files for robust metric extraction."""
+
+    FOOTER_ART = """
+███████╗ ██╗ ██╗      ██╗ ███████╗
+██╔════╝ ██║ ██║      ██║ ██╔════╝
+███████╗ ██║ ██║      ██║ ███████╗
+╚════██║ ██║ ██║      ██║ ╚════██║
+███████║ ██║ ███████╗ ██║ ███████║
+╚══════╝ ╚═╝ ╚══════╝ ╚═╝ ╚══════╝
+    """
+
+    @staticmethod
+    def parse_files(report_dir):
+        metrics = {
+            "area": "Unknown", "cells": "0", "wires": "Unknown", "bits": "Unknown",
+            "wns": "0.00", "status": "UNKNOWN",
+            "critical_path_trace": "No path data found in timing.rpt",
+            "pwr_seq": ["0", "0", "0", "0", "0%"],
+            "pwr_comb": ["0", "0", "0", "0", "0%"],
+            "pwr_clk": ["0", "0", "0", "0", "0%"],
+            "pwr_mac": ["0", "0", "0", "0", "0%"],
+            "pwr_pad": ["0", "0", "0", "0", "0%"],
+            "pwr_tot": ["0", "0", "0", "0", "100%"],
+            "pwr_pct": ["0%", "0%", "0%"],
+            "errors": [], "timing_groups": [], "cell_list": []
+        }
+
+        # 1. PARSE YOSYS LOG
+        yosys_log = os.path.join(report_dir, "synthesis.log")
+        if os.path.exists(yosys_log):
+            with open(yosys_log, 'r') as f:
+                log_content = f.read()
+                raw_cells = re.findall(r"(sky130_fd_sc_hd__\w+)\s+cells:\s+(\d+)", log_content)
+                if raw_cells:
+                    metrics["cell_list"] = sorted([(k, int(v)) for k, v in raw_cells], key=lambda x: x[1], reverse=True)
+                for line in log_content.split('\n'):
+                    if "ERROR" in line or "Warning:" in line:
+                        if len(metrics["errors"]) < 10: metrics["errors"].append(line.strip())
+
+        # 2. PARSE AREA REPORT
+        area_rpt = os.path.join(report_dir, "area.rpt")
+        if os.path.exists(area_rpt):
+            with open(area_rpt, 'r') as f:
+                content = f.read()
+                try:
+                    import json
+                    data = json.loads(content)
+                    if "modules" in data:
+                        tot_cells = 0
+                        tot_area = 0.0
+                        tot_wires = 0
+                        tot_bits = 0
+                        for mod_name, mod_info in data["modules"].items():
+                            c_types = mod_info.get("num_cells_by_type", {})
+                            for ct, cnt in c_types.items():
+                                if not any(sub in ct for sub in ["neorv32_", "subsystem_", "u_"]):
+                                    tot_cells += cnt
+                            tot_area += float(mod_info.get("area", 0.0))
+                            tot_wires += int(mod_info.get("num_wires", 0))
+                            tot_bits += int(mod_info.get("num_pub_wire_bits", 0))
+                        if tot_cells > 0:
+                            metrics["cells"] = str(tot_cells)
+                        if tot_area > 0:
+                            metrics["area"] = f"{tot_area:.2f}"
+                        if tot_wires > 0:
+                            metrics["wires"] = str(tot_wires)
+                        if tot_bits > 0:
+                            metrics["bits"] = str(tot_bits)
+                except Exception:
+                    m_area = re.search(r'"area":\s+([\d\.]+)', content)
+                    if m_area: metrics["area"] = m_area.group(1)
+                    m_cells = re.search(r'"num_cells":\s+(\d+)', content)
+                    if m_cells: metrics["cells"] = m_cells.group(1)
+                    m_wires = re.search(r'"num_wires":\s+(\d+)', content)
+                    if m_wires: metrics["wires"] = m_wires.group(1)
+                    m_bits = re.search(r'"num_pub_wire_bits":\s+(\d+)', content)
+                    if m_bits: metrics["bits"] = m_bits.group(1)
+
+        # 3. PARSE TIMING REPORT
+        timing_rpt = os.path.join(report_dir, "timing.rpt")
+        if os.path.exists(timing_rpt):
+            with open(timing_rpt, 'r') as f:
+                content = f.read()
+                trace_match = re.search(r"(Startpoint:.*?slack \([A-Z]+\))", content, re.DOTALL)
+                if trace_match:
+                    metrics["critical_path_trace"] = trace_match.group(1)
+                slacks = re.findall(r"([-+]?\d+\.\d+)\s+slack\s+\((VIOLATED|MET)\)", content)
+                if slacks:
+                    worst_slack = min(slacks, key=lambda x: float(x[0]))
+                    metrics["wns"] = worst_slack[0]
+                    metrics["status"] = worst_slack[1]
+                else:
+                    metrics["status"] = "MET"
+                chunks = content.split("Path Group: ")
+                seen_groups = set()
+                for chunk in chunks[1:]:
+                    lines = chunk.strip().split('\n')
+                    g_name = lines[0].strip()
+                    if g_name in seen_groups: continue
+                    seen_groups.add(g_name)
+                    m_slack = re.search(r"([-+]?\d+\.\d+)\s+slack\s+\((VIOLATED|MET)\)", chunk)
+                    m_end = re.search(r"Endpoint:\s+(\S+)", chunk)
+                    if m_slack:
+                        s_val = m_slack.group(1)
+                        s_stat = m_slack.group(2)
+                        end_p = m_end.group(1) if m_end else "Unknown"
+                        metrics["timing_groups"].append((g_name, s_val, s_stat, end_p))
+
+        # 4. PARSE POWER REPORT
+        power_rpt = os.path.join(report_dir, "power.rpt")
+        if os.path.exists(power_rpt):
+            with open(power_rpt, 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if not parts: continue
+                    if parts[0] == "Sequential" and len(parts)>=6: metrics["pwr_seq"] = parts[1:6]
+                    elif parts[0] == "Combinational" and len(parts)>=6: metrics["pwr_comb"] = parts[1:6]
+                    elif parts[0] == "Clock" and len(parts)>=6: metrics["pwr_clk"] = parts[1:6]
+                    elif parts[0] == "Macro" and len(parts)>=6: metrics["pwr_mac"] = parts[1:6]
+                    elif parts[0] == "Pad" and len(parts)>=6: metrics["pwr_pad"] = parts[1:6]
+                    elif parts[0] == "Total" and len(parts)>=6: metrics["pwr_tot"] = parts[1:6]
+                    elif "%" in parts[0] and len(parts)>=3 and "Total" not in line: metrics["pwr_pct"] = parts[0:3]
+
+        return metrics
+
+    @staticmethod
+    def _bar(pct_str):
+        try:
+            val = float(pct_str.strip('%'))
+            blocks = int(val / 10)
+            return f"|{'█'*blocks}{'-'*(10-blocks)}| {pct_str}"
+        except: return "|----------| 0.0%"
+
+    @staticmethod
+    def generate_markdown_report(metrics, design_name="riscv_core"):
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        doc = []
+        doc.append(f"# Post-Synthesis & Timing/Power (PAT) Report: `{design_name}`\n")
+        doc.append(f"**Target PDK**: SkyWater 130nm (High Density `sky130A`)  ")
+        doc.append(f"**Timing Status**: **{metrics.get('status', 'MET')}** (WNS: `{metrics.get('wns', '0.00')} ns`)  ")
+        doc.append(f"**Generated**: {now}  ")
+        doc.append(f"**Synthesis Flow**: Yosys Open-Source Synthesis + OpenSTA Signoff  \n")
+        doc.append("---\n")
+
+        # 1. Design Statistics
+        doc.append("## 1. Design Statistics & Gate Utilization\n")
+        doc.append("| Metric | Measured Value | Standard Target |")
+        doc.append("| :--- | :--- | :--- |")
+        doc.append(f"| Total Standard Cells | `{metrics['cells']}` | Gate Equivalent |")
+        doc.append(f"| Total Silicon Area | `{metrics['area']} um^2` | Core Bounding Box |")
+        doc.append(f"| Total Nets / Wires | `{metrics['wires']}` | Synthesis Wire Count |")
+        doc.append(f"| Public Wire Bits | `{metrics['bits']}` | Port & Register Interconnect |\n")
+
+        # Top Standard Cells Table
+        if metrics.get("cell_list"):
+            doc.append("### Top Standard Cell Instances\n")
+            doc.append("| Standard Cell Type | Count | % Utilization |")
+            doc.append("| :--- | :--- | :--- |")
+            tot_c = max(1, int(metrics.get("cells", 1)))
+            for name, count in metrics["cell_list"][:10]:
+                pct = (count / tot_c) * 100
+                doc.append(f"| `{name}` | {count} | {pct:.1f}% |")
+            doc.append("\n")
+
+        # 2. Timing Summary & Mermaid Path Slack Chart
+        doc.append("## 2. Static Timing Analysis (STA / MCMM)\n")
+        doc.append(f"- **Worst Negative Slack (WNS)**: `{metrics['wns']} ns` ({metrics['status']})\n")
+
+        timing_groups = metrics.get("timing_groups", [])
+        if timing_groups:
+            doc.append("```mermaid")
+            doc.append("xychart-beta")
+            doc.append("    title \"Timing Slack Margin by Path Group (ns)\"")
+            tg_names = [f'"{g[0]}"' for g in timing_groups]
+            tg_vals = []
+            for g in timing_groups:
+                try:
+                    s_val = float(g[1].split()[0])
+                    tg_vals.append(f"{s_val:.2f}")
+                except Exception:
+                    tg_vals.append("0.00")
+            doc.append(f"    x-axis [{', '.join(tg_names)}]")
+            doc.append("    y-axis \"Slack (ns)\" -5 --> 10")
+            doc.append(f"    bar [{', '.join(tg_vals)}]")
+            doc.append("```\n")
+
+            doc.append("| Path Group | Slack (ns) | Constraint Status | Critical Endpoint |")
+            doc.append("| :--- | :--- | :--- | :--- |")
+            for g, s, st, end in timing_groups:
+                doc.append(f"| `{g}` | `{s}` | **{st}** | `{end}` |")
+            doc.append("\n")
+
+        # 3. Power Analysis & Mermaid Pie Chart
+        doc.append("## 3. Power Consumption Breakdown\n")
+        pwr_seq_val = float(metrics['pwr_seq'][4].strip('%')) if metrics['pwr_seq'][4] != '0%' else 35.0
+        pwr_comb_val = float(metrics['pwr_comb'][4].strip('%')) if metrics['pwr_comb'][4] != '0%' else 40.0
+        pwr_clk_val = float(metrics['pwr_clk'][4].strip('%')) if metrics['pwr_clk'][4] != '0%' else 20.0
+        pwr_mac_val = float(metrics['pwr_mac'][4].strip('%')) if metrics['pwr_mac'][4] != '0%' else 5.0
+
+        doc.append("```mermaid")
+        doc.append("pie title \"Power Dissipation Distribution (%)\"")
+        doc.append(f"    \"Sequential Cells\" : {int(round(pwr_seq_val))}")
+        doc.append(f"    \"Combinational Logic\" : {int(round(pwr_comb_val))}")
+        doc.append(f"    \"Clock Distribution\" : {int(round(pwr_clk_val))}")
+        doc.append(f"    \"Macro & Pad IO\" : {int(round(pwr_mac_val))}")
+        doc.append("```\n")
+
+        doc.append("| Domain | Internal (W) | Switching (W) | Leakage (W) | Total Power (W) | Share (%) |")
+        doc.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        doc.append(f"| Sequential | {metrics['pwr_seq'][0]} | {metrics['pwr_seq'][1]} | {metrics['pwr_seq'][2]} | {metrics['pwr_seq'][3]} | {metrics['pwr_seq'][4]} |")
+        doc.append(f"| Combinational | {metrics['pwr_comb'][0]} | {metrics['pwr_comb'][1]} | {metrics['pwr_comb'][2]} | {metrics['pwr_comb'][3]} | {metrics['pwr_comb'][4]} |")
+        doc.append(f"| Clock Network | {metrics['pwr_clk'][0]} | {metrics['pwr_clk'][1]} | {metrics['pwr_clk'][2]} | {metrics['pwr_clk'][3]} | {metrics['pwr_clk'][4]} |")
+        doc.append(f"| Macro Blocks | {metrics['pwr_mac'][0]} | {metrics['pwr_mac'][1]} | {metrics['pwr_mac'][2]} | {metrics['pwr_mac'][3]} | {metrics['pwr_mac'][4]} |")
+        doc.append(f"| Pad / IO | {metrics['pwr_pad'][0]} | {metrics['pwr_pad'][1]} | {metrics['pwr_pad'][2]} | {metrics['pwr_pad'][3]} | {metrics['pwr_pad'][4]} |")
+        doc.append(f"| **TOTAL** | **{metrics['pwr_tot'][0]}** | **{metrics['pwr_tot'][1]}** | **{metrics['pwr_tot'][2]}** | **{metrics['pwr_tot'][3]}** | **100%** |\n")
+
+        # 4. Critical Path Trace
+        if metrics.get("critical_path_trace") and metrics["critical_path_trace"] != "No path data found in timing.rpt":
+            doc.append("## 4. Critical Path Diagnostics\n")
+            doc.append("```text")
+            doc.append(metrics["critical_path_trace"])
+            doc.append("```\n")
+
+        return "\n".join(doc)
+
+    @staticmethod
+    def generate_report(metrics, design_name="riscv_core"):
+        now = datetime.datetime.now().strftime("%Y-%m-%d")
+        def pr(name, d):
+            split_vis = ReportEngine._bar(d[4])
+            return f"| {name:<14} | {d[0]:<10} | {d[1]:<10} | {d[2]:<10} | {d[3]:<10} | {d[4]:<6} | {split_vis:<16} |"
+        t_table = ""
+        for g, s, st, end in metrics["timing_groups"]:
+            t_table += f"| {g:<13} | {s:<11} | {st:<10} | {end:<25} |\n"
+        c_table = ""
+        total_c = int(metrics["cells"]) if int(metrics["cells"]) > 0 else 1
+        for name, count in metrics["cell_list"][:15]:
+            pct = (count / total_c) * 100
+            c_table += f"| {name:<30} | {str(count):<6} | {pct:<4.1f}% |\n"
+        rpt = f"""################################################################################
+#                                            POST SYNTHESIS REPORT
+# Design:       {design_name}
+# Date:         {now}
+# PDK:          Sky130 (High Density)
+# Generated by Silis — Silicon Scaffold
+################################################################################
+
+================================================================================
+  SECTION 1: DESIGN STATISTICS
+================================================================================
++---------------------------+-------------------+
+| Metric                    | Value             |
++---------------------------+-------------------+
+| Total Cells               | {metrics['cells']:<17} |
+| Total Area                | {metrics['area'] + ' um^2':<17} |
+| Total Wires               | {metrics['wires']:<17} |
+| Public Wire Bits          | {metrics['bits']:<17} |
++---------------------------+-------------------+
+
+================================================================================
+  SECTION 2: TIMING SUMMARY
+================================================================================
++---------------+-------------+------------+---------------------------+
+| Path Group    | Slack       | Status     | Critical Endpoint         |
++---------------+-------------+------------+---------------------------+
+{t_table}+---------------+-------------+------------+---------------------------+
+
+  Worst Negative Slack (WNS): {metrics['wns']} ns ({metrics['status']})
+
+  CRITICAL PATH TRACE:
+  {metrics['critical_path_trace'].replace(chr(10), chr(10)+'  ')}
+
+================================================================================
+  SECTION 3: POWER ANALYSIS
+================================================================================
++----------------+------------+------------+------------+------------+--------+------------------+
+| Group          | Internal   | Switching  | Leakage    | Total      | %      | Split            |
++----------------+------------+------------+------------+------------+--------+------------------+
+{pr("Sequential", metrics['pwr_seq'])}
+{pr("Combinational", metrics['pwr_comb'])}
+{pr("Clock", metrics['pwr_clk'])}
+{pr("Macro", metrics['pwr_mac'])}
+{pr("Pad", metrics['pwr_pad'])}
++----------------+------------+------------+------------+------------+--------+------------------+
+| TOTAL          | {metrics['pwr_tot'][0]:<10} | {metrics['pwr_tot'][1]:<10} | {metrics['pwr_tot'][2]:<10} | {metrics['pwr_tot'][3]:<10} | 100%   | |██████████| 100% |
++----------------+------------+------------+------------+------------+--------+------------------+
+
+[ WARNINGS ]
+{chr(10).join(['  ! '+e for e in metrics['errors']]) if metrics['errors'] else "  (None)"}
+
+================================================================================
+  SECTION 4: CELL UTILIZATION (Top 15)
+================================================================================
++--------------------------------+--------+-------+
+| Cell Name                      | Count  | %     |
++--------------------------------+--------+-------+
+{c_table}+--------------------------------+--------+-------+
+
+{ReportEngine.FOOTER_ART}
+https://github.com/The-Silis-Foundation/silis
+________________________________________________________________________________
+Generated by Silis — Silicon Scaffold
+© 2026 The Silis Foundation
+________________________________________________________________________________
+"""
+        return rpt
+
+
+class SynthesisTab(QWidget):
+    def __init__(self, ide):
+        super().__init__()
+        self.ide = ide
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(15)
+
+        # === LEFT COLUMN (LOGS) ===
+        left_col = QWidget()
+        l_lay = QVBoxLayout(left_col); l_lay.setContentsMargins(0,0,0,0)
+
+        ctrl = QFrame(); ctrl.setStyleSheet("border-radius: 4px; padding: 5px; border: 1px solid gray;")
+        cl = QHBoxLayout(ctrl); cl.setContentsMargins(5,5,5,5)
+        self.lbl_pdk = QLabel("Active PDK: Sky130A"); self.lbl_pdk.setStyleSheet("font-weight:bold;")
+
+        btn_style = (
+            "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
+        run_style = (
+            "QPushButton { border: 1px solid gray; padding: 5px 15px; border-radius: 3px; font-weight: bold; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
+
+        btn_sel = QPushButton("⚙ PDK"); btn_sel.setStyleSheet(btn_style)
+        btn_sel.clicked.connect(self.ide.open_pdk_selector)
+        self.btn_run = QPushButton("Run Flow"); self.btn_run.setStyleSheet(run_style)
+        self.btn_run.clicked.connect(self.ide.run_synthesis_flow)
+
+        cl.addWidget(self.lbl_pdk); cl.addStretch(); cl.addWidget(btn_sel); cl.addWidget(self.btn_run)
+        l_lay.addWidget(ctrl)
+
+        # --- DFT Configuration Panel ---
+        self.dft_panel = QFrame()
+        self.dft_panel.setStyleSheet("border-radius: 4px; padding: 3px 6px; border: 1px solid #444;")
+        dft_l = QHBoxLayout(self.dft_panel); dft_l.setContentsMargins(6, 3, 6, 3); dft_l.setSpacing(8)
+        
+        self.chk_dft = QCheckBox("Enable Scan Insertion (DFT)")
+        self.chk_dft.setStyleSheet("font-weight: bold; color: #2da44e;")
+        
+        self.in_scan_in = QLineEdit("scan_in"); self.in_scan_in.setPlaceholderText("Scan In"); self.in_scan_in.setFixedWidth(75)
+        self.in_scan_out = QLineEdit("scan_out"); self.in_scan_out.setPlaceholderText("Scan Out"); self.in_scan_out.setFixedWidth(75)
+        self.in_scan_en = QLineEdit("scan_en"); self.in_scan_en.setPlaceholderText("Scan En"); self.in_scan_en.setFixedWidth(75)
+        self.in_scan_clk = QLineEdit("clk"); self.in_scan_clk.setPlaceholderText("Scan Clk"); self.in_scan_clk.setFixedWidth(60)
+        self.chk_clamp = QCheckBox("Clamp Macros"); self.chk_clamp.setChecked(True)
+        
+        dft_l.addWidget(self.chk_dft)
+        dft_l.addWidget(QLabel("In:")); dft_l.addWidget(self.in_scan_in)
+        dft_l.addWidget(QLabel("Out:")); dft_l.addWidget(self.in_scan_out)
+        dft_l.addWidget(QLabel("En:")); dft_l.addWidget(self.in_scan_en)
+        dft_l.addWidget(QLabel("Clk:")); dft_l.addWidget(self.in_scan_clk)
+        dft_l.addWidget(self.chk_clamp)
+        dft_l.addStretch()
+        l_lay.addWidget(self.dft_panel)
+
+        self.log_tabs = QTabWidget()
+        self.log_tabs.setStyleSheet("")
+
+        self.log_main = QTextEdit(); self.log_main.setReadOnly(True)
+        self.log_main.setStyleSheet("font-family:Consolas; border:none;")
+        self.log_tabs.addTab(self.log_main, "Build Output")
+
+        self.list_err = QListWidget()
+        self.list_err.setStyleSheet("color:#cf222e; font-family:Consolas; border:1px solid gray; padding: 5px;")
+        self.log_tabs.addTab(self.list_err, "Issues / Errors")
+
+        l_lay.addWidget(self.log_tabs)
+        lay.addWidget(left_col, stretch=2)
+
+        # === RIGHT COLUMN (DASHBOARD) ===
+        right_col = QFrame()
+        right_col.setStyleSheet("border-left: 1px solid gray;")
+        right_col.setFixedWidth(360)
+        r_lay = QVBoxLayout(right_col)
+
+        self.card_status = QLabel("READY")
+        self.card_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.card_status.setStyleSheet("font-size:14px; font-weight:bold; padding:10px; border-radius:6px; border: 1px solid gray;")
+        r_lay.addWidget(self.card_status)
+
+        grid_w = QWidget(); grid = QGridLayout(grid_w)
+        v_style = "font-weight:bold; font-size:12px;"
+        grid.addWidget(QLabel("WNS (Slack):"), 0, 0); lbl = QLabel("--"); lbl.setStyleSheet(v_style); self.val_wns = lbl; grid.addWidget(lbl, 0, 1)
+        grid.addWidget(QLabel("Chip Area:"), 1, 0); lbl2 = QLabel("--"); lbl2.setStyleSheet(v_style); self.val_area = lbl2; grid.addWidget(lbl2, 1, 1)
+        grid.addWidget(QLabel("Gate Count:"), 2, 0); lbl3 = QLabel("--"); lbl3.setStyleSheet(v_style); self.val_gates = lbl3; grid.addWidget(lbl3, 2, 1)
+        r_lay.addWidget(grid_w)
+
+        r_lay.addWidget(QLabel("<b style='color:#58a6ff'>Report Preview:</b>"))
+        self.preview = QTextEdit(); self.preview.setReadOnly(True)
+        self.preview.setMaximumHeight(250)
+        self.preview.setStyleSheet("font-family:Consolas; font-size:8pt; border:1px solid gray;")
+        self.preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        r_lay.addWidget(self.preview)
+
+        btn_save = QPushButton("Save Report...")
+        btn_save.setStyleSheet(
+            "QPushButton { border:1px solid gray; padding:5px; border-radius: 3px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #58a6ff; } "
+            "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
+        )
+        btn_save.clicked.connect(self.save_report)
+        r_lay.addWidget(btn_save)
+
+        btn_view_md = QPushButton("Open synthesis_report.md")
+        btn_view_md.setStyleSheet(
+            "QPushButton { border:1px solid #58a6ff; color:#58a6ff; font-weight:bold; padding:5px; border-radius: 3px; } "
+            "QPushButton:hover { background-color: rgba(88, 166, 255, 0.15); } "
+            "QPushButton:pressed { background-color: rgba(88, 166, 255, 0.3); }"
+        )
+        btn_view_md.clicked.connect(self.open_markdown_report)
+        r_lay.addWidget(btn_view_md)
+        r_lay.addStretch()
+
+        lay.addWidget(right_col, stretch=1)
+
+    def open_markdown_report(self):
+        _, base = self.ide.get_context()
+        if not base and hasattr(self.ide, 'project_config') and self.ide.project_config:
+            base = self.ide.project_config.get("top_module")
+        root = self.ide.get_proj_root(base or "design")
+        rpt_md = os.path.join(root, "reports", "synthesis_report.md")
+        if os.path.isfile(rpt_md) and hasattr(self.ide, 'open_file_in_editor'):
+            self.ide.open_file_in_editor(rpt_md)
+            if hasattr(self.ide, 'frontend_tabs'):
+                self.ide.frontend_tabs.setCurrentIndex(0)
+        else:
+            self.ide.log_system("synthesis_report.md has not been generated yet. Run synthesis flow first.", "WARN")
+
+    def update_dashboard(self):
+        _, base = self.ide.get_context()
+        if not base and hasattr(self.ide, 'project_config') and self.ide.project_config:
+            base = self.ide.project_config.get("top_module")
+        if not base: return
+
+        if not self.ide.active_pdk and hasattr(self.ide, 'resolve_and_set_pdk'):
+            self.ide.resolve_and_set_pdk()
+
+        root = self.ide.get_proj_root(base)
+        report_dir = os.path.join(root, "reports")
+
+        m = ReportEngine.parse_files(report_dir)
+
+        if m["status"] == "MET":
+            self.card_status.setText("TIMING MET")
+            self.card_status.setStyleSheet("background:#2da44e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+        elif m["status"] == "VIOLATED":
+            self.card_status.setText("TIMING FAIL")
+            self.card_status.setStyleSheet("background:#cf222e; color:white; font-weight:bold; padding:10px; border-radius:6px;")
+
+        self.val_wns.setText(f"{m['wns']} ns")
+        self.val_area.setText(f"{m['area']} um^2")
+        self.val_gates.setText(m['cells'])
+
+        # Load existing synthesis.log if Build Output is empty
+        synth_log_file = os.path.join(report_dir, "synthesis.log")
+        if os.path.isfile(synth_log_file) and not self.log_main.toPlainText().strip():
+            try:
+                with open(synth_log_file, 'r') as f:
+                    self.log_main.setPlainText(f.read())
+            except Exception:
+                pass
+
+        self.list_err.clear()
+        for e in m['errors']: self.list_err.addItem(e)
+        if m['errors']: self.log_tabs.setCurrentIndex(1)
+
+        rpt = ReportEngine.generate_report(m, base or "design")
+        self.preview.setPlainText(rpt)
+        self.last_report = rpt
+        
+        # Save both text report and rich Mermaid markdown report
+        try:
+            rpt_text_path = os.path.join(report_dir, f"{base or 'design'}_synthesis.rpt")
+            with open(rpt_text_path, "w") as f:
+                f.write(rpt)
+            md_rpt = ReportEngine.generate_markdown_report(m, base or "design")
+            self.last_markdown_report = md_rpt
+            rpt_md_path = os.path.join(report_dir, "synthesis_report.md")
+            with open(rpt_md_path, "w") as f:
+                f.write(md_rpt)
+        except Exception as e:
+            self.ide.log_system(f"Report export notice: {e}", "WARN")
+        
+        self.ide.log_system("Generating Post Synthesis Report...", "SYS")
+        self.ide.log_system("Report generated in background.", "RPT")
+
+    def save_report(self):
+        if not hasattr(self, 'last_report'): return
+        _, base = self.ide.get_context()
+        report_name = f"{base or 'design'}_synthesis_report"
+        path, sel_filter = QFileDialog.getSaveFileName(
+            self, 
+            "Save Post-Synthesis PAT Report", 
+            report_name, 
+            "Markdown Report (*.md);;Text Report (*.rpt);;All Files (*)"
+        )
+        if path:
+            content = self.last_markdown_report if (path.endswith(".md") and hasattr(self, 'last_markdown_report')) else self.last_report
+            with open(path, 'w') as f: f.write(content)
+            self.ide.log_system(f"Report saved: {os.path.basename(path)}")

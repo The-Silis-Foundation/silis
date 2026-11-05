@@ -1,0 +1,91 @@
+# Copyright (C) 2023-2026 Zero ASIC
+
+FROM {{ base_build_image }}
+
+LABEL org.opencontainers.image.source="https://github.com/siliconcompiler/siliconcompiler"
+LABEL org.opencontainers.image.description="SiliconCompiler {{ tool }} tool"
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+{% for tool in depends_tools %}
+COPY --from={{ tool }} $SC_PREFIX $SC_PREFIX
+RUN apt-get update && \
+    cat $SC_PREFIX/apt.txt | xargs apt-get install --ignore-missing -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm $SC_PREFIX/apt.txt{% endfor %}
+
+# Execute scripts needed by tools
+RUN find $SC_PREFIX -name "*.sh" -maxdepth 1 -exec {} + && \
+    rm -f $SC_PREFIX/*.sh
+
+# Copy in support files
+COPY _tools.py $SC_BUILD/..
+COPY _tools.json $SC_BUILD/..
+COPY _prereqs.sh $SC_BUILD/..
+
+# Copy and run install script
+# The final remove in the same RUN command
+# is important to keep the docker image size low
+#
+# A package's install script finds _prereqs.sh and _tools.py through
+# SC_TOOLSCRIPTS, as it does under sc-install. A private source is cloned with the
+# token in the git_token build secret, when a non-empty one is given: it is read
+# from the mount and handed to git through the environment, so it reaches neither a
+# layer nor a config file.
+COPY {{ install_script }} $SC_BUILD
+WORKDIR $SC_BUILD
+RUN --mount=type=secret,id=git_token \
+    if [ -s /run/secrets/git_token ]; then \
+        export GIT_CONFIG_COUNT=1 \
+               GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/git_token)@github.com/.insteadOf" \
+               GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi && \
+    apt-get update && \
+    chmod +x ./{{ install_script }} && \
+    SC_TOOLSCRIPTS=$SC_BUILD/.. ./{{ install_script }} && \
+    rm -rf $SC_BUILD/* && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf $HOME/.cache
+
+{% if strip_symbols %}
+# Drop the build-only half of this image: symbols, static archives, headers and
+# the build-only packages. binutils is borrowed for the strip and removed again,
+# rather than added to the base image, so it stays out of apt.txt below.
+#
+# This runs before extra_commands so that a tool's own docker-cmds is the last
+# word and can put back anything it turns out to need.
+# _prereqs.sh is copied to $SC_BUILD/.. above, which is / only because SC_BUILD
+# defaults to /sc_build. Resolve it the same way the install scripts do, so an
+# overridden SC_BUILD still finds it.
+#
+# What this image prunes, keeps and drops is entirely the tools' own
+# declarations -- docker-prune-dirs, docker-keep-pkgs and docker-drop-pkgs in
+# _tools.json -- unioned with those of the tools this one is
+# built on top of, whose files are in this prefix too. _prereqs.sh names no
+# package and no directory of its own: it feeds every tool image's check tag, so
+# anything listed there rebuilds all 30 images to record one tool's exception.
+RUN . $SC_BUILD/../_prereqs.sh && \
+    sc_strip_prefix_managed $SC_PREFIX && \
+    sc_prune_build_artifacts $SC_PREFIX{% if prune_dirs %} --dirs "{{ prune_dirs }}"{% endif %} && \
+    sc_remove_build_only{% if keep_pkgs %} --keep "{{ keep_pkgs }}"{% endif %}{% if drop_pkgs %} --drop "{{ drop_pkgs }}"{% endif %} && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+{% else %}
+# Left alone: another tool builds against this prefix and needs its headers,
+# static archives and -dev packages. The dependent prunes and strips after
+# copying it in, so nothing ships unpruned.
+{% endif %}
+
+# Run additional commands needed by tool build, if needed by tool
+{{ extra_commands }}
+
+# Generate list of installed programs, which sc_tools reinstalls to provide the
+# runtime dependencies of this tool.
+#
+# This runs LAST, after extra_commands, so that a tool which drops its own build
+# dependencies there ("apt-get remove" in docker-cmds) is not listed as needing
+# them at runtime. Moving it earlier silently reinstates every build dependency
+# in the final image.
+RUN apt list --installed | grep "\[installed\(.*\)\]" | sed 's/\/.*//' > $SC_PREFIX/apt.txt

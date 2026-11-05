@@ -1,0 +1,15 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2019 Stefan Wallentowitz
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+
+sc_bv -module "t" -var "ibv1_vlt"
+sc_bv -module "*" -var "ibv16_vlt"
+sc_bv -module "*" -var "obv*_vlt"
+
+sc_biguint -module "t" -var "ibu1_vlt"
+sc_biguint -module "*" -var "ibu16_vlt"
+sc_biguint -module "*" -var "obu*_vlt"

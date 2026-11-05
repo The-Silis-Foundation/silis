@@ -1,0 +1,26 @@
+//*************************************************************************
+//
+// Code available from: https://verilator.org
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of either the GNU Lesser General Public License Version 3
+// or the Perl Artistic License Version 2.0.
+// SPDX-FileCopyrightText: 2003-2026 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//=========================================================================
+//
+// DESCRIPTION: Verilator: Include in verilog files to hide verilator defines
+
+`ifndef _VERILATED_V_
+ `define _VERILATED_V_ 1
+
+ // Hide verilator pragmas from other tools
+ `ifndef VERILATOR
+  `define coverage_block_off
+ `endif
+
+ // Hide file descriptor difference - deprecated - for older versions
+ `define verilator_file_descriptor integer
+
+`endif  // guard

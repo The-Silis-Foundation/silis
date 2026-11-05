@@ -1,0 +1,211 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t (
+  input clk
+  );
+
+  class InnerPacket;
+     bit field;
+  endclass
+  class Packet;
+     InnerPacket inner_packet;
+  endclass
+
+  Packet p;
+  logic rst;
+  int  a;
+  int  b;
+  logic c;
+  int cyc = 0;
+
+  always @(posedge clk) begin
+    cyc <= cyc + 1;
+  end
+
+  function automatic void funca();
+  endfunction
+
+  function automatic void funcb();
+  endfunction
+
+  // NOTE this grammar hasn't been checked with other simulators,
+  // is here just to avoid uncovered code lines in the grammar.
+
+  covergroup cg_empty;
+  endgroup
+
+  covergroup cg_opt;
+    type_option.weight = 1;  // cg, cp, cross
+    type_option.goal = 99;  // cg, cp, cross
+    type_option.comment = "type_option_comment";  // cg, cp, cross
+    type_option.strobe = 0;  // cg
+    type_option.merge_instances = 1;  // cg
+    type_option.distribute_first = 1;  // cg
+    option.name = "the_name";  // cg
+    option.weight = 1;  // cg, cp, cross
+    option.goal = 98;  // cg, cp, cross
+    option.comment = "option_comment";  // cg, cp, cross
+    option.at_least = 20;  // cg, cp, cross
+    option.auto_bin_max = 10;  // cg, cp
+    option.cross_num_print_missing = 2;  // cg, cross
+    option.detect_overlap = 1;  // cg, cp
+    option.per_instance = 1;  // cg
+    option.get_inst_coverage = 1;  // cg
+  endgroup
+
+  covergroup cg_clockingevent() @(posedge clk);
+  endgroup
+  covergroup cg_withfunction() with function sample (a);
+  endgroup
+  covergroup cg_atat() @@ (begin funca or end funcb);
+  endgroup
+  covergroup cg_bracket;
+    {}
+  endgroup
+  covergroup cg_bracket2;
+    { option.name = "option"; }
+  endgroup
+  covergroup cg_cp;
+    coverpoint a;
+  endgroup
+  covergroup cg_cp_iff;
+    coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_iff;
+    id: coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_id1;
+    int id: coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_id2;
+    var int id: coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_id3;
+    var [3:0] id: coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_id4;
+    [3:0] id: coverpoint a iff (b);
+  endgroup
+  covergroup cg_id_cp_id5;
+    signed id: coverpoint a iff (b);
+  endgroup
+
+  covergroup cg_cross3;
+    cross a, b { option.comment = "cross"; option.weight = 12; option.per_instance = 1; }
+  endgroup
+  covergroup cg_cross4;
+    cross a, b {
+      function void crossfunc; endfunction
+      bins one = crossfunc(); bins two = crossfunc() matches 2;
+    }
+  endgroup
+  covergroup cg_binsoroptions_bk1;
+    { bins ba = {a}; }
+    { bins bar = {a} iff (!rst); }
+    { illegal_bins ila = {a}; }
+    { ignore_bins iga = {a}; }
+
+    { bins ba[] = {a}; }
+    { bins ba[2] = {a}; }
+    { ignore_bins iga[] = {a}; }
+    { illegal_bins ila[] = {a}; }
+
+    { bins ba = {a} with ( b ); }
+
+    { wildcard bins bwa = {a}; }
+    { wildcard bins bwaw = {a} with ( b ); }
+
+    { bins def = default; }
+    { bins defs = default sequence; }
+
+    { bins bts = ( 1, 2 ); }
+    { wildcard bins wbts = ( 1, 2 ); }
+    { bins bts2 = ( 2, 3 ), ( [5:6] ), ( [5 +/- 2] ), ( [ 5 +%- 20.0] ) ; }
+
+    { bins bts2 = ( 1,5 => 6,7 ) ; }
+    { bins bts2 = ( 3 [*5] ) ; }
+    { bins bts2 = ( 3 [*5:6] ) ; }
+    { bins bts2 = ( 3 [->5] ) ; }
+    { bins bts2 = ( 3 [->5:6] ) ; }
+    { bins bts2 = ( 3 [=5] ) ; }
+    { bins bts2 = ( 3 [=5:6] ) ; }
+  endgroup
+
+  // Additional bins syntax for grammar coverage (all generate COVERIGN warnings)
+  covergroup cg_bins_ext;
+    // Non-auto bins array without value: bins name[N] (no = {value})
+    { bins nonAuto[4]; }
+    // ignore_bins/illegal_bins with 'with' filter on range list
+    { ignore_bins ib_with = {1,2} with ( b ); }
+    { illegal_bins lib_with = {1,2} with ( b ); }
+    // ignore_bins/illegal_bins with 'with' filter on coverpoint ref
+    { ignore_bins ib_cp = a with ( b ); }
+    { illegal_bins lib_cp = a with ( b ); }
+    // wildcard ignore/illegal bins with 'with' filter
+    { wildcard ignore_bins wib_with = {1,2} with ( b ); }
+    { wildcard illegal_bins wlib_with = {1,2} with ( b ); }
+    // wildcard ignore/illegal bins with transition list
+    { wildcard ignore_bins wib_trans = ( 1 => 2 ); }
+    { wildcard illegal_bins wlib_trans = ( 1 => 2 ); }
+    // ignore/illegal bins = default sequence
+    { ignore_bins ib_def_seq = default sequence; }
+    { illegal_bins lib_def_seq = default sequence; }
+    // Explicit array size of transition bins
+    { bins trans_sized[2] = ( 1 => 2 ); }
+  endgroup
+
+  covergroup cg_cross_bins;
+    cross a, b {
+      bins bin_e = with (a);
+      bins bin_not_e = ! with (a);
+
+      bins bin_multiple_fields = binsof(a) && binsof(p.inner_packet.field);
+      bins bin_with_unsup = binsof(p.inner_packet.field) with (a);
+      bins bin_e_with = with (a) with (a);
+    }
+  endgroup
+
+  covergroup cgArgs(int cg_lim);
+  endgroup
+
+  class CgCls;
+    int m_x;
+    int m_y;
+    int m_z;
+    covergroup cov1 @m_z;
+      cp_x: coverpoint m_x;
+      cp_y: coverpoint m_y;
+`ifdef T_COVERGROUP_UNSUP_IGN
+      xy_cross: cross cp_x, cp_y;  // cross is cleaned up when the covergroup has an unsupported event
+`endif
+    endgroup
+`ifndef T_COVERGROUP_UNSUP_IGN
+    function new(); cov1 = new; endfunction
+`endif
+  endclass
+
+`ifndef T_COVERGROUP_UNSUP_IGN
+  class CgEmb;
+    covergroup extends cg_empty;
+    endgroup
+  endclass
+`endif
+
+  initial begin
+    automatic cg_empty cov1 = new;
+`ifndef T_COVERGROUP_UNSUP_IGN
+    automatic cgArgs cov2 = new(2);
+`endif
+  end
+
+  always @(posedge clk) begin
+    if (cyc == 10) begin
+      $write("*-* All Finished *-*\n");
+      $finish;
+    end
+  end
+endmodule

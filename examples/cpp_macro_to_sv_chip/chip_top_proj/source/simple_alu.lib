@@ -1,0 +1,65 @@
+/* Characterized Liberty Model: simple_alu [tt_025C_1v80] */
+library("simple_alu_tt_025C_1v80_lib") {
+  technology("cmos");
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  resistance_unit : "1kohm";
+  capacitive_load_unit(1, pF);
+  leakage_power_unit : "1nW";
+  nom_process : 1.0;
+  nom_temperature : 25;
+  nom_voltage : 1.80;
+
+  input_threshold_pct_fall       :  50.0 ;
+  output_threshold_pct_fall      :  50.0 ;
+  input_threshold_pct_rise       :  50.0 ;
+  output_threshold_pct_rise      :  50.0 ;
+  slew_lower_threshold_pct_fall  :  10.0 ;
+  slew_upper_threshold_pct_fall  :  90.0 ;
+  slew_lower_threshold_pct_rise  :  10.0 ;
+  slew_upper_threshold_pct_rise  :  90.0 ;
+
+  cell("simple_alu") {
+    area : 1000.0;
+    dont_touch : true;
+    dont_use : false;
+    pin("VDD") {
+      direction : inout;
+      capacitance : 0.005;
+    }
+    pin("VSS") {
+      direction : inout;
+      capacitance : 0.005;
+    }
+    pin("a_in") {
+      direction : input;
+      capacitance : 0.005;
+    }
+    pin("b_in") {
+      direction : input;
+      capacitance : 0.005;
+    }
+    pin("clk") {
+      direction : input;
+      capacitance : 0.005;
+    }
+    pin("flag_zero") {
+      direction : output;
+      capacitance : 0.005;
+    }
+    pin("op_sel") {
+      direction : input;
+      capacitance : 0.005;
+    }
+    pin("res_out") {
+      direction : output;
+      capacitance : 0.005;
+    }
+    pin("rst_n") {
+      direction : input;
+      capacitance : 0.005;
+    }
+  }
+}

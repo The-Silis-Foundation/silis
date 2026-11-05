@@ -1,0 +1,927 @@
+import logging
+import pickle
+import sys
+import threading
+import warnings
+import weakref
+
+import os.path
+
+from typing import List, Dict, Tuple, Optional, Callable, Any, Literal, TYPE_CHECKING
+
+from logging.handlers import QueueListener
+
+from siliconcompiler import NodeStatus
+from siliconcompiler import utils
+from siliconcompiler.flowgraph import RuntimeFlowgraph
+
+from siliconcompiler.schema import Journal
+from siliconcompiler.schema_support.record import RecordTime
+
+from siliconcompiler.utils.logging import SCBlankLoggerFormatter, \
+    SCBlankColorlessLoggerFormatter, SCTeeLoggerHandler
+from siliconcompiler.utils.multiprocessing import MPManager, get_process_context, forking
+from siliconcompiler.scheduler import SCRuntimeError
+from siliconcompiler.scheduler.listener import RunListener
+
+if TYPE_CHECKING:
+    import psutil
+
+    from siliconcompiler import Flowgraph
+    from siliconcompiler.project import Project
+    from siliconcompiler.scheduler import SchedulerNode
+    from siliconcompiler.schema_support.record import RecordSchema
+
+
+class TaskScheduler:
+    """A class for managing the execution of individual tasks in a flowgraph.
+
+    This class is responsible for the fine-grained scheduling of tasks,
+    handling multiprocessing, resource allocation (cores/threads), and
+    dependency checking. It operates on a set of pending tasks defined by the
+    main Scheduler and executes them in a loop until the flow is complete.
+    """
+
+    # How long __halt_running_nodes() waits for a node to go away, first after
+    # terminate() and then after kill(). A node handles the terminate itself --
+    # it tears down the tool's process tree and records what it got to -- so the
+    # wait has to cover that work, not just the signal.
+    __HALT_TIMEOUT = 10.0
+
+    # Every scheduler built in this process, so a caller that does not hold one
+    # -- a server shutting down while a job is in flight -- can still end the
+    # node processes it started. Weak, so a finished run is not kept alive by
+    # being listed here.
+    __instances = weakref.WeakSet()
+    __instances_lock = threading.Lock()
+
+    @staticmethod
+    def register_callback(hook: Literal["pre_run", "pre_node", "post_node", "post_run"],
+                          func: Callable[..., None]) -> None:
+        """Registers a callback function to be executed at a specific hook point.
+
+        Valid hooks are 'pre_run', 'pre_node', 'post_node', and 'post_run'. Each
+        hook holds one function, so registering another replaces it.
+
+        Deprecated: use :meth:`~siliconcompiler.scheduler.Scheduler.add_listener`,
+        which takes any number of listeners.
+
+        Args:
+            hook (str): The name of the hook to register the callback for.
+            func (function): The function to be called. It should accept the
+                project object and, for node hooks, the step and index as arguments.
+
+        Raises:
+            ValueError: If the specified hook is not valid.
+        """
+        if hook not in ('pre_run', 'pre_node', 'post_node', 'post_run'):
+            raise ValueError(f"{hook} is not a valid callback")
+        warnings.warn("TaskScheduler.register_callback is deprecated, "
+                      "use Scheduler.add_listener with a RunListener",
+                      DeprecationWarning, stacklevel=2)
+        MPManager.get_transient_settings().set('TaskScheduler', hook, func)
+
+    def __init__(self, project: "Project", tasks: Dict[Tuple[str, str], "SchedulerNode"],
+                 listener: Optional[RunListener] = None):
+        """Initializes the TaskScheduler.
+
+        Args:
+            project (Project): The project object containing the configuration.
+            tasks (dict): A dictionary of SchedulerNode objects keyed by
+                (step, index) tuples.
+            listener (RunListener): What to tell as each node starts and
+                finishes.
+        """
+        self.__project = project
+        self.__logger = self.__project.logger
+        self.__logger_console_handler = self.__project._logger_console
+        self.__schema = self.__project
+        self.__flow: "Flowgraph" = self.__schema.get_flow()
+        self.__record: "RecordSchema" = self.__schema.get("record", field="schema")
+        self.__listener = listener or RunListener()
+
+        self.__max_cores = utils.get_cores()
+        self.__max_threads = utils.get_cores()
+        self.__max_parallel_run = self.__project.option.scheduler.get_maxnodes()
+        if not self.__max_parallel_run:
+            self.__max_parallel_run = utils.get_cores()
+        # clip max parallel jobs to 1 <= jobs <= max_cores
+        self.__max_parallel_run = max(1, min(self.__max_parallel_run, self.__max_cores))
+
+        self.__runtime_flow = RuntimeFlowgraph.from_project(self.__project)
+
+        # Queue for collecting log records from node worker processes.
+        #
+        # Under the ``fork`` start method (Linux) a worker inherits the parent's
+        # live SyncManager socket connections. A manager-backed queue would then
+        # have the worker's QueueHandler.put() and the parent's
+        # QueueListener.get() drive the *same* inherited connection from two
+        # processes at once, corrupting the manager's framed protocol and
+        # deadlocking every manager proxy (including the dashboard Board and its
+        # lock) on a recv that never returns. A plain pipe-backed queue is
+        # fork-safe (and faster), so use it on the fork path. Spawn cannot
+        # inherit fds and needs the picklable manager queue; it re-connects with
+        # a fresh connection per worker, so it is unaffected.
+        if get_process_context().get_start_method() == "fork":
+            self.__log_queue = get_process_context().Queue()
+        else:
+            self.__log_queue = MPManager.get_manager().Queue()
+
+        self.__nodes: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.__dwellTime: float = 0.1
+
+        # Guards __halt_running_nodes(): halt_all() can arrive on another thread
+        # while this run's own cleanup is ending the same processes.
+        self.__halt_lock = threading.Lock()
+
+        # Set once this run has been told to stop. Read by the run loop, which
+        # runs on this thread while cancel() arrives on another, so an Event
+        # rather than a plain bool.
+        self.__canceled = threading.Event()
+
+        # Serializes setting that flag against starting a node. Without it a
+        # cancel can land between the check and proc.start(), and then halt's
+        # scan for live processes runs just before the process it was meant to
+        # end exists -- leaving a node running, and the loop about to join it.
+        # Reentrant because a listener's node_started runs inside a launch and
+        # is entitled to cancel the run it is being called from.
+        self.__launch_lock = threading.RLock()
+
+        self.__create_nodes(tasks)
+
+        with TaskScheduler.__instances_lock:
+            TaskScheduler.__instances.add(self)
+
+    def __create_nodes(self, tasks: Dict[Tuple[str, str], "SchedulerNode"]) -> None:
+        """
+        Private helper to prepare all pending tasks for execution.
+
+        This method iterates through the tasks identified by the main Scheduler,
+        creates a multiprocessing.Process for each one, and sets up pipes for
+        inter-process communication (primarily for logging and package resolution).
+
+        Args:
+            tasks (dict): A dictionary of SchedulerNode objects.
+        """
+        runtime = RuntimeFlowgraph(
+            self.__flow,
+            from_steps=set([step for step, _ in self.__flow.get_entry_nodes()]),
+            prune_nodes=self.__project.option.get_prune())
+
+        for step, index in self.__runtime_flow.get_nodes():
+            if self.__record.get('status', step=step, index=index) != NodeStatus.PENDING:
+                continue
+
+            task = {
+                "name": f"{step}/{index}",
+                "inputs": runtime.get_node_inputs(step, index, record=self.__record),
+                "proc": None,
+                "parent_pipe": None,
+                "threads": None,
+                "running": False,
+                "manifest": None,
+                "breakpoint": False,
+                "node": tasks[(step, index)]
+            }
+
+            with tasks[(step, index)].runtime():
+                threads = tasks[(step, index)].threads
+                task["manifest"] = tasks[(step, index)].get_manifest()
+                task["breakpoint"] = tasks[(step, index)].task.has_breakpoint()
+            if not threads:
+                threads = self.__max_threads
+            task["threads"] = max(1, min(threads, self.__max_threads))
+
+            # run_process(), not run(): the interrupt handling a node needs in
+            # order to be cancelable belongs to having a process, and run() is
+            # overridden by every scheduler that dispatches elsewhere.
+            task["proc"] = get_process_context().Process(target=task["node"].run_process)
+            self.__nodes[(step, index)] = task
+
+        # Create ordered list of nodes
+        self.__ordered_nodes: List[Tuple[str, str]] = []
+        for levelnodes in self.__runtime_flow.get_execution_order():
+            for node in levelnodes:
+                if node in self.__nodes:
+                    self.__ordered_nodes.append(node)
+
+    def run(self, job_log_handler: logging.Handler) -> None:
+        """
+        The main entry point for the task scheduling loop.
+
+        This method sets up a listener to handle logs from child processes,
+        enters the main execution loop, and handles cleanup.
+
+        Args:
+            job_log_handler (logging.FileHandler): The handler for the main job log file.
+        """
+        # Imported here rather than at module scope: multiprocessing and its
+        # manager machinery are among the costlier imports in the tree, and
+        # nothing needs them until a run actually starts.
+        import multiprocessing
+
+        from multiprocessing.managers import RemoteError
+
+        # Call this in case this was invoked without __main__
+        multiprocessing.freeze_support()
+
+        # Handle logs across threads. The tee handler forwards each record
+        # to any additional handler currently attached to the project's
+        # logger (e.g. the dashboard's log buffer), looked up fresh on every
+        # emit so sinks added or removed mid-run take effect without
+        # listener reconfiguration. It skips the terminal handler since the
+        # listener already dispatches to it directly.
+        extra_console_tee = SCTeeLoggerHandler(self.__logger,
+                                               skip=self.__logger_console_handler)
+        log_listener = QueueListener(self.__log_queue, self.__logger_console_handler,
+                                     extra_console_tee, job_log_handler)
+        console_format = self.__logger_console_handler.formatter
+        file_formatter = job_log_handler.formatter
+        self.__logger_console_handler.setFormatter(SCBlankLoggerFormatter())
+        job_log_handler.setFormatter(SCBlankColorlessLoggerFormatter())
+        self.__logger.removeHandler(job_log_handler)
+
+        log_listener.start()
+
+        try:
+            self.__run_loop()
+        except KeyboardInterrupt:
+            # Defer cleanup to the finally block so the listener is only
+            # stopped once. Calling stop() twice raises AttributeError when
+            # the listener thread has already been joined, and during
+            # shutdown the manager-backed queue may have already gone away.
+            sys.exit(0)
+        finally:
+            # Before the listener goes away: a node still running would keep
+            # writing into __log_queue after the steps below remove its reader,
+            # block once the pipe filled, and -- not being a daemon -- be joined
+            # without a timeout at interpreter exit. Ending nodes while the
+            # listener is still draining avoids that.
+            self.__halt_running_nodes()
+
+            # Cleanup logger. Tolerate the listener already being torn down
+            # or its backing queue being unreachable (the SyncManager may
+            # be gone by now during an interrupted shutdown).
+            try:
+                log_listener.stop()
+            except (AttributeError, OSError, EOFError, BrokenPipeError,
+                    ConnectionResetError, RemoteError):
+                # Mirror the shutdown-error set caught by MPQueueHandler.enqueue:
+                # the QueueListener's sentinel put may fail through any of these
+                # if the SyncManager backing __log_queue has already gone away.
+                pass
+
+            # Release the pipe-backed queue's feeder thread. stop() above ended
+            # the only reader, so records a node process enqueued after the
+            # listener's sentinel stay in the feeder's buffer with nowhere to go:
+            # the feeder blocks writing to a full pipe, and Queue's atexit
+            # finalizer joins that thread with no timeout, so the interpreter can
+            # never exit. Nothing observable is lost -- those records had no
+            # reader left -- but the process does have to be able to exit.
+            # Manager-backed queues are proxies with neither method, hence getattr.
+            if getattr(self.__log_queue, "cancel_join_thread", None):
+                try:
+                    self.__log_queue.cancel_join_thread()
+                    self.__log_queue.close()
+                except (OSError, EOFError, BrokenPipeError, ConnectionResetError):
+                    pass
+
+            self.__logger_console_handler.setFormatter(console_format)
+            job_log_handler.setFormatter(file_formatter)
+            self.__logger.addHandler(job_log_handler)
+
+    def __run_loop(self) -> None:
+        """
+        The core execution loop of the scheduler.
+
+        This loop continues as long as there are nodes running or waiting to
+        run. In each iteration, it processes completed nodes and launches new
+        ones whose dependencies have been met.
+        """
+        while len(self.get_nodes_waiting_to_run()) > 0 or len(self.get_running_nodes()) > 0:
+            if self.__canceled.is_set():
+                # Checked before anything is launched: ending the running nodes
+                # is only half of a cancel, and without this the loop would
+                # start the next ready ones straight over the top of it.
+                #
+                # cancel() has already ended those processes -- which is what
+                # released the join at the bottom of this loop -- so the work
+                # left here is to reap them: __process_completed_nodes() records
+                # each one's status and reports it finished before the loop stops.
+                self.__halt_running_nodes()
+                self.__process_completed_nodes()
+                break
+
+            self.__process_completed_nodes()
+            self.__launch_nodes()
+
+            running_nodes = self.get_running_nodes()
+
+            # Check for situation where we have stuff left to run but don't
+            # have any nodes running. This can happen when the flow generated an error
+            if len(self.get_nodes_waiting_to_run()) > 0 and len(running_nodes) == 0:
+                # Stop execution loop and report error
+                break
+
+            if len(running_nodes) == 1:
+                # if there is only one node running, just join the thread
+                self.__nodes[running_nodes[0]]["proc"].join()
+            elif len(running_nodes) > 1:
+                # if there are more than 1, join the first with a timeout
+                self.__nodes[running_nodes[0]]["proc"].join(timeout=self.__dwellTime)
+
+    @staticmethod
+    def halt_all() -> int:
+        """Ends the node processes of every run in flight in this process.
+
+        For a caller that has no scheduler to ask -- a server being shut down
+        while a job thread is still inside Project.run(). Node processes are not
+        daemons, so anything left running would be joined at interpreter exit
+        and hold the process open for as long as the task takes.
+
+        Returns:
+            int: How many runs had node processes to end.
+        """
+        with TaskScheduler.__instances_lock:
+            schedulers = list(TaskScheduler.__instances)
+
+        return sum(1 for scheduler in schedulers if scheduler.halt())
+
+    def halt(self) -> bool:
+        """Ends any node process this run still has running.
+
+        Returns:
+            bool: True if anything was still running.
+        """
+        return self.__halt_running_nodes()
+
+    def cancel(self) -> bool:
+        """Stops this run: nothing further is launched, and what is running ends.
+
+        This is the pair :meth:`halt` was missing. Halting ends the node
+        processes, but the run loop it left behind simply launches the next
+        ready nodes; the flag is what tells the loop the run is over. Setting it
+        first means the loop, woken by the very processes it was joining on
+        going away, sees a canceled run rather than an idle machine to fill.
+
+        Nodes that were running are recorded as errors -- they were killed
+        partway and did not produce their outputs -- and nodes that never
+        started stay pending.
+
+        Reached through :attr:`Project._scheduler`, which is what a caller
+        holding the project but not the run it started has to work with.
+
+        Returns:
+            bool: True if a node process was still running.
+        """
+        with self.__launch_lock:
+            self.__canceled.set()
+
+        # Outside the lock: whoever holds it is mid-launch, and the process they
+        # are starting is one this halt has to see. Setting the flag first is
+        # what guarantees it does -- a launch either completes before the flag
+        # is set, and is found running here, or sees the flag and never starts.
+        return self.__halt_running_nodes()
+
+    def is_canceled(self) -> bool:
+        """Reports whether this run has been told to stop.
+
+        Returns:
+            bool: True if the run was canceled.
+        """
+        return self.__canceled.is_set()
+
+    def __halt_running_nodes(self) -> bool:
+        """Ends any node process still running, so teardown cannot block on one.
+
+        Only an interrupted run reaches here with anything alive: normal
+        completion leaves __run_loop() having joined every process, so this is a
+        no-op and the run's results are untouched.
+
+        A node is asked to end itself first, since only the node can do it
+        tidily -- stop its container rather than just the client talking to it,
+        record what it got to. What that leaves behind is then taken care of
+        here, because asking is not something this can depend on: the fallback
+        for a node that does not go is SIGKILL, which no node can handle, and
+        a node's tool is not its own child to reap once it has been killed.
+
+        The joins are bounded on purpose. An unbounded join would trade the
+        deadlock this avoids for another one, against a node that ignores
+        SIGTERM.
+
+        Returns:
+            bool: True if anything was still running.
+        """
+        # Serialized: two threads calling terminate()/join() on one process race
+        # on waitpid, and one of them loses with ChildProcessError. Whoever
+        # arrives second finds nothing running and returns.
+        with self.__halt_lock:
+            running = [info for info in self.__nodes.values()
+                       if info.get("proc") is not None and info["proc"].is_alive()]
+            if not running:
+                return False
+
+            # Each node's own half first. A node that dispatched its work
+            # elsewhere is not holding it in the process about to be killed --
+            # it is only waiting on it -- and killing the waiter is exactly what
+            # puts that work out of reach.
+            for info in running:
+                node = info.get("node")
+                if node is None:
+                    continue
+                try:
+                    node.cancel()
+                except Exception as e:  # noqa: BLE001
+                    # cancel() is overridden per scheduler and can shell out to
+                    # a cluster controller. Whatever it does wrong, the
+                    # processes below still have to be ended: leaving them
+                    # running is the deadlock this method exists to prevent.
+                    self.__logger.warning(f'Failed to cancel {info["name"]}: {e}')
+
+            running = [info["proc"] for info in running]
+
+            # Taken while the nodes are still alive to be asked. A node's tool
+            # is its child, not this process's, so once the node is gone the
+            # tool is reparented and nothing ties it to this run any more --
+            # there would be nothing left to look it up by.
+            leftovers = []
+            for proc in running:
+                leftovers.extend(TaskScheduler.__descendants_of(proc))
+
+            for proc in running:
+                proc.terminate()
+
+            for proc in running:
+                proc.join(timeout=TaskScheduler.__HALT_TIMEOUT)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=TaskScheduler.__HALT_TIMEOUT)
+
+            # Whatever the nodes did not take with them. A node that handled the
+            # terminate has already ended its tool, and these calls find nothing;
+            # one that was killed, ignored the signal, or never got the chance --
+            # a platform where the signal does not arrive as an interrupt at all
+            # -- leaves its tool holding the cores this halt was called to give
+            # back.
+            TaskScheduler.__end_processes(leftovers)
+
+            return True
+
+    @staticmethod
+    def __descendants_of(proc) -> List["psutil.Process"]:
+        """Everything a node process has started, at the moment of asking.
+
+        Args:
+            proc: The node's process.
+
+        Returns:
+            list of psutil.Process: Its descendants, empty if they cannot be
+                looked up. psutil identifies each by pid *and* creation time, so
+                a pid reused after this snapshot is not mistaken for the process
+                that held it.
+        """
+        # Imported here rather than at module scope: psutil costs ~10 ms to
+        # import and is only needed once a run is actually executing.
+        import psutil
+
+        try:
+            return psutil.Process(proc.pid).children(recursive=True)
+        except (psutil.Error, AttributeError, TypeError, ValueError, OSError):
+            # Gone already, or never a real process to begin with (a stand-in in
+            # a test). Either way there is nothing here to end.
+            return []
+
+    @staticmethod
+    def __end_processes(procs: List["psutil.Process"]) -> None:
+        """Ends processes left over from a node, politely and then not.
+
+        Args:
+            procs (list of psutil.Process): The processes to end. Ones that have
+                already exited are skipped.
+        """
+        import psutil
+
+        for proc in procs:
+            try:
+                proc.terminate()
+            except psutil.Error:
+                pass
+
+        _, alive = psutil.wait_procs(procs, timeout=TaskScheduler.__HALT_TIMEOUT)
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.Error:
+                pass
+
+    def get_nodes(self) -> List[Tuple[str, str]]:
+        """Gets an ordered list of all nodes managed by this scheduler.
+
+        Returns:
+            list: A list of (step, index) tuples for all nodes.
+        """
+        return self.__ordered_nodes
+
+    def get_running_nodes(self) -> List[Tuple[str, str]]:
+        """Gets an ordered list of all nodes that are currently running.
+
+        Returns:
+            list: A list of (step, index) tuples for running nodes.
+        """
+        nodes = []
+        for node in self.get_nodes():
+            info = self.__nodes[node]
+            if info["running"]:
+                nodes.append(node)
+        return nodes
+
+    def get_nodes_waiting_to_run(self) -> List[Tuple[str, str]]:
+        """Gets an ordered list of all nodes that are pending execution.
+
+        Returns:
+            list: A list of (step, index) tuples for pending nodes.
+        """
+        nodes = []
+        for node in self.get_nodes():
+            info = self.__nodes[node]
+            if not info["running"] and info["proc"]:
+                nodes.append(node)
+        return nodes
+
+    def __process_completed_nodes(self) -> bool:
+        """
+        Private helper to check for and process completed nodes.
+
+        This method iterates through running nodes, checks if their process has
+        terminated, and if so, merges their results (manifest and package cache)
+        back into the main project object. It updates the node's status based on
+        the process exit code.
+
+        Returns:
+            bool: True if any node's status changed, False otherwise.
+        """
+        changed = False
+        for node in self.get_running_nodes():
+            info = self.__nodes[node]
+
+            if not info["proc"].is_alive():
+                manifest = info["manifest"]
+
+                self.__logger.debug(f'{info["name"]} is complete merging: {manifest}')
+
+                # A node ended by a signal may have died part way through writing
+                # its manifest; on Windows, terminate() always ends a node that way.
+                if info["proc"].exitcode >= 0 and os.path.exists(manifest):
+                    Journal.replay_file(self.__schema, manifest)
+
+                # The child either sent the package cache before exiting or
+                # it never will. poll(0) avoids blocking the scheduler loop
+                # for a full second when a child died without writing.
+                cache = None
+                if info["parent_pipe"] and info["parent_pipe"].poll(0):
+                    try:
+                        cache = info["parent_pipe"].recv()
+                    except (EOFError, OSError, pickle.UnpicklingError) as e:
+                        # A child that died mid-write leaves a truncated pickle.
+                        # Losing the cache only costs the next node a re-resolve,
+                        # so say so and carry on rather than failing the run.
+                        self.__logger.debug(
+                            f'{info["name"]} did not send a usable package cache: {e}')
+
+                # Remove pipe
+                info["parent_pipe"] = None
+                info["node"].set_queue(None, None)
+
+                step, index = node
+                # Treat any nonzero exit code as an error. Children killed by
+                # a signal (e.g. SIGKILL, SIGTERM) report a negative exitcode
+                # and almost certainly did not get a chance to update the
+                # record, so they must be classified as ERROR rather than
+                # consulting the (stale) status field.
+                if info["proc"].exitcode != 0:
+                    status = NodeStatus.ERROR
+                else:
+                    status = self.__record.get('status', step=step, index=index)
+                    if not status or status == NodeStatus.PENDING:
+                        status = NodeStatus.ERROR
+
+                self.__record.set('status', status, step=step, index=index)
+
+                info["running"] = False
+                info["proc"] = None
+
+                changed = True
+
+                self.__listener.node_finished(self.__project, step, index)
+
+                if cache is not None:
+                    # Merged last, and outside the handler above: what the child sent
+                    # is its business, but a failure to merge it is this scheduler's
+                    # bug and must not hide behind a read error. By this point the
+                    # node has released its pipe and queue and its status is
+                    # recorded, so raising here cannot leave it marked running.
+                    #
+                    # Take the paths the node resolved, but not its failures: a fetch
+                    # that failed for one node may still succeed for the next, so
+                    # each node gets its own retry budget for now.
+                    MPManager.get_path_cache().seed(cache, include_failures=False)
+
+        return changed
+
+    def __allow_start(self, node: Tuple[str, str]) -> bool:
+        """
+        Private helper to check if a node is allowed to start based on resources.
+
+        This method checks if launching a new node would exceed the configured
+        maximum number of parallel jobs or the total available CPU cores.
+
+        Args:
+            node (tuple): The (step, index) of the node to check.
+
+        Returns:
+            bool: True if the node can be launched, False otherwise.
+        """
+        info = self.__nodes[node]
+
+        running_nodes = self.get_running_nodes()
+
+        if len(running_nodes) >= self.__max_parallel_run:
+            # exceeding machine resources
+            return False
+
+        current_threads = sum([self.__nodes[run_node]["threads"] for run_node in running_nodes])
+
+        if info["threads"] + current_threads > self.__max_cores:
+            # delay until there are enough core available
+            return False
+
+        # allow
+        return True
+
+    def __start_node(self, node: Tuple[str, str]) -> None:
+        """
+        Private helper to start a single node's process.
+
+        Marks the node as running, launches the underlying process, records
+        the start time, and reports the node started.
+
+        Args:
+            node (tuple): The (step, index) of the node to start.
+        """
+        info = self.__nodes[node]
+        step, index = node
+
+        self.__logger.debug(f'Launching {info["name"]}')
+
+        self.__record.set('status', NodeStatus.RUNNING, step=step, index=index)
+
+        _CallbackListener.pre_node(self.__project, step, index)
+
+        # Start the process
+        info["running"] = True
+        info["parent_pipe"], pipe = get_process_context().Pipe()
+        info["node"].set_queue(pipe, self.__log_queue)
+        with forking():
+            info["proc"].start()
+
+        # Only once there is a process: a launch that fails is not a node that
+        # started, and nothing would ever report it finished. Recorded here as
+        # well as in the node, which only reports its own once its manifest is
+        # replayed: until then the record is the only place a listener can see
+        # how long the node has been running.
+        self.__record.record_time(step, index, RecordTime.START)
+        self.__listener.node_started(self.__project, step, index)
+
+    def __launch_nodes(self) -> bool:
+        """
+        Private helper to launch new nodes whose dependencies are met.
+
+        This method iterates through pending nodes, checks if all their input
+        nodes have completed successfully, and if system resources are available.
+        If all conditions are met, it starts the node's process.
+
+        Breakpoint handling: a node with a breakpoint must execute in complete
+        isolation. It takes priority over ordinary nodes, may only start once
+        no other node is running, and nothing else may start until it finishes.
+        When several breakpoint nodes are ready at once they are launched one at
+        a time in flowgraph execution order.
+
+        Returns:
+            bool: True if any new node was launched, False otherwise.
+        """
+        if self.__canceled.is_set():
+            # The run loop breaks on the same flag, but only at the top of the
+            # next pass: a cancel arriving part way through one -- from another
+            # thread while nodes were being reaped, or from a listener's
+            # node_finished -- would otherwise get one full round of launches in
+            # first. This is the cheap check; __try_start_node() is the one that
+            # cannot be raced.
+            return False
+
+        changed = False
+
+        running_nodes = self.get_running_nodes()
+
+        # If a breakpoint node is currently running, it must run alone: do not
+        # launch anything (breakpoint or otherwise) until it completes.
+        if any(self.__nodes[node]["breakpoint"] for node in running_nodes):
+            return changed
+
+        # First evaluate every waiting node's dependencies. This determines
+        # which nodes are ready to launch and, as a side effect, prunes nodes
+        # whose dependencies failed (clearing their proc so they are no longer
+        # considered waiting). This evaluation must happen regardless of any
+        # breakpoint gating below.
+        ready_nodes: List[Tuple[str, str]] = []
+        for node in self.get_nodes_waiting_to_run():
+            info = self.__nodes[node]
+
+            ready = True
+            inputs = []
+            able_to_run = True
+            excused_failure = False
+            unexcused_failure = False
+            for in_step, in_index in info["inputs"]:
+                in_status = self.__record.get('status', step=in_step, index=in_index)
+                inputs.append(in_status)
+
+                if not NodeStatus.is_done(in_status):
+                    ready = False
+                if not NodeStatus.is_error(in_status):
+                    continue
+
+                if self.__project.option.get_continue(step=in_step, index=in_index):
+                    # The failure is excused by the node it happened on, so this
+                    # node launches and runs on whatever else arrived. The excuse
+                    # covers only that node: a consequent failure here needs its
+                    # own, or the flow stops at this node instead.
+                    #
+                    # Excusing *every* input leaves nothing to run on. That is
+                    # not gated here: the node launches, finds its fan-in empty
+                    # and halts on "No inputs selected", which both gives the
+                    # reason and -- unlike declining to launch it -- leaves a
+                    # terminal status its own consumers can act on. Builtins
+                    # included, which is why this is asked before is_builtin.
+                    excused_failure = True
+                    continue
+
+                unexcused_failure = True
+
+                if info["node"].is_builtin:
+                    # A builtin resolves its fan-in at runtime and is entitled
+                    # to pick among the inputs that did arrive.
+                    continue
+
+                # Fail if any dependency failed for non-builtin task
+                able_to_run = False
+
+            # Fail if no dependency successfully finished for builtin task --
+            # unless *every* failure was excused, in which case the node is
+            # entitled to launch and report that it has nothing left to work
+            # with rather than being left pending for its own consumers to wait
+            # on. One unexcused failure among them and it is pruned as before,
+            # which is also what a non-builtin does with the same fan-in.
+            all_failures_excused = excused_failure and not unexcused_failure
+            if inputs:
+                any_success = any([status == NodeStatus.SUCCESS for status in inputs])
+            else:
+                any_success = True
+            if ready and info["node"].is_builtin and not any_success \
+                    and not all_failures_excused:
+                able_to_run = False
+
+            if not able_to_run:
+                info["proc"] = None
+                continue
+
+            if ready:
+                ready_nodes.append(node)
+
+        if not ready_nodes:
+            return changed
+
+        # A ready breakpoint node takes priority. While one is waiting we must
+        # not start any other work: currently running nodes are allowed to
+        # drain to zero, after which the single highest-priority (earliest in
+        # execution order) breakpoint runs by itself.
+        breakpoint_nodes = [node for node in ready_nodes if self.__nodes[node]["breakpoint"]]
+        if breakpoint_nodes:
+            if running_nodes:
+                # Wait for the machine to go idle before starting the
+                # breakpoint; do not co-schedule anything alongside it.
+                return changed
+            # ready_nodes preserves execution order, so breakpoint_nodes[0] is
+            # the earliest pending breakpoint.
+            changed |= self.__try_start_node(breakpoint_nodes[0])
+            return changed
+
+        # Normal scheduling: launch as many ready nodes as resources allow.
+        for node in ready_nodes:
+            changed |= self.__try_start_node(node)
+
+        return changed
+
+    def __try_start_node(self, node: Tuple[str, str]) -> bool:
+        """
+        Private helper to start a node unless the run has been canceled.
+
+        The cancel check and the launch are one step on purpose: apart, a cancel
+        landing between them starts a node that nothing is left to stop.
+
+        Args:
+            node (tuple): The (step, index) of the node to start.
+
+        Returns:
+            bool: True if the node was started.
+        """
+        with self.__launch_lock:
+            if self.__canceled.is_set():
+                return False
+            if not self.__allow_start(node):
+                return False
+            self.__start_node(node)
+            return True
+
+    def check(self) -> None:
+        """
+        Checks if the flow completed successfully.
+
+        This method verifies that all nodes designated as exit points in the
+        flowgraph have been successfully completed.
+
+        Raises:
+            SCRuntimeError: If the run was canceled, or if any final steps in
+                the flow were not reached.
+        """
+        if self.__canceled.is_set():
+            # Said plainly rather than through the unreached exit steps below:
+            # those are the symptom, and reporting a canceled run as a broken
+            # flow sends the reader looking for a failure that never happened.
+            raise SCRuntimeError("run was canceled before completing")
+
+        exit_steps = set([step for step, _ in self.__runtime_flow.get_exit_nodes()])
+        completed_steps = set([step for step, _ in
+                               self.__runtime_flow.get_completed_nodes(record=self.__record)])
+
+        unreached = set(exit_steps).difference(completed_steps)
+
+        errors = set([f"{step}/{index}" for step, index in self.__runtime_flow.get_nodes()
+                      if NodeStatus.is_error(self.__record.get("status",
+                                                               step=step, index=index))])
+
+        if unreached:
+            if errors:
+                raise SCRuntimeError(
+                    f'Could not run final steps ({", ".join(sorted(unreached))}) '
+                    f'due to errors in: {", ".join(sorted(errors))}')
+            else:
+                raise SCRuntimeError(f'Could not run final steps: {", ".join(sorted(unreached))}')
+
+        if errors:
+            # The flow reached its exit nodes over a dead branch, which
+            # [option,continue] permits but must not hide: a run this quiet
+            # would otherwise be indistinguishable from one where nothing failed.
+            self.__logger.warning(f'Run completed with errors in: {", ".join(sorted(errors))}')
+
+
+class _CallbackListener(RunListener):
+    """Calls the functions :meth:`TaskScheduler.register_callback` set, as it
+    always has: each is looked up as its event happens, and post_run follows a
+    scheduling loop that finished, whether or not the flow then reached its end.
+    """
+
+    @staticmethod
+    def __hook(name: str) -> Optional[Callable[..., None]]:
+        return MPManager.get_transient_settings().get('TaskScheduler', name)
+
+    @staticmethod
+    def pre_node(project: "Project", step: str, index: str) -> None:
+        """Calls pre_node where it always ran: before the node's process is
+        started, so what it changes in the project reaches the node. No listener
+        event comes that early, so the scheduler calls this itself.
+        """
+        hook = _CallbackListener.__hook("pre_node")
+        if not hook:
+            return
+        try:
+            hook(project, step, index)
+        except Exception as e:
+            # Kept as safe as a listener: a callback cannot break the run.
+            project.logger.error(f"pre_node callback failed: {e}")
+
+    def flow_started(self, project: "Project") -> None:
+        hook = _CallbackListener.__hook("pre_run")
+        if hook:
+            hook(project)
+
+    def node_finished(self, project: "Project", step: str, index: str) -> None:
+        hook = _CallbackListener.__hook("post_node")
+        if hook:
+            hook(project, step, index)
+
+    def flow_finished(self, project: "Project", error: Optional[BaseException]) -> None:
+        hook = _CallbackListener.__hook("post_run")
+        # An unfinished flow ends with SCRuntimeError, after the loop; anything
+        # else stopped the loop itself.
+        if hook and (error is None or isinstance(error, SCRuntimeError)):
+            hook(project)

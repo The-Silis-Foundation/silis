@@ -1,0 +1,58 @@
+// -*- mode: C++; c-file-style: "cc-mode" -*-
+//*************************************************************************
+// DESCRIPTION: Verilator: Block code ordering
+//
+// Code available from: https://verilator.org
+//
+//*************************************************************************
+//
+// This program is free software; you can redistribute it and/or modify it
+// under the terms of either the GNU Lesser General Public License Version 3
+// or the Perl Artistic License Version 2.0.
+// SPDX-FileCopyrightText: 2003-2026 Wilson Snyder
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//*************************************************************************
+
+#ifndef VERILATOR_V3ORDERINTERNAL_H_
+#define VERILATOR_V3ORDERINTERNAL_H_
+
+#include "config_build.h"
+#include "verilatedos.h"
+
+#include "V3Order.h"
+#include "V3OrderGraph.h"
+#include "V3OrderMoveGraph.h"
+
+#include <string>
+#include <vector>
+
+class AstVarScope;
+
+namespace V3Sched {
+class LogicByScope;
+};  // namespace V3Sched
+
+//============================================================================
+
+namespace V3Order {
+
+std::unique_ptr<OrderGraph> buildOrderGraph(const V3Sched::TriggerKit& trigKit,  //
+                                            AstVarScope* trigVscp,  //
+                                            const std::vector<V3Sched::LogicByScope*>& coll,  //
+                                            const V3Sched::CovergroupRefBindings& cgRefBindings,
+                                            bool parallel);
+
+void orderOrderGraph(OrderGraph& graph, const std::string& tag);
+
+void processDomains(OrderGraph& graph,  //
+                    const std::string& tag,  //
+                    const ExternalTriggersProvider& externalTriggers);
+
+AstNodeStmt* createSerial(OrderMoveGraph& moveGraph, const std::string& tag, bool slow);
+
+AstNodeStmt* createParallel(OrderMoveGraph& moveGraph, const std::string& tag, bool slow);
+
+};  // namespace V3Order
+
+#endif  // Guard

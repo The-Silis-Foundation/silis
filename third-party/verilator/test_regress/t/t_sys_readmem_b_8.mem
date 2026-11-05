@@ -1,0 +1,19 @@
+// DESCRIPTION: Verilator: Verilog Test data file
+//
+// SPDX-FileCopyrightText: 2006 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// ** Note this file has DOS CR's so we can test them!
+
+10000
+10001
+10010
+10011
+/*
+multi line
+ignored
+*/
+10100
+10101
+10110
+10111

@@ -1,0 +1,2575 @@
+import fnmatch
+import os
+import json
+
+from typing import List, Union, Optional, Set
+
+from siliconcompiler import sc_open
+from siliconcompiler import utils
+from siliconcompiler.asic import CellArea
+from siliconcompiler.schema import BaseSchema
+from siliconcompiler.schema.parametertype import NodeType
+
+
+from siliconcompiler.tools.openroad import OpenROADTask
+
+
+# Optimization moves repair_timing -sequence accepts, from Resizer::moveTypeFromString.
+# "size" is an alias that expands to sizeup plus size_down_fanout.
+RSZ_MOVES = (
+    "buffer",
+    "unbuffer",
+    "swap",
+    "size",
+    "sizeup",
+    "sizeup_match",
+    "size_down",
+    "size_down_fanout",
+    "clone",
+    "split",
+    "vt_swap",
+    "reroute",
+)
+
+# Optimization phases repair_timing -phases accepts, from the RSZ-217 error message the
+# phase parser raises. Spelled in the tool's own upper case: the names are compared
+# exactly, so translating case here would put a silent transform between what a user
+# writes and what the tool matches. LEGACY_MT, MT1 and MEASURED_VT_SWAP are accepted
+# upstream but undocumented, so they are deliberately not offered.
+RSZ_PHASES = (
+    "LEGACY",
+    "WNS",
+    "WNS_PATH",
+    "WNS_CONE",
+    "TNS",
+    "ENDPOINT_FANIN",
+    "STARTPOINT_FANOUT",
+    "LAST_GASP",
+    "CRIT_VT_SWAP",
+    "REROUTE",
+    "GLOBAL_SIZING",
+)
+
+
+class OpenROADSTAParameter(OpenROADTask):
+    """
+    Mixin class for defining Static Timing Analysis (STA) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("sta_early_timing_derate", "float",
+                           "timing derating factor to use for hold corners", defvalue=0.0)
+        self.add_parameter("sta_late_timing_derate", "float",
+                           "timing derating factor to use for setup corners", defvalue=0.0)
+        self.add_parameter("sta_top_n_paths", "int<1..>",
+                           "number of paths to report timing for", defvalue=10)
+        self.add_parameter("sta_define_path_groups", "bool",
+                           "if true will generate path groups for timing reporting", defvalue=True)
+        self.add_parameter("sta_unique_path_groups_per_clock", "bool",
+                           "if true will generate separate path groups per clock", defvalue=False)
+
+        self.set_dataroot("siliconcompiler", "python://siliconcompiler")
+        self.add_parameter("opensta_generic_sdc", "file", "generic opensta SDC file",
+                           defvalue="tools/_common/sdc/sc_constraints.sdc",
+                           dataroot="siliconcompiler")
+
+    def set_openroad_earlytimingderate(self, derate: float,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the timing derating factor to use for hold corners.
+
+        Args:
+            derate (float): The derating factor.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "sta_early_timing_derate", derate, step=step, index=index)
+
+    def set_openroad_latetimingderate(self, derate: float,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the timing derating factor to use for setup corners.
+
+        Args:
+            derate (float): The derating factor.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "sta_late_timing_derate", derate, step=step, index=index)
+
+    def set_openroad_topnpaths(self, n: int,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the number of paths to report timing for.
+
+        Args:
+            n (int): The number of paths.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "sta_top_n_paths", n, step=step, index=index)
+
+    def set_openroad_definepathgroups(self, enable: bool,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the generation of path groups for timing reporting.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "sta_define_path_groups", enable, step=step, index=index)
+
+    def set_openroad_uniquepathgroupsperclock(self, enable: bool,
+                                              step: Optional[str] = None,
+                                              index: Optional[str] = None):
+        """
+        Enables or disables the generation of separate path groups per clock.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "sta_unique_path_groups_per_clock", enable, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "sta_early_timing_derate")
+        self.add_required_key("var", "sta_late_timing_derate")
+        self.add_required_key("var", "sta_top_n_paths")
+        self.add_required_key("var", "sta_define_path_groups")
+        self.add_required_key("var", "sta_unique_path_groups_per_clock")
+        self.add_required_key("var", "opensta_generic_sdc")
+
+
+class OpenROADPSMParameter(OpenROADTask):
+    """
+    Mixin class for defining Power Supply Map (PSM) analysis parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("psm_enable", "bool",
+                           "true/false, when true enables IR drop analysis", defvalue=True)
+        self.add_parameter("psm_skip_nets", "[str]", "list of nets to skip power grid analysis on")
+
+    def set_openroad_psmenable(self, enable: bool,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables IR drop analysis.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "psm_enable", enable, step=step, index=index)
+
+    def add_openroad_psmskipnets(self, nets: Union[str, List[str]],
+                                 step: Optional[str] = None, index: Optional[str] = None,
+                                 clobber: bool = False):
+        """
+        Adds nets to skip during power grid analysis.
+
+        Args:
+            nets (Union[str, List[str]]): The net(s) to skip.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "psm_skip_nets", nets, step=step, index=index)
+        else:
+            self.add("var", "psm_skip_nets", nets, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "psm_enable")
+        if self.get("var", "psm_skip_nets"):
+            self.add_required_key("var", "psm_skip_nets")
+
+
+class OpenROADPPLLayersParameter(OpenROADTask):
+    """
+    Mixin class for defining Pin Placement (PPL) layer parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("pin_layer_horizontal", "[str]", "layers to use for horizontal pins")
+        self.add_parameter("pin_layer_vertical", "[str]", "layers to use for vertical pins")
+
+    def add_openroad_pinlayerhorizontal(self, layers: Union[str, List[str]],
+                                        step: Optional[str] = None, index: Optional[str] = None,
+                                        clobber: bool = False):
+        """
+        Adds layers to use for horizontal pins.
+
+        Args:
+            layers (Union[str, List[str]]): The layer(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "pin_layer_horizontal", layers, step=step, index=index)
+        else:
+            self.add("var", "pin_layer_horizontal", layers, step=step, index=index)
+
+    def add_openroad_pinlayervertical(self, layers: Union[str, List[str]],
+                                      step: Optional[str] = None, index: Optional[str] = None,
+                                      clobber: bool = False):
+        """
+        Adds layers to use for vertical pins.
+
+        Args:
+            layers (Union[str, List[str]]): The layer(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "pin_layer_vertical", layers, step=step, index=index)
+        else:
+            self.add("var", "pin_layer_vertical", layers, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.set_asic_var("pin_layer_horizontal", require=True)
+        self.set_asic_var("pin_layer_vertical", require=True)
+
+
+class OpenROADPPLParameter(OpenROADPPLLayersParameter):
+    """
+    Mixin class for defining Pin Placement (PPL) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("ppl_arguments", "[str]",
+                           "additional arguments to pass along to the pin placer.")
+        self.add_parameter("ppl_constraints", "[file]", "pin placement constraints scripts.")
+
+    def add_openroad_pplarguments(self, args: Union[str, List[str]],
+                                  step: Optional[str] = None, index: Optional[str] = None,
+                                  clobber: bool = False):
+        """
+        Adds additional arguments to pass along to the pin placer.
+
+        Args:
+            args (Union[str, List[str]]): The argument(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "ppl_arguments", args, step=step, index=index)
+        else:
+            self.add("var", "ppl_arguments", args, step=step, index=index)
+
+    def add_openroad_pplconstraints(self, constraints: Union[str, List[str]],
+                                    step: Optional[str] = None, index: Optional[str] = None,
+                                    clobber: bool = False):
+        """
+        Adds pin placement constraints scripts.
+
+        Args:
+            constraints (Union[str, List[str]]): The constraint file(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "ppl_constraints", constraints, step=step, index=index)
+        else:
+            self.add("var", "ppl_constraints", constraints, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        if self.get("var", "ppl_arguments"):
+            self.add_required_key("var", "ppl_arguments")
+
+        if self.get("var", "ppl_constraints"):
+            self.add_required_key("var", "ppl_constraints")
+
+
+class OpenROADGPLParameter(OpenROADTask):
+    """
+    Mixin class for defining Global Placement (GPL) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("gpl_enable_skip_io", "bool", "true/false, when enabled a global "
+                           "placement is performed without considering the impact of the pin "
+                           "placements",
+                           defvalue=True)
+        self.add_parameter("gpl_enable_skip_initial_place", "bool",
+                           "true/false, when enabled a global placement skips the initial "
+                           "placement, before the main global placement pass.", defvalue=False)
+        self.add_parameter("gpl_uniform_placement_adjustment", "float<0..0.99>",
+                           "percent of remaining area density to apply above uniform density "
+                           "(0.00 - 0.99)", defvalue=0.0)
+        self.add_parameter("gpl_timing_driven", "bool",
+                           "true/false, when true global placement will consider the timing "
+                           "performance of the design", defvalue=True)
+        self.add_parameter("gpl_routability_driven", "bool",
+                           "true/false, when true global placement will consider the routability "
+                           "of the design", defvalue=True)
+
+        self.add_parameter("place_density", "float<0.0..1.0>",
+                           "global placement density (0.0 - 1.0)")
+        self.add_parameter("pad_global_place", "int<0..>",
+                           "global placement cell padding in number of sites", defvalue=0)
+
+    def set_openroad_gplskipio(self, enable: bool,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables skipping I/O placement during global placement.
+
+        Args:
+            enable (bool): True to skip I/O placement, False to include it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "gpl_enable_skip_io", enable, step=step, index=index)
+
+    def set_openroad_gplskipinitialplace(self, enable: bool,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables skipping initial placement during global placement.
+
+        Args:
+            enable (bool): True to skip initial placement, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "gpl_enable_skip_initial_place", enable, step=step, index=index)
+
+    def set_openroad_gpluniformplacementadjustment(self, adjustment: float,
+                                                   step: Optional[str] = None,
+                                                   index: Optional[str] = None):
+        """
+        Sets the uniform placement adjustment factor.
+
+        Args:
+            adjustment (float): The adjustment factor (0.00 - 0.99).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "gpl_uniform_placement_adjustment", adjustment, step=step, index=index)
+
+    def set_openroad_gpltimingdriven(self, enable: bool,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables timing-driven global placement.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "gpl_timing_driven", enable, step=step, index=index)
+
+    def set_openroad_gplroutabilitydriven(self, enable: bool,
+                                          step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables routability-driven global placement.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "gpl_routability_driven", enable, step=step, index=index)
+
+    def set_openroad_placedensity(self, density: float,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the global placement density.
+
+        Args:
+            density (float): The target placement density (0.0 - 1.0).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "place_density", density, step=step, index=index)
+
+    def set_openroad_padglobalplace(self, padding: int,
+                                    step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the global placement cell padding.
+
+        Args:
+            padding (int): The padding in number of sites.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "pad_global_place", padding, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "gpl_enable_skip_io")
+        self.add_required_key("var", "gpl_enable_skip_initial_place")
+        self.add_required_key("var", "gpl_uniform_placement_adjustment")
+        self.add_required_key("var", "gpl_timing_driven")
+        self.add_required_key("var", "gpl_routability_driven")
+
+        self.set_asic_var("place_density", require=True)
+        self.set_asic_var("pad_global_place", check_pdk=False, mainlib_key="global_cell_padding")
+
+
+class OpenROADRSZDRVParameter(OpenROADTask):
+    """
+    Mixin class for defining Resizer (RSZ) Design Rule Violation (DRV) repair parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("rsz_cap_margin", "float<0.0..100.0>",
+                           "specifies the amount of margin to apply to max capacitance repairs in "
+                           "percent (0 - 100)", defvalue=0.0)
+        self.add_parameter("rsz_slew_margin", "float<0.0..100.0>",
+                           "specifies the amount of margin to apply to max slew repairs in percent "
+                           "(0 - 100)", defvalue=0.0)
+
+        # Applies to both repair_design and repair_timing, hence this mixin rather
+        # than the timing-only one.
+        self.add_parameter("rsz_match_cell_footprint", "bool",
+                           "true/false, when true only cells sharing the same liberty footprint "
+                           "are considered when swapping gates",
+                           defvalue=self._default_match_cell_footprint())
+        self.add_parameter("rsz_max_utilization", "float<0.0..100.0>",
+                           "maximum percentage of the core area the resizer is allowed to use, "
+                           "unset uses the tool default")
+        self.add_parameter("rsz_max_wire_length", "float<0.0..>",
+                           "maximum length a wire may reach before design repair inserts a "
+                           "buffer, unset lets the tool pick the length that avoids slew "
+                           "violations", unit="um")
+
+    def _default_match_cell_footprint(self) -> bool:
+        return False
+
+    def set_openroad_rszcapmargin(self, margin: float,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the margin for max capacitance repairs.
+
+        Args:
+            margin (float): The margin in percent (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_cap_margin", margin, step=step, index=index)
+
+    def set_openroad_rszslewmargin(self, margin: float,
+                                   step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the margin for max slew repairs.
+
+        Args:
+            margin (float): The margin in percent (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_slew_margin", margin, step=step, index=index)
+
+    def set_openroad_rszmatchcellfootprint(self, match: bool,
+                                           step: Optional[str] = None,
+                                           index: Optional[str] = None):
+        """
+        Restricts gate swaps to cells that share the same liberty footprint.
+
+        Args:
+            match (bool): True to obey the cell footprint, False to allow any swap.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_match_cell_footprint", match, step=step, index=index)
+
+    def set_openroad_rszmaxutilization(self, utilization: float,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum core area utilization the resizer may use.
+
+        Args:
+            utilization (float): The maximum utilization in percent (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_utilization", utilization, step=step, index=index)
+
+    def set_openroad_rszmaxwirelength(self, length: float,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum wire length design repair allows before buffering.
+
+        Args:
+            length (float): The maximum wire length in um.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_wire_length", length, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "rsz_cap_margin")
+        self.add_required_key("var", "rsz_slew_margin")
+        self.add_required_key("var", "rsz_match_cell_footprint")
+        if self.get("var", "rsz_max_utilization") is not None:
+            self.add_required_key("var", "rsz_max_utilization")
+        if self.get("var", "rsz_max_wire_length") is not None:
+            self.add_required_key("var", "rsz_max_wire_length")
+
+
+class OpenROADRSZTimingParameter(OpenROADTask):
+    """
+    Mixin class for defining Resizer (RSZ) timing repair parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("rsz_setup_slack_margin", "float",
+                           "specifies the margin to apply when performing setup repair",
+                           defvalue=0.0, unit="ns")
+        self.add_parameter("rsz_hold_slack_margin", "float",
+                           "specifies the margin to apply when performing hold repair",
+                           defvalue=0.0, unit="ns")
+
+        self.add_parameter("rsz_skip_pin_swap", "bool",
+                           "true/false, skip pin swap optimization", defvalue=False)
+        self.add_parameter("rsz_skip_gate_cloning", "bool",
+                           "true/false, skip gate cloning optimization", defvalue=False)
+        self.add_parameter("rsz_skip_buffer_removal", "bool",
+                           "true/false, skip buffer removal optimization", defvalue=False)
+        self.add_parameter("rsz_skip_buffering", "bool",
+                           "true/false, skip rebuffering and load splitting optimizations",
+                           defvalue=False)
+        self.add_parameter("rsz_skip_final_sizing", "bool",
+                           "true/false, skip the greedy gate resizing pass that runs at the end "
+                           "of setup repair to pick up any slack the main optimization left",
+                           defvalue=self._default_skip_final_sizing())
+        self.add_parameter("rsz_skip_size_down", "bool",
+                           "true/false, skip down-sizing gates that are not on the critical path",
+                           defvalue=False)
+        self.add_parameter("rsz_skip_vt_swap", "bool",
+                           "true/false, skip threshold voltage (VT) swap optimization",
+                           defvalue=False)
+        self.add_parameter("rsz_skip_crit_vt_swap", "bool",
+                           "true/false, skip the final critical threshold voltage (VT) swap "
+                           "optimization", defvalue=False)
+        self.add_parameter("rsz_sequence", f"[<{','.join(RSZ_MOVES)}>]",
+                           "explicit order of setup optimization moves, an empty list uses the "
+                           "tool default",
+                           defvalue=self._default_sequence())
+        self.add_parameter("rsz_phases", f"[<{','.join(RSZ_PHASES)}>]",
+                           "explicit order of setup optimization phases, an empty list uses the "
+                           "tool default, note the tool appends its critical threshold voltage "
+                           "swap phase to any of its legacy phases",
+                           defvalue=[])
+        self.add_parameter("rsz_max_passes", "int<1..>",
+                           "maximum number of optimization passes timing repair may run, unset "
+                           "uses the tool default")
+        self.add_parameter("rsz_max_iterations", "int<1..>",
+                           "maximum number of optimization iterations timing repair may run, "
+                           "unset uses the tool default")
+        self.add_parameter("rsz_max_repairs_per_pass", "int<1..>",
+                           "maximum number of repairs setup repair may make in a single pass, "
+                           "unset uses the tool default")
+        self.add_parameter("rsz_repair_tns", "float<0.0..100.0>",
+                           "percentage of violating nets to attempt to repair (0 - 100)",
+                           defvalue=100)
+        self.add_parameter("rsz_recover_power", "float<0.0..100.0>",
+                           "percentage of paths to attempt to recover power (0 - 100)",
+                           defvalue=100)
+
+        self.add_parameter("rsz_allow_setup_violations", "bool",
+                           "true/false, when true hold repair is allowed to insert buffers that "
+                           "cause setup violations", defvalue=False)
+        self.add_parameter("rsz_max_buffer_percent", "float<0.0..100.0>",
+                           "maximum number of buffers hold repair may insert, as a percentage of "
+                           "the instance count, unset uses the tool default")
+
+    def _default_skip_final_sizing(self) -> bool:
+        return False
+
+    def _default_sequence(self) -> List[str]:
+        return []
+
+    def set_openroad_rszsetupslackmargin(self, margin: float,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the margin for setup timing repair.
+
+        Args:
+            margin (float): The margin in ns.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_setup_slack_margin", margin, step=step, index=index)
+
+    def set_openroad_rszholdslackmargin(self, margin: float,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the margin for hold timing repair.
+
+        Args:
+            margin (float): The margin in ns.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_hold_slack_margin", margin, step=step, index=index)
+
+    def set_openroad_rszskippinswap(self, skip: bool,
+                                    step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables pin swap optimization.
+
+        Args:
+            skip (bool): True to skip pin swap, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_pin_swap", skip, step=step, index=index)
+
+    def set_openroad_rszskipgatecloning(self, skip: bool,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables gate cloning optimization.
+
+        Args:
+            skip (bool): True to skip gate cloning, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_gate_cloning", skip, step=step, index=index)
+
+    def set_openroad_rszskipbufferremoval(self, skip: bool,
+                                          step: Optional[str] = None,
+                                          index: Optional[str] = None):
+        """
+        Enables or disables the buffer removal optimization.
+
+        Args:
+            skip (bool): True to skip buffer removal, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_buffer_removal", skip, step=step, index=index)
+
+    def set_openroad_rszskipbuffering(self, skip: bool,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the rebuffering and load splitting optimizations.
+
+        Args:
+            skip (bool): True to skip buffering, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_buffering", skip, step=step, index=index)
+
+    def set_openroad_rszskipfinalsizing(self, skip: bool,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the final greedy gate resizing pass.
+
+        This pass runs at the end of setup repair and picks up slack the main
+        optimization left behind.
+
+        Args:
+            skip (bool): True to skip the pass, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_final_sizing", skip, step=step, index=index)
+
+    def set_openroad_rszskipsizedown(self, skip: bool,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables down-sizing of gates off the critical path.
+
+        Args:
+            skip (bool): True to skip down-sizing, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_size_down", skip, step=step, index=index)
+
+    def set_openroad_rszskipvtswap(self, skip: bool,
+                                   step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the threshold voltage (VT) swap optimization.
+
+        Args:
+            skip (bool): True to skip VT swap, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_vt_swap", skip, step=step, index=index)
+
+    def set_openroad_rszskipcritvtswap(self, skip: bool,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the final critical threshold voltage (VT) swap optimization.
+
+        Args:
+            skip (bool): True to skip critical VT swap, False to perform it.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_skip_crit_vt_swap", skip, step=step, index=index)
+
+    def add_openroad_rszsequence(self, moves: Union[str, List[str]],
+                                 step: Optional[str] = None, index: Optional[str] = None,
+                                 clobber: bool = False):
+        """
+        Adds moves to the explicit order of setup optimization moves.
+
+        Moves are appended in call order. The default is empty, which leaves the tool
+        to pick its own ordering.
+
+        Args:
+            moves (Union[str, List[str]]): The ordered move name(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "rsz_sequence", moves, step=step, index=index)
+        else:
+            self.add("var", "rsz_sequence", moves, step=step, index=index)
+
+    def add_openroad_rszphases(self, phases: Union[str, List[str]],
+                               step: Optional[str] = None, index: Optional[str] = None,
+                               clobber: bool = False):
+        """
+        Adds phases to the explicit order of setup optimization phases.
+
+        Phases are appended in call order. The default is empty, which leaves the tool
+        to pick its own ordering.
+
+        Args:
+            phases (Union[str, List[str]]): The ordered phase name(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "rsz_phases", phases, step=step, index=index)
+        else:
+            self.add("var", "rsz_phases", phases, step=step, index=index)
+
+    def set_openroad_rszmaxpasses(self, passes: int,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum number of optimization passes timing repair may run.
+
+        Args:
+            passes (int): The maximum pass count.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_passes", passes, step=step, index=index)
+
+    def set_openroad_rszmaxiterations(self, iterations: int,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum number of optimization iterations timing repair may run.
+
+        Args:
+            iterations (int): The maximum iteration count.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_iterations", iterations, step=step, index=index)
+
+    def set_openroad_rszmaxrepairsperpass(self, repairs: int,
+                                          step: Optional[str] = None,
+                                          index: Optional[str] = None):
+        """
+        Sets the maximum number of repairs setup repair may make in one pass.
+
+        Args:
+            repairs (int): The maximum repair count per pass.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_repairs_per_pass", repairs, step=step, index=index)
+
+    def set_openroad_rszallowsetupviolations(self, allow: bool,
+                                             step: Optional[str] = None,
+                                             index: Optional[str] = None):
+        """
+        Allows or forbids hold repair from causing setup violations.
+
+        Args:
+            allow (bool): True to allow setup violations, False otherwise.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_allow_setup_violations", allow, step=step, index=index)
+
+    def set_openroad_rszmaxbufferpercent(self, percentage: float,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum number of buffers hold repair may insert.
+
+        Args:
+            percentage (float): The limit as a percentage of the instance count (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_max_buffer_percent", percentage, step=step, index=index)
+
+    def set_openroad_rszrepairtns(self, percentage: float,
+                                  step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the percentage of violating nets to attempt to repair.
+
+        Args:
+            percentage (float): The percentage (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_repair_tns", percentage, step=step, index=index)
+
+    def set_openroad_rszrecoverpower(self, percentage: float,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the percentage of paths to attempt to recover power.
+
+        Args:
+            percentage (float): The percentage (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "rsz_recover_power", percentage, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "rsz_setup_slack_margin")
+        self.add_required_key("var", "rsz_hold_slack_margin")
+        self.add_required_key("var", "rsz_skip_pin_swap")
+        self.add_required_key("var", "rsz_skip_gate_cloning")
+        self.add_required_key("var", "rsz_skip_buffer_removal")
+        self.add_required_key("var", "rsz_skip_buffering")
+        self.add_required_key("var", "rsz_skip_final_sizing")
+        self.add_required_key("var", "rsz_skip_size_down")
+        self.add_required_key("var", "rsz_skip_vt_swap")
+        self.add_required_key("var", "rsz_skip_crit_vt_swap")
+        self.add_required_key("var", "rsz_repair_tns")
+        self.add_required_key("var", "rsz_recover_power")
+        self.add_required_key("var", "rsz_allow_setup_violations")
+
+        if self.get("var", "rsz_sequence"):
+            self.add_required_key("var", "rsz_sequence")
+        if self.get("var", "rsz_phases"):
+            self.add_required_key("var", "rsz_phases")
+        if self.get("var", "rsz_max_buffer_percent") is not None:
+            self.add_required_key("var", "rsz_max_buffer_percent")
+        if self.get("var", "rsz_max_passes") is not None:
+            self.add_required_key("var", "rsz_max_passes")
+        if self.get("var", "rsz_max_iterations") is not None:
+            self.add_required_key("var", "rsz_max_iterations")
+        if self.get("var", "rsz_max_repairs_per_pass") is not None:
+            self.add_required_key("var", "rsz_max_repairs_per_pass")
+
+
+class OpenROADDPLParameter(OpenROADTask):
+    """
+    Mixin class for defining Detailed Placement (DPL) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("pad_detail_place", "int<0..>",
+                           "detailed placement cell padding in number of sites", defvalue=0)
+        self.add_parameter("dpl_max_displacement", "(float<0.0..>,float<0.0..>)",
+                           "maximum cell movement in detailed placement in microns, 0 will result "
+                           "in the tool default maximum displacement", defvalue=(0, 0))
+        self.add_parameter("dpl_use_diamond_legalizer", "bool",
+                           "true/false, legalize with the legacy diamond search engine instead of "
+                           "the negotiation-based legalizer the tool now defaults to",
+                           defvalue=False)
+
+    def set_openroad_paddetailplace(self, padding: int,
+                                    step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the detailed placement cell padding.
+
+        Args:
+            padding (int): The padding in number of sites.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "pad_detail_place", padding, step=step, index=index)
+
+    def set_openroad_dplmaxdisplacement(self, x: float, y: float,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum cell displacement for detailed placement.
+
+        Args:
+            x (float): The maximum displacement in X (microns).
+            y (float): The maximum displacement in Y (microns).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "dpl_max_displacement", (x, y), step=step, index=index)
+
+    def set_openroad_dplusediamondlegalizer(self, enable: bool,
+                                            step: Optional[str] = None,
+                                            index: Optional[str] = None):
+        """
+        Selects the legacy diamond search legalizer for detailed placement.
+
+        Args:
+            enable (bool): True to use the diamond search engine, False to use the
+                negotiation-based legalizer.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "dpl_use_diamond_legalizer", enable, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "pad_detail_place")
+        self.add_required_key("var", "dpl_max_displacement")
+        self.add_required_key("var", "dpl_use_diamond_legalizer")
+
+
+class OpenROADFillCellsParameter(OpenROADTask):
+    """
+    Mixin class for defining filler cell insertion parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("dpl_use_decap_fillers", "bool",
+                           "true/false, use decap fillers along with non-decap fillers",
+                           defvalue=True)
+
+    def set_openroad_dplusedecapfillers(self, enable: bool,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables the use of decap fillers.
+
+        Args:
+            enable (bool): True to use decap fillers, False otherwise.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "dpl_use_decap_fillers", enable, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "dpl_use_decap_fillers")
+
+
+class OpenROADDPOParameter(OpenROADTask):
+    """
+    Mixin class for defining Detailed Placement Optimization (DPO) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("dpo_enable", "bool",
+                           "true/false, when true the detailed placement optimization will be "
+                           "performed", defvalue=True)
+        self.add_parameter("dpo_max_displacement", "(float<0.0..>,float<0.0..>)",
+                           "maximum cell movement in detailed placement optimization in microns, "
+                           "0 will result in the tool default maximum displacement", unit="um",
+                           defvalue=(5, 5))
+
+    def set_openroad_dpoenable(self, enable: bool,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables detailed placement optimization.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "dpo_enable", enable, step=step, index=index)
+
+    def set_openroad_dpomaxdisplacement(self, x: float, y: float,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum cell displacement for detailed placement optimization.
+
+        Args:
+            x (float): The maximum displacement in X (microns).
+            y (float): The maximum displacement in Y (microns).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "dpo_max_displacement", (x, y), step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "dpo_enable")
+        self.add_required_key("var", "dpo_max_displacement")
+
+
+class OpenROADCTSParameter(OpenROADTask):
+    """
+    Mixin class for defining Clock Tree Synthesis (CTS) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("cts_distance_between_buffers", "float<0.0..>",
+                           "maximum distance between buffers during clock tree synthesis in "
+                           "microns", defvalue=100, unit="um")
+        self.add_parameter("cts_cluster_diameter", "float<0.0..>",
+                           "clustering distance to use during clock tree synthesis in microns",
+                           defvalue=100, unit="um")
+        self.add_parameter("cts_cluster_size", "int<1..>",
+                           "number of instances in a cluster to use during clock tree synthesis",
+                           defvalue=30)
+        self.add_parameter("cts_balance_levels", "bool",
+                           "perform level balancing in clock tree synthesis", defvalue=True)
+        self.add_parameter("cts_obstruction_aware", "bool",
+                           "make clock tree synthesis aware of obstructions", defvalue=True)
+
+    def set_openroad_ctsdistancebetweenbuffers(self, distance: float,
+                                               step: Optional[str] = None,
+                                               index: Optional[str] = None):
+        """
+        Sets the maximum distance between buffers during CTS.
+
+        Args:
+            distance (float): The distance in microns.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "cts_distance_between_buffers", distance, step=step, index=index)
+
+    def set_openroad_ctsclusterdiameter(self, diameter: float,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the clustering diameter for CTS.
+
+        Args:
+            diameter (float): The diameter in microns.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "cts_cluster_diameter", diameter, step=step, index=index)
+
+    def set_openroad_ctsclustersize(self, size: int,
+                                    step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the cluster size for CTS.
+
+        Args:
+            size (int): The number of instances in a cluster.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "cts_cluster_size", size, step=step, index=index)
+
+    def set_openroad_ctsbalancelevels(self, enable: bool,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables level balancing during CTS.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "cts_balance_levels", enable, step=step, index=index)
+
+    def set_openroad_ctsobstructionaware(self, enable: bool,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables obstruction-aware CTS.
+
+        Args:
+            enable (bool): True to enable, False to disable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "cts_obstruction_aware", enable, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "cts_distance_between_buffers")
+        self.add_required_key("var", "cts_cluster_diameter")
+        self.add_required_key("var", "cts_cluster_size")
+        self.add_required_key("var", "cts_balance_levels")
+        self.add_required_key("var", "cts_obstruction_aware")
+
+
+class OpenROADGRTGeneralParameter(OpenROADTask):
+    """
+    Mixin class for defining general Global Routing (GRT) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("grt_macro_extension", "int<0..>",
+                           "macro extension distance in number of gcells, this can be useful when "
+                           "the detailed router needs additional space to avoid DRCs", defvalue=0)
+        self.add_parameter("grt_signal_min_layer", "str",
+                           "minimum layer to use for global routing of signals")
+        self.add_parameter("grt_signal_max_layer", "str",
+                           "maximum layer to use for global routing of signals")
+        self.add_parameter("grt_clock_min_layer", "str",
+                           "minimum layer to use for global routing of clock nets")
+        self.add_parameter("grt_clock_max_layer", "str",
+                           "maximum layer to use for global routing of clock nets")
+
+    def set_openroad_grtmacroextension(self, extension: int,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the macro extension distance for global routing.
+
+        Args:
+            extension (int): The extension distance in number of gcells.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_macro_extension", extension, step=step, index=index)
+
+    def set_openroad_grtsignalminlayer(self, layer: str,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the minimum layer for signal routing.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_signal_min_layer", layer, step=step, index=index)
+
+    def set_openroad_grtsignalmaxlayer(self, layer: str,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum layer for signal routing.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_signal_max_layer", layer, step=step, index=index)
+
+    def set_openroad_grtclockminlayer(self, layer: str,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the minimum layer for clock routing.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_clock_min_layer", layer, step=step, index=index)
+
+    def set_openroad_grtclockmaxlayer(self, layer: str,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum layer for clock routing.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_clock_max_layer", layer, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        min_layer = self.project.get("asic", "minlayer")
+        if not min_layer:
+            min_layer = self.pdk.get("pdk", "minlayer")
+        max_layer = self.project.get("asic", "maxlayer")
+        if not max_layer:
+            max_layer = self.pdk.get("pdk", "maxlayer")
+
+        self.set("var", "load_grt_setup", True, clobber=False)
+        self.set("var", "grt_signal_min_layer", min_layer, clobber=False)
+        self.set("var", "grt_clock_min_layer", min_layer, clobber=False)
+        self.set("var", "grt_signal_max_layer", max_layer, clobber=False)
+        self.set("var", "grt_clock_max_layer", max_layer, clobber=False)
+
+        self.add_required_key("var", "grt_macro_extension")
+        self.add_required_key("var", "grt_signal_min_layer")
+        self.add_required_key("var", "grt_clock_min_layer")
+        self.add_required_key("var", "grt_signal_max_layer")
+        self.add_required_key("var", "grt_clock_max_layer")
+
+
+class OpenROADGRTParameter(OpenROADGRTGeneralParameter):
+    """
+    Mixin class for defining Global Routing (GRT) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("grt_allow_congestion", "bool",
+                           "true/false, when true allow global routing to finish with congestion",
+                           defvalue=False)
+        self.add_parameter("grt_overflow_iter", "int<1..>",
+                           "maximum number of iterations to use in global routing when attempting "
+                           "to solve overflow", defvalue=100)
+        self.add_parameter("grt_seed", "int",
+                           "random seed for global routing, unset uses the tool default")
+
+    def set_openroad_grtallowcongestion(self, allow: bool,
+                                        step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables allowing congestion in global routing.
+
+        Args:
+            allow (bool): True to allow congestion, False otherwise.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_allow_congestion", allow, step=step, index=index)
+
+    def set_openroad_grtoverflowiter(self, iterations: int,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum number of overflow iterations for global routing.
+
+        Args:
+            iterations (int): The number of iterations.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_overflow_iter", iterations, step=step, index=index)
+
+    def set_openroad_grtseed(self, seed: int,
+                             step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the random seed for global routing.
+
+        Args:
+            seed (int): The random seed.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_seed", seed, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "grt_allow_congestion")
+        self.add_required_key("var", "grt_overflow_iter")
+        if self.get("var", "grt_seed") is not None:
+            self.add_required_key("var", "grt_seed")
+
+
+class OpenROADANTCheckParameter(OpenROADTask):
+    """
+    Mixin class for defining antenna check and repair parameters shared by every
+    task that can check or repair antenna violations.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("ant_check", "bool",
+                           "true/false, flag to indicate whether to check for antenna violations",
+                           defvalue=True)
+        self.add_parameter("ant_repair", "bool",
+                           "true/false, flag to indicate whether to repair antenna violations",
+                           defvalue=True)
+        self.add_parameter("ant_margin", "float<0.0..100.0>",
+                           "adds a margin to the antenna ratios (0 - 100)",
+                           defvalue=0)
+
+    def set_openroad_antcheck(self, enable: bool,
+                              step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables checking for antenna violations.
+
+        Args:
+            enable (bool): True to check, False to skip.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ant_check", enable, step=step, index=index)
+
+    def set_openroad_antrepair(self, enable: bool,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables repairing antenna violations.
+
+        Args:
+            enable (bool): True to repair, False to skip.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ant_repair", enable, step=step, index=index)
+
+    def set_openroad_antmargin(self, margin: float,
+                               step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the margin for antenna ratios.
+
+        Args:
+            margin (float): The margin (0 - 100).
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ant_margin", margin, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "ant_check")
+        self.add_required_key("var", "ant_repair")
+        self.add_required_key("var", "ant_margin")
+
+
+class OpenROADANTParameter(OpenROADANTCheckParameter):
+    """
+    Mixin class for defining Antenna repair parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("ant_iterations", "int<1..>",
+                           "maximum number of repair iterations to use during antenna repairs",
+                           defvalue=3)
+
+    def set_openroad_antiterations(self, iterations: int,
+                                   step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the maximum number of antenna repair iterations.
+
+        Args:
+            iterations (int): The number of iterations.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "ant_iterations", iterations, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "ant_iterations")
+
+
+class _OpenROADDRTCommonParameter(OpenROADTask):
+    """
+    Base mixin class for defining common Detailed Routing (DRT) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("drt_process_node", "str",
+                           "when set this specifies to the detailed router the specific process "
+                           "node")
+        self.add_parameter("detailed_route_default_via", "[str]",
+                           "list of default vias to use for detail routing")
+        self.add_parameter("detailed_route_unidirectional_layer", "[str]",
+                           "list of layers to treat as unidirectional regardless of what the tech "
+                           "lef specifies")
+
+    def set_openroad_drtprocessnode(self, node: str,
+                                    step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the process node for detailed routing.
+
+        Args:
+            node (str): The process node name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_process_node", node, step=step, index=index)
+
+    def add_openroad_detailedroutedefaultvia(self, vias: Union[str, List[str]],
+                                             step: Optional[str] = None,
+                                             index: Optional[str] = None,
+                                             clobber: bool = False):
+        """
+        Adds default vias to use for detailed routing.
+
+        Args:
+            vias (Union[str, List[str]]): The via(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "detailed_route_default_via", vias, step=step, index=index)
+        else:
+            self.add("var", "detailed_route_default_via", vias, step=step, index=index)
+
+    def add_openroad_detailedrouteunidirectionallayer(self, layers: Union[str, List[str]],
+                                                      step: Optional[str] = None,
+                                                      index: Optional[str] = None,
+                                                      clobber: bool = False):
+        """
+        Adds layers to treat as unidirectional during detailed routing.
+
+        Args:
+            layers (Union[str, List[str]]): The layer(s) to add.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+            clobber (bool, optional): If True, overwrites the existing list. Defaults to False.
+        """
+        if clobber:
+            self.set("var", "detailed_route_unidirectional_layer", layers, step=step, index=index)
+        else:
+            self.add("var", "detailed_route_unidirectional_layer", layers, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        if not self.get("var", "drt_process_node"):
+            if self.pdk.get("tool", "openroad", "drt_process_node"):
+                self.add_required_key(self.pdk, "tool", "openroad", "drt_process_node")
+                self.set("var", "drt_process_node",
+                         self.pdk.get("tool", "openroad", "drt_process_node"))
+
+        if self.get("var", "drt_process_node"):
+            self.add_required_key("var", "drt_process_node")
+        if self.get("var", "detailed_route_default_via"):
+            self.add_required_key("var", "detailed_route_default_via")
+        if self.get("var", "detailed_route_unidirectional_layer"):
+            self.add_required_key("var", "detailed_route_unidirectional_layer")
+
+
+class OpenROADDRTPinAccessParameter(_OpenROADDRTCommonParameter):
+    """
+    Mixin class for defining Detailed Routing (DRT) pin access parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+
+class OpenROADDRTParameter(_OpenROADDRTCommonParameter):
+    """
+    Mixin class for defining Detailed Routing (DRT) parameters.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.add_parameter("drt_disable_via_gen", "bool",
+                           "true/false, when true turns off via generation in detailed router "
+                           "and only uses the specified tech vias", defvalue=False)
+        self.add_parameter("drt_via_in_pin_bottom_layer", "str",
+                           "bottom layer to allow vias inside pins")
+        self.add_parameter("drt_via_in_pin_top_layer", "str",
+                           "top layer to allow vias inside pins")
+        self.add_parameter("drt_repair_pdn_vias", "str",
+                           "layer to repair PDN vias on")
+
+        self.add_parameter("drt_report_interval", "int<1..64>",
+                           "reporting interval in steps for generating a DRC report.", defvalue=5)
+        self.add_parameter("drt_end_iteration", "int<1..64>",
+                           "end iteration for detailed routing")
+
+    def set_openroad_drtdisableviagen(self, disable: bool,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables automatic via generation in the detailed router.
+
+        Args:
+            disable (bool): True to disable via generation, False to enable.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_disable_via_gen", disable, step=step, index=index)
+
+    def set_openroad_drtviainpinbottomlayer(self, layer: str,
+                                            step: Optional[str] = None,
+                                            index: Optional[str] = None):
+        """
+        Sets the bottom layer to allow vias inside pins.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_via_in_pin_bottom_layer", layer, step=step, index=index)
+
+    def set_openroad_drtviainpintoplayer(self, layer: str,
+                                         step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the top layer to allow vias inside pins.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_via_in_pin_top_layer", layer, step=step, index=index)
+
+    def set_openroad_drtrepairpdnvias(self, layer: str,
+                                      step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the layer to repair PDN vias on.
+
+        Args:
+            layer (str): The layer name.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_repair_pdn_vias", layer, step=step, index=index)
+
+    def set_openroad_drtreportinterval(self, interval: int,
+                                       step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the reporting interval for detailed routing.
+
+        Args:
+            interval (int): The interval in steps.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_report_interval", interval, step=step, index=index)
+
+    def set_openroad_drtenditeration(self, iteration: int,
+                                     step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Sets the end iteration for detailed routing.
+
+        Args:
+            iteration (int): The iteration number.
+            step (str, optional): The specific step to apply this configuration to.
+            index (str, optional): The specific index to apply this configuration to.
+        """
+        self.set("var", "drt_end_iteration", iteration, step=step, index=index)
+
+    def setup(self):
+        super().setup()
+
+        self.add_required_key("var", "drt_disable_via_gen")
+        if not self.get("var", "drt_disable_via_gen"):
+            if self.pdk.get("tool", "openroad", "drt_disable_via_gen"):
+                self.add_required_key(self.pdk, "tool", "openroad", "drt_disable_via_gen")
+                self.set("var", "drt_disable_via_gen",
+                         self.pdk.get("tool", "openroad", "drt_disable_via_gen"))
+
+        if not self.get("var", "drt_repair_pdn_vias"):
+            if self.pdk.get("tool", "openroad", "drt_repair_pdn_vias"):
+                self.add_required_key(self.pdk, "tool", "openroad", "drt_repair_pdn_vias")
+                self.set("var", "drt_repair_pdn_vias",
+                         self.pdk.get("tool", "openroad", "drt_repair_pdn_vias"))
+
+        bottom_via_layer = self.get("var", "drt_via_in_pin_bottom_layer")
+        top_via_layer = self.get("var", "drt_via_in_pin_top_layer")
+        if not bottom_via_layer or not top_via_layer:
+            pdk_via_layers = self.pdk.get("tool", "openroad", "drt_via_in_pin_layers")
+            if pdk_via_layers:
+                self.add_required_key(self.pdk, "tool", "openroad", "drt_via_in_pin_layers")
+                if not bottom_via_layer:
+                    self.set("var", "drt_via_in_pin_bottom_layer", pdk_via_layers[0])
+                if not top_via_layer:
+                    self.set("var", "drt_via_in_pin_top_layer", pdk_via_layers[1])
+
+        if self.get("var", "drt_via_in_pin_bottom_layer"):
+            self.add_required_key("var", "drt_via_in_pin_bottom_layer")
+        if self.get("var", "drt_via_in_pin_top_layer"):
+            self.add_required_key("var", "drt_via_in_pin_top_layer")
+        if self.get("var", "drt_repair_pdn_vias"):
+            self.add_required_key("var", "drt_repair_pdn_vias")
+        if self.get("var", "drt_end_iteration"):
+            self.add_required_key("var", "drt_end_iteration")
+        self.add_required_key("var", "drt_report_interval")
+
+
+class APRTask(OpenROADTask):
+    """
+    Base class for OpenROAD-based Automatic Place and Route (APR) tasks.
+
+    This task initializes specific configurations for OpenROAD, including
+    report filtering, image generation settings, heatmap binning, and
+    power analysis corners.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        supported = (
+            "setup",
+            "hold",
+            "unconstrained",
+            "clock_skew",
+            "drv_violations",
+            "fmax",
+            "power",
+            "logicdepth",
+            "design_stats",
+            "scenarios",
+            "check_setup",
+            "report_buffers",
+            "placement_density",
+            "routing_congestion",
+            "power_density",
+            "ir_drop",
+            "clock_placement",
+            "clock_trees",
+            "optimization_placement",
+            "module_view",
+            "floating_nets",
+            "overdriven_nets",
+            "snapshot",
+            "placement_view",
+            "routing_view",
+            "markers_view"
+        )
+        self.add_parameter("reports", f"{{<{','.join(supported)}>}}",
+                           "list of reports and images to generate, auto generated")
+        self.add_parameter("skip_reports", f"{{<{','.join(supported)}>}}",
+                           "list of reports and images skip")
+
+        self.add_parameter("ord_enable_images", "bool",
+                           "true/false, enable generating images of the design at the end "
+                           "of the task", defvalue=True)
+        self.add_parameter("ord_heatmap_bins", "(int<1..>,int<1..>)",
+                           "number of (X, Y) bins to use for heatmap image generation",
+                           defvalue=(16, 16))
+
+        self.add_parameter("rsz_parasitics", "file",
+                           "file used to specify the parasitics for estimation", copy=False)
+        self.add_parameter("rsz_default_pex_corner", "str",
+                           "default corner to use for parasitic extraction")
+        self.add_parameter("power_corner", "str",
+                           "corner to use for power analysis")
+
+        self.add_parameter("load_grt_setup", "bool",
+                           "used to indicate if global routing information should be loaded",
+                           defvalue=False)
+
+        # Alongside load_grt_setup rather than on the global routing mixins: the flag
+        # is also passed on the incremental global routes that sc_detailed_placement
+        # issues, and that is reachable from any APR task.
+        self.add_parameter("grt_resistance_aware", "bool",
+                           "true/false, when true global routing will consider wire resistance",
+                           defvalue=False)
+
+        self.add_parameter("load_sdcs", "bool",
+                           "used to indicate if SDC files should be loaded before APR",
+                           defvalue=True)
+
+        self.add_parameter("global_connect_fileset", "[(str,str)]",
+                           "list of libraries and filesets to generate connects from")
+
+        self.add_parameter("enablehier", "bool",
+                           "Enable hierarchical design support in OpenROAD when linking",
+                           defvalue=self._default_enable_hier())
+
+        self.add_parameter("apply_pex_correction", "bool",
+                           "apply the calibrated per-layer pex correction "
+                           "(pdk 'rccorrection') to the pre-route parasitic estimate",
+                           defvalue=self._default_apply_pex_correction())
+
+    def _default_enable_hier(self) -> bool:
+        return False
+
+    def _default_apply_pex_correction(self) -> bool:
+        return True
+
+    def set_openroad_enablehier(self, enable: bool,
+                                step: Optional[str] = None, index: Optional[str] = None):
+        """
+        Enables or disables hierarchical design support in OpenROAD.
+
+        Args:
+            enable: True to enable hierarchical design support, False to disable it.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "enablehier", enable, step=step, index=index)
+
+    def set_openroad_grtresistanceaware(self, enable: bool,
+                                        step: Optional[str] = None,
+                                        index: Optional[str] = None):
+        """
+        Enables or disables resistance-aware global routing.
+
+        Applies to the main global route and to the incremental global routes issued
+        around detailed placement.
+
+        Args:
+            enable: True to enable, False to disable.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "grt_resistance_aware", enable, step=step, index=index)
+
+    def set_openroad_applypexcorrection(self, enable: bool,
+                                        step: Optional[str] = None,
+                                        index: Optional[str] = None):
+        """
+        Enables or disables the calibrated per-layer pex correction.
+
+        When enabled (the default) the PDK's ``rccorrection`` factors scale the
+        ``rclayer`` values before ``set_layer_rc``, so the pre-route parasitic
+        estimate tracks signoff extraction. Disable it to run a node against the
+        raw, uncalibrated estimate. A PDK with no ``rccorrection`` is unaffected
+        either way.
+
+        Args:
+            enable: True to apply the correction, False to use the raw rclayer
+                    values.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "apply_pex_correction", enable, step=step, index=index)
+
+    def add_openroad_skipreport(self, report_type: Union[List[str], str],
+                                step: Optional[str] = None, index: Optional[str] = None,
+                                clobber: bool = False) -> None:
+        """
+        Adds or sets report types to be skipped during OpenROAD execution.
+
+        Args:
+            report_type: The name of the report(s) to skip (e.g., 'routing_congestion').
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing list of skipped reports.
+                     If False, appends to the existing list.
+        """
+        if isinstance(report_type, str):
+            patterns = [report_type]
+        else:
+            patterns = list(report_type)
+
+        if any("*" in pattern for pattern in patterns):
+            enum_type = list(
+                NodeType.parse(BaseSchema.get(self, "var", "skip_reports", field="type")))[0]
+            supported_report_types = sorted(NodeType.parse(enum_type).values)
+            expanded: List[str] = []
+            for pattern in patterns:
+                matches = fnmatch.filter(supported_report_types, pattern)
+                if not matches:
+                    raise ValueError(
+                        f"Report type pattern '{pattern}' did not match any supported "
+                        f"report types: {supported_report_types}")
+                expanded.extend(matches)
+            report_type = expanded
+
+        if clobber:
+            self.set("var", "skip_reports", report_type, step=step, index=index)
+        else:
+            self.add("var", "skip_reports", report_type, step=step, index=index)
+
+    def set_openroad_enableimages(self, enable: bool,
+                                  step: Optional[str] = None, index: Optional[str] = None) -> None:
+        """
+        Enables or disables the generation of design images at the end of the task.
+
+        Args:
+            enable: True to generate images, False to disable.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "ord_enable_images", enable, step=step, index=index)
+
+    def set_openroad_heatmapbins(self, x: int, y: int,
+                                 step: Optional[str] = None, index: Optional[str] = None) -> None:
+        """
+        Configures the resolution of the heatmap images.
+
+        Args:
+            x: The number of bins in the X direction.
+            y: The number of bins in the Y direction.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "ord_heatmap_bins", (x, y), step=step, index=index)
+
+    def set_openroad_loadsdcs(self, enable: bool,
+                              step: Optional[str] = None, index: Optional[str] = None) -> None:
+        """
+        Enables or disables loading SDC files before APR.
+
+        Args:
+            enable: True to load SDC files, False to disable.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "load_sdcs", enable, step=step, index=index)
+
+    def set_openroad_powercorner(self, corner: str,
+                                 step: Optional[str] = None, index: Optional[str] = None) -> None:
+        """
+        Sets the specific process corner used for power analysis.
+
+        Args:
+            corner: The name of the timing/power corner.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+        """
+        self.set("var", "power_corner", corner, step=step, index=index)
+
+    def add_openroad_globalconnectfileset(self, library: str, fileset: str,
+                                          step: Optional[str] = None, index: Optional[str] = None,
+                                          clobber: bool = False):
+        """
+        Adds a library and fileset pair to the global connect configuration.
+
+        Args:
+            library: The name of the library.
+            fileset: The name of the fileset.
+            step: The specific step to apply this configuration to.
+            index: The specific index to apply this configuration to.
+            clobber: If True, overwrites the existing global connect settings.
+                     If False, appends to the existing settings.
+        """
+        if clobber:
+            self.set("var", "global_connect_fileset", (library, fileset), step=step, index=index)
+        else:
+            self.add("var", "global_connect_fileset", (library, fileset), step=step, index=index)
+
+    def setup(self):
+        """
+        Configure APRTask prerequisites and required project keys for an OpenROAD run.
+
+        Performs task-wide setup: configures threading, declares PNR inputs and outputs, sets the
+        default power corner from timing constraints (without clobbering existing values), and
+        declares required variables and file dependencies used later in the flow. Specifically, it:
+        - Ensures ord_enable_images, ord_heatmap_bins, and load_grt_setup are present as
+            required keys.
+        - Adds reports and skip_reports as required keys when they are present in the
+            project variables.
+        - Imports and registers global_connect_fileset entries when absent or present, and declares
+            per-library fileset TCL file requirements for each entry.
+        - Aggregates libcorner names from timing scenarios and, for each ASIC library and matching
+            delay model, declares required libcorner filesets and per-fileset liberty file
+            requirements. Raises if the project selects a delay model OpenSTA cannot read.
+
+        Side effects:
+        - Mutates the task/project state by setting variables, adding required keys, and
+            possibly importing global connect filesets.
+        """
+        super().setup()
+
+        self.set_threads()
+
+        self._add_pnr_inputs()
+        self._add_pnr_outputs()
+        self._add_pnr_cell_keys()
+
+        # Set power corner
+        self.set("var", "power_corner", self._get_constraint_by_check("power"), clobber=False)
+        pexmap = self._get_pex_mapping()
+        if None in pexmap:
+            self.set("var", "rsz_default_pex_corner", pexmap[None], clobber=False)
+            self.add_required_key("var", "rsz_default_pex_corner")
+        if self.pdk.get("tool", "openroad", "rclayer"):
+            self.add_required_key(self.pdk, "tool", "openroad", "rclayer")
+        if self.pdk.get("tool", "openroad", "rccorrection"):
+            # Recalibrating the estimate must invalidate cached nodes, so the
+            # correction has to be part of the node hash like the rclayer it
+            # scales.
+            self.add_required_key(self.pdk, "tool", "openroad", "rccorrection")
+
+        if self.get("var", "reports"):
+            self.add_required_key("var", "reports")
+        if self.get("var", "skip_reports"):
+            self.add_required_key("var", "skip_reports")
+
+        self.add_required_key("var", "enablehier")
+        self.add_required_key("var", "apply_pex_correction")
+        self.add_required_key("var", "ord_enable_images")
+        self.add_required_key("var", "ord_heatmap_bins")
+        self.add_required_key("var", "load_grt_setup")
+        self.add_required_key("var", "grt_resistance_aware")
+        self.add_required_key("var", "load_sdcs")
+
+        if not self.get("var", "global_connect_fileset"):
+            self.__import_globalconnect_filesets()
+
+        if self.get("var", "global_connect_fileset"):
+            self.add_required_key("var", "global_connect_fileset")
+            # sc_global_connections resolves aliases and depfilesets for each
+            # global connect fileset; mirror that here so the files are hashed
+            # (cache) and copied (remote runs).
+            for lib, fileset in self.get("var", "global_connect_fileset"):
+                for fs_lib, fs in self.project.get_filesets(library=lib, filesets=[fileset]):
+                    if fs_lib.has_file(fileset=fs, filetype="tcl"):
+                        self.add_required_key(fs_lib, "fileset", fs, "file", "tcl")
+
+        libcorners = set()
+        for scenario in self.project.constraint.timing.get_scenario().values():
+            libcorners.update(scenario.get_libcorner(self.step, self.index))
+            self.add_required_key(scenario, "pexcorner")
+            self.add_required_key(scenario, "libcorner")
+            if scenario.get_check(self.step, self.index):
+                self.add_required_key(scenario, "check")
+            mode = scenario.get_mode(self.step, self.index)
+            if mode:
+                self.add_required_key(scenario, "mode")
+                if self.get("var", "load_sdcs"):
+                    mode_obj = self.project.constraint.timing.get_mode(mode)
+                    self.add_required_key(mode_obj, "sdcfileset")
+
+        delay_model = self._get_delaymodel()
+        for asiclib in self.project.get("asic", "asiclib"):
+            lib = self.project.get_library(asiclib)
+            for corner in libcorners:
+                if not lib.valid("asic", "libcornerfileset", corner, delay_model):
+                    continue
+                self.add_required_key(lib, "asic", "libcornerfileset", corner, delay_model)
+                for fileset in lib.get("asic", "libcornerfileset", corner, delay_model):
+                    # read_liberty.tcl reads the binary liberty in place of the text
+                    if lib.has_file(fileset=fileset, filetype="liberty-binary"):
+                        self.add_required_key(lib, "fileset", fileset, "file", "liberty-binary")
+                    else:
+                        self.add_required_key(lib, "fileset", fileset, "file", "liberty")
+
+    def pre_process(self):
+        super().pre_process()
+        if not self.pdk.get("tool", "openroad", "rclayer"):
+            self._build_pex_estimation_file()
+
+    def __import_globalconnect_filesets(self):
+        for lib in self.project.get("asic", "asiclib"):
+            libobj = self.project.get_library(lib)
+            if libobj.valid("tool", "openroad", "global_connect_fileset"):
+                for fileset in libobj.get("tool", "openroad", "global_connect_fileset"):
+                    self.add_openroad_globalconnectfileset(lib, fileset)
+
+    def _set_reports(self, task_reports: List[str]):
+        skip_reports = set(self.get("var", "skip_reports"))
+
+        if not self.get("var", "load_sdcs"):
+            skip_reports.update((
+                "setup",
+                "hold",
+                "unconstrained",
+                "clock_skew",
+                "fmax",
+                "check_setup",
+                "clock_placement",
+                "clock_trees"))
+
+        # Iterate the ordered task_reports rather than a Python set: a set's
+        # iteration order is hash-randomized and varies between processes, which
+        # makes the scheduler's order-sensitive value comparison flag the node
+        # as "modified from previous run" on every incremental re-run. The
+        # reports var is itself a deduplicated, order-preserving set.
+        do_reports = [r for r in task_reports if r not in skip_reports]
+        self.set("var", "reports", do_reports)
+
+        if "power" in self.get("var", "reports"):
+            self.add_required_key("var", "power_corner")
+
+    def _get_modes(self) -> Set[str]:
+        modes = set()
+        for scenario in self.project.constraint.timing.get_scenario().values():
+            mode = scenario.get_mode(self.step, self.index)
+            if mode:
+                modes.add(mode)
+        return modes
+
+    def _add_pnr_inputs(self):
+        if self.get("var", "load_sdcs"):
+            modes = self._get_modes()
+            if modes and \
+                    all(f"{self.design_topmodule}.{mode}.sdc" in self.get_files_from_input_nodes()
+                        for mode in modes):
+                for mode in modes:
+                    self.add_input_file(ext=f"{mode}.sdc")
+            elif f"{self.design_topmodule}.sdc" in self.get_files_from_input_nodes():
+                self.add_input_file(ext="sdc")
+            else:
+                for lib, fileset in self.project.get_filesets():
+                    if lib.has_file(fileset=fileset, filetype="sdc"):
+                        self.add_required_key(lib, "fileset", fileset, "file", "sdc")
+
+                for scenario in self.project.constraint.timing.get_scenario().values():
+                    mode = scenario.get_mode(self.step, self.index)
+                    if mode:
+                        self.add_required_key(scenario, "mode")
+                        mode_obj = self.project.constraint.timing.get_mode(mode)
+                        self.add_required_key(mode_obj, "sdcfileset")
+
+                for mode in self._get_modes():
+                    mode_obj = self.project.constraint.timing.get_mode(mode)
+                    # step/index: sdcfileset is PerNode.OPTIONAL, and the tcl
+                    # manifest carries the value resolved for this node, so reading
+                    # the global here would declare files the script does not read
+                    # and miss the ones it does.
+                    for lib, fileset in mode_obj.get_sdcfileset(step=self.step,
+                                                                index=self.index):
+                        libobj = self.project.get_library(lib)
+                        # read_timing_constraints.tcl resolves aliases and
+                        # depfilesets for the mode sdcfileset; mirror that here.
+                        for fs_lib, fs in self.project.get_filesets(library=libobj,
+                                                                    filesets=[fileset]):
+                            if fs_lib.has_file(fileset=fs, filetype="sdc"):
+                                self.add_required_key(fs_lib, "fileset", fs, "file", "sdc")
+
+        load_vg = False
+        load_tech = True
+        if f"{self.design_topmodule}.odb.gz" in self.get_files_from_input_nodes():
+            self.add_input_file(ext="odb.gz")
+            load_tech = False
+        elif f"{self.design_topmodule}.odb" in self.get_files_from_input_nodes():
+            self.add_input_file(ext="odb")
+            load_tech = False
+        elif f"{self.design_topmodule}.def.gz" in self.get_files_from_input_nodes():
+            if not self.get("var", "enablehier"):
+                self.add_input_file(ext="def.gz")
+            load_vg = self.get("var", "enablehier")
+        elif f"{self.design_topmodule}.def" in self.get_files_from_input_nodes():
+            if not self.get("var", "enablehier"):
+                self.add_input_file(ext="def")
+            load_vg = self.get("var", "enablehier")
+        else:
+            load_vg = True
+
+        if load_vg:
+            if f"{self.design_topmodule}.vg.gz" in self.get_files_from_input_nodes():
+                self.add_input_file(ext="vg.gz")
+            elif f"{self.design_topmodule}.vg" in self.get_files_from_input_nodes():
+                self.add_input_file(ext="vg")
+            else:
+                pass
+
+        if load_tech:
+            pdk = self.project.get_library(self.project.get("asic", "pdk"))
+            for fs in pdk.get("pdk", "aprtechfileset", "openroad"):
+                if pdk.has_file(fileset=fs, filetype="lef"):
+                    self.add_required_key(pdk, "fileset", fs, "file", "lef")
+            for asiclib in self.project.get("asic", "asiclib"):
+                lib = self.project.get_library(asiclib)
+                for fs in lib.get("asic", "aprfileset"):
+                    if lib.has_file(fileset=fs, filetype="lef"):
+                        self.add_required_key(lib, "fileset", fs, "file", "lef")
+
+    def _add_pnr_outputs(self):
+        """Declare the design views a place-and-route node writes.
+
+        A terminal analysis node that emits no design views overrides this with a
+        no-op; the cell-list dependencies live in :meth:`_add_pnr_cell_keys` so
+        that they survive such an override.
+        """
+        if self.get("var", "load_sdcs"):
+            self.add_output_file(ext="sdc")
+        self.add_output_file(ext="vg")
+        self.add_output_file(ext="lec.vg")
+        self.add_output_file(ext="def.gz")
+        self.add_output_file(ext="odb.gz")
+
+    def _add_pnr_cell_keys(self):
+        """Declare the library cell lists the APR preamble reads.
+
+        These feed dont-use/filler handling in every APR node, so they must be
+        hashed whether or not the node writes design views.
+        """
+        for lib in self.project.get("asic", "asiclib"):
+            libobj = self.project.get_library(lib)
+            for celltype in ["decap", "tie", "filler", "tap", "endcap", "antenna", "physicalonly"]:
+                if libobj.valid("asic", "cells", celltype) and \
+                        libobj.get("asic", "cells", celltype):
+                    self.add_required_key(libobj, "asic", "cells", celltype)
+
+    def _get_pex_mapping(self):
+        corners = {}
+        for constraint in self.project.getkeys('constraint', 'timing', 'scenario'):
+            pexcorner = self.project.get('constraint', 'timing', 'scenario',
+                                         constraint, 'pexcorner',
+                                         step=self.step, index=self.index)
+            if pexcorner:
+                corners[constraint] = pexcorner
+
+        default_corner = self._get_constraint_by_check("setup")
+        if default_corner in corners:
+            corners[None] = corners[default_corner]
+
+        return corners
+
+    def _get_constraint_by_check(self, check: str) -> str:
+        for constraint in self.project.getkeys('constraint', 'timing', 'scenario'):
+            if check in self.project.get('constraint', 'timing', 'scenario',
+                                         constraint, 'check',
+                                         step=self.step, index=self.index):
+                return constraint
+
+        # if not specified, just pick the first constraint available
+        scenarios = self.project.getkeys('constraint', 'timing', 'scenario')
+        if not scenarios:
+            raise ValueError("No timing scenarios defined in project constraints.")
+        return scenarios[0]
+
+    def _build_pex_estimation_file(self):
+        corners = self._get_pex_mapping()
+
+        path = os.path.join(self.nodeworkdir, "inputs", "sc_parasitics.tcl")
+        self.set("var", "rsz_parasitics", path)
+
+        with open(path, 'w') as f:
+            for constraint, pexcorner in corners.items():
+                if self.pdk.valid("pdk", "pexmodelfileset", "openroad", pexcorner):
+                    pex_source_file = None
+                    for fileset in self.pdk.get("pdk", "pexmodelfileset", "openroad", pexcorner):
+                        if self.pdk.valid("fileset", fileset, "file", "tcl"):
+                            pex_source_file = self.pdk.get_file(fileset, "tcl")[0]
+                            break
+                    if not pex_source_file:
+                        continue
+
+                    corner_pex_template = utils.get_file_template(pex_source_file)
+                    pex_template = utils.get_file_template(
+                        'pex.tcl',
+                        root=os.path.join(os.path.dirname(__file__), 'templates'))
+
+                    if not pex_template:
+                        continue
+
+                    if constraint is None:
+                        constraint = "default"
+                        corner_specification = ""
+                    else:
+                        corner_specification = f"-corner {constraint}"
+
+                    f.write(pex_template.render(
+                        constraint=constraint,
+                        pexcorner=pexcorner,
+                        source=pex_source_file,
+                        pex=corner_pex_template.render({"corner": corner_specification})
+                    ))
+                    f.write('\n')
+
+    def post_process(self):
+        super().post_process()
+
+        self._extract_metrics()
+
+    def _extract_metrics(self):
+        '''
+        Extract metrics
+        '''
+
+        scenario_corners = self.project.getkeys('constraint', 'timing', 'scenario')
+
+        def scenario_reports(name, unconstrained=False):
+            # Per-scene reports, written only when more than one scene is defined
+            variants = ("", "topN.") if unconstrained else ("", "topN.", "failing.", "endpoints.")
+            return [f"timing/scenarios/{corner}/{name}.{corner}.{variant}rpt"
+                    for corner in scenario_corners
+                    for variant in variants]
+
+        def scenario_files(name):
+            # A single per-scene report, e.g. worst_slack.setup
+            return [f"timing/scenarios/{corner}/{name}.{corner}.rpt"
+                    for corner in scenario_corners]
+
+        metric_reports = {
+            "setuptns": [
+                "timing/total_negative_slack.setup.rpt",
+                *scenario_files("total_negative_slack.setup"),
+                "timing/setup.rpt",
+                "timing/setup.failing.rpt",
+                "timing/setup.histogram.rpt",
+                "images/timing/setup.histogram.png"
+            ],
+            "setupslack": [
+                "timing/worst_slack.setup.rpt",
+                *scenario_files("worst_slack.setup"),
+                "timing/setup.rpt",
+                "timing/setup.topN.rpt",
+                "timing/setup.failing.rpt",
+                "timing/setup.endpoints.rpt",
+                *scenario_reports("setup"),
+                "timing/setup.histogram.rpt",
+                "images/timing/setup.histogram.png"
+            ],
+            "setupskew": [
+                "clocks/skew.setup.rpt",
+                "timing/worst_slack.setup.rpt",
+                "timing/setup.rpt",
+                "timing/setup.topN.rpt"
+            ],
+            "setuppaths": [
+                "timing/setup.rpt",
+                "timing/setup.topN.rpt",
+                "timing/setup.failing.rpt",
+                "timing/setup.endpoints.rpt",
+                *scenario_reports("setup"),
+                "timing/setup.histogram.rpt",
+                "images/timing/setup.histogram.png"
+            ],
+            "holdtns": [
+                "timing/total_negative_slack.hold.rpt",
+                *scenario_files("total_negative_slack.hold"),
+                "timing/hold.rpt",
+                "timing/hold.failing.rpt",
+                "timing/hold.histogram.rpt",
+                "images/timing/hold.histogram.png"
+            ],
+            "holdslack": [
+                "timing/worst_slack.hold.rpt",
+                *scenario_files("worst_slack.hold"),
+                "timing/hold.rpt",
+                "timing/hold.topN.rpt",
+                "timing/hold.failing.rpt",
+                "timing/hold.endpoints.rpt",
+                *scenario_reports("hold"),
+                "timing/hold.histogram.rpt",
+                "images/timing/hold.histogram.png"
+            ],
+            "holdskew": [
+                "clocks/skew.hold.rpt",
+                "timing/worst_slack.hold.rpt",
+                "timing/hold.rpt",
+                "timing/hold.topN.rpt"
+            ],
+            "holdpaths": [
+                "timing/hold.rpt",
+                "timing/hold.topN.rpt",
+                "timing/hold.failing.rpt",
+                "timing/hold.endpoints.rpt",
+                *scenario_reports("hold"),
+                "timing/hold.histogram.rpt",
+                "images/timing/hold.histogram.png"
+            ],
+            "registers": [
+                "design/registers.rpt"
+            ],
+            "logicdepth": [
+                "design/logic_depth.rpt",
+                "design/logic_depth.histogram.rpt",
+                "design/logic_depth.histogram.comboonly.rpt"
+            ],
+            "unconstrained": [
+                "timing/unconstrained.rpt",
+                "timing/unconstrained.topN.rpt",
+                *scenario_reports("unconstrained", unconstrained=True)
+            ],
+            "peakpower": [
+                *[f"power/{corner}.rpt"
+                  for corner in self.project.getkeys('constraint', 'timing', 'scenario')],
+                *[f"images/heatmap/power_density/{corner}.png"
+                    for corner in self.project.getkeys('constraint', 'timing', 'scenario')]
+            ],
+            "drvs": [
+                "checks/drv_violators.rpt",
+                "checks/floating_nets.rpt",
+                "checks/overdriven_nets.rpt",
+                "checks/overdriven_nets_with_parallel.rpt",
+                f"route/{self.design_topmodule}.antenna.rpt",
+                f"route/{self.design_topmodule}.antenna_post_repair.rpt"
+            ],
+            "drcs": [
+                f"checks/{self.design_topmodule}.drc.rpt",
+                f"markers/{self.design_topmodule}.drc.rpt",
+                f"markers/{self.design_topmodule}.drc.json",
+                f"images/markers/{self.design_topmodule}.DRC.png"
+            ],
+            "utilization": [
+                "images/heatmap/placement_density.png"
+            ],
+            "wirelength": [
+                f"images/{self.design_topmodule}.routing.png"
+            ]
+        }
+        metric_reports["leakagepower"] = metric_reports["peakpower"]
+
+        metrics_file = "reports/metrics.json"
+
+        if not os.path.exists(metrics_file):
+            self.logger.warning("OpenROAD metrics file is missing")
+            return
+
+        def get_metric_sources(metric):
+            metric_sources = [metrics_file]
+            if metric in metric_reports:
+                for metric_file in metric_reports[metric]:
+                    metric_path = f'reports/{metric_file}'
+                    if os.path.exists(metric_path):
+                        metric_sources.append(metric_path)
+            return metric_sources
+
+        # parsing log file
+        with sc_open(metrics_file) as f:
+            try:
+                metrics = json.load(f)
+            except json.decoder.JSONDecodeError as e:
+                self.logger.error(f'Unable to parse metrics from OpenROAD: {e}')
+                metrics = {}
+
+            self._generate_cell_area_report(metrics)
+
+            or_units = {}
+            for unit, or_unit in [
+                    ('time', 'run__flow__platform__time_units'),
+                    ('capacitance', 'run__flow__platform__capacitance_units'),
+                    ('resistance', 'run__flow__platform__resistance_units'),
+                    ('volt', 'run__flow__platform__voltage_units'),
+                    ('amp', 'run__flow__platform__current_units'),
+                    ('power', 'run__flow__platform__power_units'),
+                    ('distance', 'run__flow__platform__distance_units')]:
+                if or_unit in metrics:
+                    # Remove first digit
+                    metric_unit = metrics[or_unit][1:]
+                    or_units[unit] = metric_unit
+
+            or_units['distance'] = 'um'  # always microns
+            or_units['power'] = 'W'  # always watts
+            or_units['area'] = f"{or_units['distance']}^2"
+            or_units['frequency'] = 'Hz'  # always hertz
+
+            has_timing = True
+            if 'sc__metric__timing__clocks' in metrics:
+                has_timing = metrics['sc__metric__timing__clocks'] > 0
+
+            for metric, or_metric, or_use, or_unit in [
+                ('vias', 'sc__step__global_route__vias', True, None),
+                ('vias', 'sc__step__route__vias', True, None),
+                ('wirelength', 'sc__step__global_route__wirelength', True, 'distance'),
+                ('wirelength', 'sc__step__route__wirelength', True, 'distance'),
+                ('cellarea', 'sc__metric__design__instance__area', True, 'area'),
+                ('stdcellarea', 'sc__metric__design__instance__area__stdcell', True, 'area'),
+                ('macroarea', 'sc__metric__design__instance__area__macros', True, 'area'),
+                ('padcellarea', 'sc__metric__design__instance__area__padcells', True, 'area'),
+                ('totalarea', 'sc__metric__design__die__area', True, 'area'),
+                ('utilization', 'sc__metric__design__instance__utilization', True, 100.0),
+                ('setuptns', 'sc__metric__timing__setup__tns', has_timing, 'time'),
+                ('holdtns', 'sc__metric__timing__hold__tns', has_timing, 'time'),
+                ('setupslack', 'sc__metric__timing__setup__ws', has_timing, 'time'),
+                ('holdslack', 'sc__metric__timing__hold__ws', has_timing, 'time'),
+                ('setupskew', 'sc__metric__clock__skew__setup', has_timing, 'time'),
+                ('holdskew', 'sc__metric__clock__skew__hold', has_timing, 'time'),
+                ('fmax', 'sc__metric__timing__fmax', has_timing, 'frequency'),
+                ('setuppaths', 'sc__metric__timing__drv__setup_violation_count', True, None),
+                ('holdpaths', 'sc__metric__timing__drv__hold_violation_count', True, None),
+                ('unconstrained', 'sc__metric__timing__unconstrained', True, None),
+                ('peakpower', 'sc__metric__power__total', True, 'power'),
+                ('leakagepower', 'sc__metric__power__leakage__total', True, 'power'),
+                ('pins', 'sc__metric__design__io', True, None),
+                ('cells', 'sc__metric__design__instance__count', True, None),
+                ('macros', 'sc__metric__design__instance__count__macros', True, None),
+                ('nets', 'sc__metric__design__nets', True, None),
+                ('registers', 'sc__metric__design__registers', True, None),
+                ('inverters', 'sc__metric__design__inverters', True, None),
+                ('buffers', 'sc__metric__design__buffers', True, None),
+                ('logicdepth', 'sc__metric__design__logic__depth', True, None)
+            ]:
+                if or_metric in metrics:
+                    value = metrics[or_metric]
+
+                    # Check for INF timing
+                    if or_unit == 'time' and abs(value) > 1e24:
+                        or_use = False
+
+                    if or_unit:
+                        if or_unit in or_units:
+                            or_unit = or_units[or_unit]
+                        else:
+                            value *= or_unit
+                            or_unit = None
+
+                    if or_use:
+                        self.record_metric(metric, value, source_file=get_metric_sources(metric),
+                                           source_unit=or_unit)
+
+            if self.project.get("metric", "registers", step=self.step, index=self.index) is None:
+                metric_key = "sc__cellarea__design__instance__count__class:sequential_cell"
+                if metric_key in metrics:
+                    self.record_metric("registers", metrics[metric_key],
+                                       source_file=get_metric_sources("registers"))
+
+            if self.project.get("metric", "inverters", step=self.step, index=self.index) is None:
+                inverters = 0
+                for metric, value in metrics.items():
+                    if metric.startswith("sc__cellarea__design__instance__count__class:") and \
+                            metric.lower().endswith("inverter"):
+                        inverters += value
+                self.record_metric("inverters", inverters,
+                                   source_file=get_metric_sources("inverters"))
+
+            if self.project.get("metric", "buffers", step=self.step, index=self.index) is None:
+                buffers = 0
+                for metric, value in metrics.items():
+                    if metric.startswith("sc__cellarea__design__instance__count__class:") and \
+                            metric.lower().endswith("buffer"):
+                        buffers += value
+                self.record_metric("buffers", buffers,
+                                   source_file=get_metric_sources("buffers"))
+
+            ir_drop = None
+            for or_metric, value in metrics.items():
+                if or_metric.startswith("sc__step__design_powergrid__drop__worst__net") or \
+                        or_metric.startswith("sc__image__design_powergrid__drop__worst__net"):
+                    if not ir_drop:
+                        ir_drop = value
+                    else:
+                        ir_drop = max(value, ir_drop)
+
+            if ir_drop is not None:
+                self.record_metric("irdrop", ir_drop, source_file=get_metric_sources('irdrop'),
+                                   source_unit="V")
+
+            # setup wns and hold wns can be computed from setup slack and hold slack
+            if 'sc__metric__timing__setup__ws' in metrics and \
+                    has_timing and \
+                    self.schema_metric.get('setupslack', step=self.step, index=self.index) \
+                    is not None:
+                wns = min(0.0, self.schema_metric.get('setupslack',
+                                                      step=self.step, index=self.index))
+                wns_units = self.schema_metric.get('setupslack', field='unit')
+                self.record_metric("setupwns", wns, source_file=get_metric_sources('setupslack'),
+                                   source_unit=wns_units)
+
+            if 'sc__metric__timing__hold__ws' in metrics and \
+                    has_timing and \
+                    self.schema_metric.get('holdslack', step=self.step, index=self.index) \
+                    is not None:
+                wns = min(0.0, self.schema_metric.get('holdslack',
+                                                      step=self.step, index=self.index))
+                wns_units = self.schema_metric.get('holdslack', field='unit')
+                self.record_metric("holdwns", wns, source_file=get_metric_sources('holdslack'),
+                                   source_unit=wns_units)
+
+            drvs = None
+            for metric in [
+                    'sc__metric__timing__drv__max_slew',
+                    'sc__metric__timing__drv__max_cap',
+                    'sc__metric__timing__drv__max_fanout',
+                    'sc__metric__timing__drv__max_fanout',
+                    'sc__metric__timing__drv__floating__nets',
+                    'sc__metric__timing__drv__floating__pins',
+                    'sc__metric__timing__drv__overdriven__nets',
+                    'sc__metric__antenna__violating__nets',
+                    'sc__metric__antenna__violating__pins']:
+                if metric in metrics:
+                    if drvs is None:
+                        drvs = int(metrics[metric])
+                    else:
+                        drvs += int(metrics[metric])
+
+            if drvs is not None:
+                self.record_metric("drvs", drvs, source_file=get_metric_sources('drvs'))
+
+            if 'sc__step__route__drc_errors' in metrics:
+                self.record_metric("drcs", int(metrics['sc__step__route__drc_errors']),
+                                   source_file=get_metric_sources('drcs'))
+
+    def _generate_cell_area_report(self, ord_metrics):
+        cellarea_report = CellArea()
+
+        prefix = "sc__cellarea__design__instance"
+
+        filtered_data = {}
+        for key, value in ord_metrics.items():
+            if key.startswith(prefix):
+                filtered_data[key[len(prefix)+2:]] = value
+
+        modules = set()
+        modules.add("")
+        for key in filtered_data.keys():
+            if "__in_module:" in key:
+                module = key[key.find("__in_module:"):]
+                modules.add(module)
+
+        def process_cell(group):
+            data = {}
+            for key, value in filtered_data.items():
+                if (group != "" and key.endswith(group)):
+                    key = key[:key.find("__in_module:")]
+                    data[key] = value
+                elif (group == "" and "__in_module" not in key):
+                    data[key] = value
+
+            cell_type = None
+            cell_name = None
+
+            if not group:
+                cell_type = self.design_topmodule
+                cell_name = self.design_topmodule
+            else:
+                cell_type = group[len("__in_module:"):]
+
+            cellarea = None
+            cellcount = None
+
+            macroarea = None
+            macrocount = None
+
+            stdcell_types = (
+                'tie_cell',
+                'standard_cell',
+                'buffer',
+                'clock_buffer',
+                'timing_repair_buffer',
+                'inverter',
+                'clock_inverter',
+                'timing_Repair_inverter',
+                'clock_gate_cell',
+                'level_shifter_cell',
+                'sequential_cell',
+                'multi_input_combinational_cell',
+                'other'
+                )
+
+            stdcell_info_area = []
+            stdcell_info_count = []
+            stdcellarea = None
+            stdcellcount = None
+
+            for key, value in data.items():
+                if key == 'name':
+                    cell_name = value
+                elif key == 'count':
+                    cellcount = value
+                elif key == 'area':
+                    cellarea = value
+                elif key.startswith('count__class'):
+                    _, cell_class = key.split(':')
+                    if cell_class == 'macro':
+                        macrocount = value
+                    elif cell_class in stdcell_types:
+                        stdcell_info_count.append(value)
+                elif key.startswith('area__class'):
+                    _, cell_class = key.split(':')
+                    if cell_class == 'macro':
+                        macroarea = value
+                    elif cell_class in stdcell_types:
+                        stdcell_info_area.append(value)
+
+            if stdcell_info_count:
+                stdcellcount = sum(stdcell_info_count)
+            if stdcell_info_area:
+                stdcellarea = sum(stdcell_info_area)
+
+            cellarea_report.add_cell(
+                name=cell_name,
+                module=cell_type,
+                cellarea=cellarea,
+                cellcount=cellcount,
+                macroarea=macroarea,
+                macrocount=macrocount,
+                stdcellarea=stdcellarea,
+                stdcellcount=stdcellcount)
+
+            if filtered_data:
+                return True
+            return False
+
+        for module in modules:
+            process_cell(module)
+
+        if cellarea_report.size() > 0:
+            os.makedirs("reports/design", exist_ok=True)
+            cellarea_report.write_report("reports/design/hierarchical_cell_area.json")

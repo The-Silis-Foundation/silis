@@ -1,0 +1,130 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2023 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+
+  typedef struct {
+    int a;
+    int b;
+    byte c;
+  } sabcu_t;
+
+  typedef struct packed {
+    int a;
+    int b;
+    byte c;
+  } sabcp_t;
+
+  sabcu_t abcu;
+  sabcp_t abcp;
+
+  typedef struct {
+    int a;
+    int b4[4];
+  } sab4u_t;
+
+  typedef struct packed {
+    int a;
+    bit [3:0][31:0] b4;
+  } sab4p_t;
+
+  typedef struct {
+    int i;
+    real r;
+  } sir_t;
+
+  sab4u_t ab4u[2][3];
+  sab4p_t ab4p[2][3];
+  sir_t sir;
+
+  // A union member is not a structure, so a default applies to it as a whole, not to its
+  // members (IEEE 1800-2023 10.9.2)
+  typedef struct packed {
+    union packed {
+      logic [7:0] a;
+      logic [7:0] b;
+    } u;
+    logic [7:0] c;
+  } suc_t;
+
+  suc_t suc;
+
+  initial begin
+    abcp = '{1, 2, 3};
+    abcu = '{1, 2, 3};
+    if (abcp.a !== 1) $stop;
+    if (abcp.b !== 2) $stop;
+    if (abcp.c !== 3) $stop;
+    if (abcu.a !== 1) $stop;
+    if (abcu.b !== 2) $stop;
+    if (abcu.c !== 3) $stop;
+
+    abcp = '{3{40}};
+    abcu = '{3{40}};
+    if (abcp.a !== 40) $stop;
+    if (abcp.b !== 40) $stop;
+    if (abcp.c !== 40) $stop;
+    if (abcu.a !== 40) $stop;
+    if (abcu.b !== 40) $stop;
+    if (abcu.c !== 40) $stop;
+
+    abcp = '{default: 4, int : 5};
+    abcu = '{default: 4, int : 5};
+    if (abcp.a !== 5) $stop;
+    if (abcp.b !== 5) $stop;
+    if (abcp.c !== 4) $stop;
+    if (abcu.a !== 5) $stop;
+    if (abcu.b !== 5) $stop;
+    if (abcu.c !== 4) $stop;
+
+    abcp = '{int : 6, byte : 7, int : 8};
+    abcu = '{int : 6, byte : 7, int : 8};
+    if (abcp.a !== 8) $stop;
+    if (abcp.b !== 8) $stop;
+    if (abcp.c !== 7) $stop;
+    if (abcu.a !== 8) $stop;
+    if (abcu.b !== 8) $stop;
+    if (abcu.c !== 7) $stop;
+
+    ab4p = '{2{'{3{'{10, '{2{20, 30}}}}}}};
+    ab4u = '{2{'{3{'{10, '{2{20, 30}}}}}}};
+    $display("%p", ab4p);
+    if (ab4p[0][0].a !== 10) $stop;
+    if (ab4p[0][0].b4[0] !== 30) $stop;
+    if (ab4p[0][0].b4[1] !== 20) $stop;
+    if (ab4p[0][0].b4[2] !== 30) $stop;
+    if (ab4p[0][0].b4[3] !== 20) $stop;
+    if (ab4p[1][2].a !== 10) $stop;
+    if (ab4p[1][2].b4[0] !== 30) $stop;
+    if (ab4p[1][2].b4[1] !== 20) $stop;
+    if (ab4p[1][2].b4[2] !== 30) $stop;
+    if (ab4p[1][2].b4[3] !== 20) $stop;
+    $display("%p", ab4u);
+    if (ab4u[0][0].a !== 10) $stop;
+    if (ab4u[0][0].b4[0] !== 20) $stop;
+    if (ab4u[0][0].b4[1] !== 30) $stop;
+    if (ab4u[0][0].b4[2] !== 20) $stop;
+    if (ab4u[0][0].b4[3] !== 30) $stop;
+    if (ab4u[1][2].a !== 10) $stop;
+    if (ab4u[1][2].b4[0] !== 20) $stop;
+    if (ab4u[1][2].b4[1] !== 30) $stop;
+    if (ab4u[1][2].b4[2] !== 20) $stop;
+    if (ab4u[1][2].b4[3] !== 30) $stop;
+
+    sir = '{1, 2.2};
+    if (sir.i !== 1) $stop;
+    if (sir.r !== 2.2) $stop;
+
+    suc = '{default: 8'h5a};
+    if (suc !== 16'h5a5a) $stop;
+    suc = '{c: 8'h33, default: 8'h44};
+    if (suc !== 16'h4433) $stop;
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+
+endmodule

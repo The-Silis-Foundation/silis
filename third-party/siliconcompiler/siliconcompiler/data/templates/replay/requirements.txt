@@ -1,0 +1,7 @@
+# SiliconCompiler Replay Environment
+# Design: {{ design }}
+# Jobname: {{ jobname }}
+# Date: {{ date }}
+
+{% for pkg in pkgs %}{{ pkg }}
+{% endfor %}

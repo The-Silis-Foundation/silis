@@ -1,0 +1,68 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Antmicro Ltd
+// SPDX-License-Identifier: CC0-1.0
+
+`define check_rand(cl, field, cond) \
+begin \
+   automatic longint prev_result; \
+   automatic int ok; \
+   if (!bit'(cl.randomize())) $stop; \
+   prev_result = longint'(field); \
+   if (!(cond)) $stop; \
+   repeat(9) begin \
+      longint result; \
+      if (!bit'(cl.randomize())) $stop; \
+      result = longint'(field); \
+      if (!(cond)) $stop; \
+      if (result != prev_result) ok = 1; \
+      prev_result = result; \
+   end \
+   if (ok != 1) $stop; \
+end
+
+class Foo;
+  rand int m_intQueue[$];
+  rand int m_intQueueSized[$:9];
+  rand int m_idx;
+
+  function new;
+    m_intQueue = '{10{0}};
+    m_intQueueSized = '{10{0}};
+  endfunction
+
+  constraint int_queue_c {
+    m_idx inside {[0:9]};
+    m_intQueue[m_idx] == m_idx + 1;
+    foreach (m_intQueue[i]) {
+      m_intQueue[i] inside {[0:127]};
+    }
+  }
+  constraint int_queue_sized_c {
+    m_idx inside {[0:9]};
+    m_intQueueSized[m_idx] == m_idx + 1;
+    foreach (m_intQueueSized[i]) {
+      m_intQueueSized[i] inside {[0:127]};
+    }
+  }
+endclass
+
+module t_randomize_queue_constraints;
+  initial begin
+    automatic Foo foo = new;
+
+    `check_rand(foo, foo.m_idx, foo.m_idx inside {[0:9]} && foo.m_intQueue[foo.m_idx] == foo.m_idx + 1);
+    $display("Queue: %p", foo.m_intQueue);
+    `check_rand(foo, foo.m_intQueue[3], foo.m_intQueue[5] inside {[0:127]});
+    $display("Queue: %p", foo.m_intQueue);
+
+    `check_rand(foo, foo.m_idx, foo.m_idx inside {[0:9]} && foo.m_intQueueSized[foo.m_idx] == foo.m_idx + 1);
+    $display("Queue: %p", foo.m_intQueueSized);
+    `check_rand(foo, foo.m_intQueueSized[3], foo.m_intQueueSized[5] inside {[0:127]});
+    $display("Queue: %p", foo.m_intQueueSized);
+
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

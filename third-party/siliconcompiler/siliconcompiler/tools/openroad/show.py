@@ -1,0 +1,100 @@
+from siliconcompiler import ShowTask as BaseShowTask
+from siliconcompiler.tools.openroad import OpenROADTask
+from siliconcompiler.tools.openroad.open import OpenTask
+
+
+class ShowTask(OpenTask, BaseShowTask):
+    '''
+    Show a design in openroad
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def runtime_options(self):
+        options = super().runtime_options()
+        options.append("-gui")
+        return options
+
+
+class WebTask(ShowTask):
+    '''
+    Open with webviewer
+    '''
+
+    def task(self) -> str:
+        return "web"
+
+    def _default_enable_hier(self) -> bool:
+        # Only meaningful for netlist-only views: a hierarchical vg links into real
+        # dbModules for the hierarchy browser. A def is never paired with a netlist
+        # (see OpenTask._copy_show_files), so this does not affect def views.
+        return True
+
+    def setup(self):
+        super().setup()
+
+        # Set minimum version
+        self.add_version(">=26Q2-565", clobber=True)
+
+    def runtime_options(self):
+        options = super().runtime_options()
+        try:
+            options.remove("-gui")
+        except ValueError:
+            pass
+        options.append("-web")
+        return options
+
+
+class Show3DBloxTask(BaseShowTask, OpenROADTask):
+    '''
+    Show a 3D view of the design in openroad
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def task(self) -> str:
+        return "show3dblox"
+
+    def setup(self):
+        super().setup()
+        self.set_threads(clobber=True)
+        self.set_script("sc_open_3dblox.tcl")
+
+    def get_supported_task_extentions(self):
+        return ["3dbx"]
+
+    def runtime_options(self):
+        options = super().runtime_options()
+        try:
+            options.remove("-exit")
+        except ValueError:
+            pass
+        options.append("-gui")
+        return options
+
+
+class Show3DBloxWebTask(Show3DBloxTask):
+    '''
+    Show a 3D view of the design in openroad with webviewer
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def task(self) -> str:
+        return "web3dblox"
+
+    def setup(self):
+        super().setup()
+
+        # Set minimum version
+        self.add_version(">=26Q2-565", clobber=True)
+
+    def runtime_options(self):
+        options = super().runtime_options()
+        try:
+            options.remove("-gui")
+        except ValueError:
+            pass
+        options.append("-web")
+        return options

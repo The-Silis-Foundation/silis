@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# mypy: disallow-untyped-defs
+# pylint: disable=C0114,C0116,C0209,R0911,R0912,R0914,R0915
+######################################################################
+
+import argparse
+import os
+import re
+#from pprint import pprint,pformat
+
+#######################################################################
+
+
+def message_section(msg: str) -> int:
+    """Return sorting-section number for given commit message"""
+    if re.match(r'^Add', msg, flags=re.IGNORECASE):
+        return 10
+    if re.match(r'^Deprecate', msg, flags=re.IGNORECASE):
+        return 20
+    if re.match(r'^Remove', msg, flags=re.IGNORECASE):
+        return 30
+    if re.match(r'^Improve', msg, flags=re.IGNORECASE):
+        return 40
+    if re.match(r'^Change', msg, flags=re.IGNORECASE):
+        return 50
+    if re.match(r'^Support', msg, flags=re.IGNORECASE):
+        return 60
+    if re.match(r'^Optimize', msg, flags=re.IGNORECASE):
+        return 70
+    if re.match(r'^Fix', msg, flags=re.IGNORECASE):
+        return 80
+    if re.match(r'^(Internals|CI|Tests)', msg, flags=re.IGNORECASE):
+        return -1
+    if re.match(r'^Bump.* from .* to .*', msg, flags=re.IGNORECASE):  # dependabot
+        return -1
+    return 0
+
+
+def process() -> None:
+    cmd = "git log"
+
+    msgs = {}
+    msg_authors = {}
+    with os.popen(cmd) as fh:
+        author = ""
+        lineno = 0
+        key = None
+        for line in fh:
+            lineno += 1
+            line = line.rstrip()
+            # print("l %s" % line)
+            if re.match(r'^Date', line):
+                key = None
+                continue
+            if re.match(r'^commit', line):
+                key = None
+                continue
+            if re.search(r'Commentary: Changes update', line):
+                break
+
+            am = re.match(r'^Author: (.*) <(.*)>', line)
+            dm = re.match(r'^  +(.*)', line)
+
+            if am:
+                email = am.group(2)
+                author = am.group(1)
+                if re.search(r'verilator-bot', author):
+                    author = ""
+                    continue
+                if re.search(r'antmicro', email):
+                    author += ", Antmicro Ltd."
+                if re.search(r'stud\.uni-heidelberg', email):
+                    author += ", Heidelberg University"
+                if re.search(r'tenstorrent', email):
+                    author += ", Testorrent USA, Inc."
+                if re.search(r'secturion', email):
+                    author += ", Secturion Systems, Inc."
+                if re.search(r'github action', author):
+                    author = ""
+                    continue
+
+            elif author != "" and dm:
+                msg = dm.group(1)
+
+                mid = re.search(r'\(#([0-9][0-9][0-9][0-9]+)', line)
+                if mid:
+                    bug_id = mid.group(1)
+                else:
+                    bug_id = " %d" % lineno
+
+                section = message_section(msg)
+                if section >= 0:
+                    key = "%06s_%06s_%06d" % (section, bug_id, lineno)
+                    msgs[key] = '* ' + msg
+                    msg_authors[key] = author
+                    # print("i [%s]  %s [%s]" % (key, msg, author))
+
+                author = ""
+
+            elif key:
+                m = re.search(r'(fix|fixes) *#\(?([0-9][0-9][0-9][0-9]+)',
+                              line,
+                              flags=re.IGNORECASE)
+                if m:
+                    bug_id = m.group(2)
+                    if ("#" + bug_id) not in msgs[key]:
+                        # print("K %s" % line)
+                        msgs[key] += ' (#' + bug_id + ')'
+
+    if not msgs:
+        print("No Changes need to be inserted.")
+        return
+
+    print()
+    print("Insertion-sort the following lines into 'Changes' file:")
+    print()
+
+    dedup = {}
+    for key in sorted(msgs.keys()):
+        if msgs[key] not in dedup:
+            dedup[msgs[key]] = True
+            msg = msgs[key]
+            if not re.search(r'\.$', msg):
+                msg += '.'
+            print(msg + ' [' + msg_authors[key] + ']')
+
+    print()
+    print("You may now want to clean up spelling, and commit:")
+    print("  (make spelling | grep -vi 'writing output')")
+    print("  git ci -am 'Commentary: Changes update'")
+    print()
+
+
+#######################################################################
+
+parser = argparse.ArgumentParser(
+    allow_abbrev=False,
+    prog="log_changes",
+    description="Create example entries for 'Changes' from parsing 'git log'",
+    epilog="""This program is free software; you can redistribute it and/or modify it
+under the terms of either the GNU Lesser General Public License Version 3
+or the Perl Artistic License Version 2.0.
+
+SPDX-FileCopyrightText: 2019-2026 Wilson Snyder
+SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+""")
+
+parser.add_argument('--debug', action='store_true', help='enable debug')
+Args = parser.parse_args()
+
+process()
+
+######################################################################
+# Local Variables:
+# compile-command: "cd .. ; nodist/log_changes"
+# End:

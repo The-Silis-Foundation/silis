@@ -1,0 +1,47 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain
+// SPDX-FileCopyrightText: 2025 Antmicro
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
+// verilog_format: on
+
+module t;
+  logic [7:0] a = 1;
+  logic [7:0] b = 2;
+  logic [7:0] c = 3;
+  logic [7:0] d = 4;
+  logic [7:0] e = 5;
+
+  initial begin
+    force e = a + b + c + d;
+    `checkh(e, 10);
+    #1;
+    a = 0;
+    #1;
+    `checkh(e, 9);
+
+    b = 0;
+    #1;
+    `checkh(e, 7);
+
+    c = 0;
+    #1;
+    `checkh(e, 4);
+
+    d = 0;
+    #1;
+    `checkh(e, 0);
+
+    release e;
+    // Not driven, change value after procedural assignment.
+    `checkh(e, 0);
+    e = 5;
+    `checkh(e, 5);
+
+    $finish;
+  end
+endmodule

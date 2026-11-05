@@ -1,0 +1,26 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain
+// SPDX-FileCopyrightText: 2025 Antmicro
+// SPDX-License-Identifier: CC0-1.0
+
+class Class1;
+  int value0 = 7;
+endclass
+
+module t;
+  initial begin
+    int i;
+    Class1 q[$];
+    repeat (15) begin
+      automatic Class1 x = new;
+      q = {q, x};
+    end
+    while (i < q.size()) begin
+      if ((q[i].value0 > 8) || (q[i].value0 < 5)) $stop;
+      i += 1;
+    end
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

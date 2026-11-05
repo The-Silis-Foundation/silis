@@ -1,0 +1,11 @@
+
+        read_liberty -lib /home/eatheswar/silisfoundation/silis/third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+        read_verilog -sv /home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/chip_top.sv /home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/source/simple_alu.v;
+
+        synth -top chip_top
+        dfflibmap -liberty /home/eatheswar/silisfoundation/silis/third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+        abc -liberty /home/eatheswar/silisfoundation/silis/third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+        #flatten
+        tee -o /home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/reports/area.rpt stat -liberty /home/eatheswar/silisfoundation/silis/third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib -json
+        write_verilog -noattr /home/eatheswar/silisfoundation/silis/examples/cpp_macro_to_sv_chip/chip_top_proj/netlist/chip_top_netlist.v
+        

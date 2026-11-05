@@ -1,0 +1,21 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2024 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+virtual class Base;
+  pure virtual function void pvfunc();
+endclass
+
+class Bar extends Base;
+  // Bad, no implementation of pvfunc
+endclass
+
+module t;
+  initial begin
+    automatic Bar obj = new();
+    obj.pvfunc();
+    $stop;
+  end
+endmodule

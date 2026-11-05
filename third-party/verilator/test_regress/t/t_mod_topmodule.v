@@ -1,0 +1,31 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This test verifies that a top-module can be specified which
+// is instantiated beneath another module in the compiled source
+// code.
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2021 Dan Petrisko
+// SPDX-License-Identifier: CC0-1.0
+
+module top (
+    input clk
+);
+
+  always_ff @(posedge clk) begin
+    $write("*-* All Finished *-*\n");
+    $finish();
+  end
+
+endmodule
+
+module faketop;
+
+  top top ();
+
+  // Stop immediately if this module is instantiated
+  initial begin
+    $stop();
+  end
+
+endmodule

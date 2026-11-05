@@ -1,0 +1,29 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2015 Johan Bjork
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+  localparam STR = "string";
+  function logic checkParameter(input logic [8:0] N);
+    $info("For %m, x is %d.", N);
+    if (N == 1) return 0;
+    $fatal(1, "Parameter %d is invalid...%s and %s", N, STR, "constant both work");
+  endfunction
+
+`ifdef FAILING_ASSERTIONS
+  localparam X = checkParameter(5);
+`else
+  localparam X = checkParameter(1);
+`endif
+
+  generate
+    $info("%m: In generate");  // Issue 6445
+  endgenerate
+
+  initial begin
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

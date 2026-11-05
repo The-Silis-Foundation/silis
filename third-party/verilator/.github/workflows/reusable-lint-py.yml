@@ -1,0 +1,45 @@
+---
+# DESCRIPTION: Github actions config
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+name: reusable-lint-py
+
+on:
+  workflow_call:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: repo
+
+jobs:
+
+  lint-py:
+    runs-on: ubuntu-22.04
+    name: Sub-lint | Python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          path: repo
+
+      - name: Install dependencies
+        uses: ./repo/.github/actions/install-deps
+        with:
+          stage: lint-py
+
+      - name: Configure
+        run: |
+          autoconf
+          ./configure --enable-longtests --enable-ccwarn
+
+      - name: Set up Python venv
+        uses: ./repo/.github/actions/setup-venv
+        with:
+          # Check the event too: 'github.ref' is the base branch on a closed pull request
+          save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
+
+      - name: Lint
+        run: |-
+          source .venv/bin/activate
+          make -k lint-py

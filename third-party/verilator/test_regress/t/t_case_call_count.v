@@ -1,0 +1,74 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain
+// SPDX-FileCopyrightText: 2025 Antmicro
+// SPDX-License-Identifier: CC0-1.0
+
+class Cls;
+  int callCount = 0;
+  int callCount2 = 0;
+  int value = 6;
+  bit [5:0] value2 = 6;
+  function int get();
+    callCount += 1;
+    return value;
+  endfunction
+  function bit [5:0] get2();
+    callCount2 += 1;
+    return value2;
+  endfunction
+  function int getPure();
+    return callCount2;
+  endfunction
+  function int sel();
+    case (get())
+      5: return 15;
+      6: return 16;
+      default: return 17;
+    endcase
+  endfunction
+endclass
+
+module t;
+  Cls c;
+  function automatic int sel2();
+    case (c.get2())
+      5: return 25;
+      6: return 26;
+      default: return 27;
+    endcase
+  endfunction
+  initial begin
+    bit called;
+    c = new;
+    case (c.get())
+      4: $stop;
+      5: $stop;
+      6: called = 1;
+      7: $stop;
+      default: $stop;
+    endcase
+    if (!called) $stop;
+    if (c.callCount != 1) $stop;
+    called = 0;
+    case (c.get2())
+      4: $stop;
+      5: $stop;
+      6: called = 1;
+      7: $stop;
+      default: $stop;
+    endcase
+    case (c.getPure())
+      1: ;
+      default: $stop;
+    endcase
+    if (!called) $stop;
+    if (c.callCount2 != 1) $stop;
+    if (c.sel() != 16) $stop;
+    if (c.callCount != 2) $stop;
+    if (sel2() != 26) $stop;
+    if (c.callCount2 != 2) $stop;
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule

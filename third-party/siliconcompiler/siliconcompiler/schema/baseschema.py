@@ -1,0 +1,1711 @@
+# Copyright 2025 Silicon Compiler Authors. All Rights Reserved.
+
+# NOTE: this file cannot rely on any third-party dependencies, including other
+# SC dependencies outside of its directory, since it may be used by tool drivers
+# that have isolated Python environments.
+
+import codecs
+import contextlib
+import copy
+import importlib
+import logging
+import warnings
+import pathlib
+
+try:
+    import gzip
+    _has_gzip = True
+except ModuleNotFoundError:
+    _has_gzip = False
+
+try:
+    import orjson as json
+    import json as stdlib_json
+    _has_orjson = True
+except ModuleNotFoundError:
+    import json
+    stdlib_json = json
+    _has_orjson = False
+
+import os.path
+
+from enum import Enum, auto
+from functools import cache, lru_cache
+from typing import Dict, Type, Tuple, TypeVar, Union, Set, Callable, List, Optional, \
+    TextIO, Iterable, Iterator, Any
+
+from .parameter import Parameter, NodeValue
+from .journal import Journal
+from ._metadata import version
+
+TSchema = TypeVar('TSchema', bound='BaseSchema')
+
+
+def _json_escape_error(exc: UnicodeEncodeError) -> Tuple[str, int]:
+    r'''Replace a run of non-ASCII characters with their JSON ``\uXXXX`` escapes.
+
+    ``encode_basestring_ascii`` is the C escaper :func:`json.dumps` itself uses,
+    so an astral character comes out as the surrogate pair JSON requires. It
+    returns a quoted string literal; the quotes are dropped because the run is
+    being spliced back into one.
+    '''
+    return stdlib_json.encoder.encode_basestring_ascii(
+        exc.object[exc.start:exc.end])[1:-1], exc.end
+
+
+# codecs keeps one process-wide registry of error handlers, so this name has to
+# be unlikely to collide with another package's. Deriving it from __name__ gets
+# that for free and keeps the module from naming the package around it -- this
+# file is loaded by tool drivers in isolated environments and cannot assume it
+# is sitting inside siliconcompiler.
+_JSON_ASCII_ERRORS = f"{__name__}.jsonescape"
+
+codecs.register_error(_JSON_ASCII_ERRORS, _json_escape_error)
+
+
+class SchemaFrozenError(RuntimeError):
+    """
+    Raised when an attempt is made to modify a frozen (immutable) schema.
+
+    See :meth:`BaseSchema._freeze` and :class:`CachedSchema`.
+    """
+
+
+class SchemaVersionWarning(UserWarning):
+    """
+    Warned when a manifest is read that was written by a newer schema than this
+    library implements.
+
+    Reading is only backwards compatible: this schema knows how to migrate an
+    older manifest, but nothing about what a newer one holds. A key it does not
+    have is dropped and a value whose type or legal values changed since is
+    rejected or silently replaced by its default, so the read either fails or
+    quietly returns something other than what was written. Neither is worth
+    ending a run over -- a caller that cannot use the result should fall back to
+    redoing the work, which is what the scheduler does, rerunning the node whose
+    manifest it could not read -- but it is always worth saying.
+    """
+
+
+class LazyLoad(Enum):
+    """
+    Controls manifest loading
+    """
+    OFF = auto()  # load entire schema immediately
+    ON = auto()  # store schema but do not load it
+    FORWARD = auto()  # load the current section but do not load children
+
+    @property
+    def next(self) -> "LazyLoad":
+        """
+        Returns the next state for lazy loading
+        """
+        if self == LazyLoad.ON:
+            return LazyLoad.ON
+        if self == LazyLoad.FORWARD:
+            return LazyLoad.ON
+        return LazyLoad.OFF
+
+    @property
+    def is_enforced(self) -> bool:
+        """
+        Returns true when the current section should not be loaded.
+        """
+        return self == LazyLoad.ON
+
+
+class BaseSchema:
+    '''
+    This class maintains the access and file IO operations for the schema.
+    It can be modified using :class:`EditableSchema`.
+    '''
+
+    _version_key = "schemaversion"
+    __version = tuple([int(v) for v in version.split('.')])
+
+    def __init__(self):
+        self.__manifest: Dict[str, Union["BaseSchema", Parameter]] = {}
+        self.__default: Optional[Union["BaseSchema", Parameter]] = None
+        self.__journal: Journal = Journal()
+        self.__parent: Optional["BaseSchema"] = None
+        self.__active: Optional[Dict] = None
+        self.__key: Optional[str] = None
+        self.__lazy: Optional[Tuple[Optional[Tuple[int, ...]], Dict]] = None
+        self.__frozen: bool = False
+
+    @property
+    def __is_root(self) -> bool:
+        '''
+        Returns true if the object is the root of the schema
+        '''
+        try:
+            return self.__parent is None
+        except AttributeError:
+            return True
+
+    @property
+    def _keypath(self) -> Tuple[str, ...]:
+        '''
+        Returns the key to the current section of the schema
+        '''
+        if self.__is_root:
+            return tuple()
+        try:
+            parentpath = self.__parent._keypath
+            key = self.__key
+        except AttributeError:
+            # Guard against partially setup parents during serialization
+            return tuple()
+        return tuple([*parentpath, key])
+
+    def __child_schemas(self) -> "List[BaseSchema]":
+        '''
+        Returns the immediate child :class:`BaseSchema` objects held by this
+        schema (manifest entries and the default template).
+        '''
+        children = [value for value in self.__manifest.values()
+                    if isinstance(value, BaseSchema)]
+        if isinstance(self.__default, BaseSchema):
+            children.append(self.__default)
+        return children
+
+    def __iter_subtree(self) -> "List[BaseSchema]":
+        '''
+        Returns this schema followed by every nested child schema (depth first).
+        '''
+        nodes = [self]
+        for child in self.__child_schemas():
+            nodes.extend(child.__iter_subtree())
+        return nodes
+
+    @property
+    def _is_frozen(self) -> bool:
+        '''
+        Returns True if this schema is frozen and cannot be modified.
+        '''
+        try:
+            return self.__frozen
+        except AttributeError:
+            # Guard against partially constructed objects during serialization
+            return False
+
+    def _freeze(self) -> None:
+        '''
+        Marks this schema and all of its child schemas as frozen, preventing
+        further modification via :meth:`set`, :meth:`add`, :meth:`unset`,
+        :meth:`remove`, or :class:`EditableSchema`.
+
+        This is used to protect shared/cached schema objects (see
+        :class:`CachedSchema`) from accidental in-place mutation. A frozen
+        object can still be copied via :meth:`copy` or serialized and
+        deserialized; the resulting object is always mutable.
+        '''
+        for node in self.__iter_subtree():
+            node.__frozen = True
+
+    def _unfreeze(self) -> None:
+        '''
+        Clears the frozen state on this schema and all of its child schemas,
+        making it mutable again.
+        '''
+        for node in self.__iter_subtree():
+            node.__frozen = False
+
+    @contextlib.contextmanager
+    def _thaw(self):
+        '''
+        Context manager that temporarily unfreezes this schema (and its
+        children), restoring the previous frozen state on exit.
+
+        This is the sanctioned mechanism for mutating a frozen object in place,
+        for example when writing resolved file paths or hashes back into a
+        shared object during a run:
+
+        >>> with pdk._thaw():
+        ...     pdk.set(*keypath, hashes, field="filehash")
+        '''
+        snapshot = [(node, node._is_frozen) for node in self.__iter_subtree()]
+        for node, _ in snapshot:
+            node.__frozen = False
+        try:
+            yield self
+        finally:
+            for node, was_frozen in snapshot:
+                node.__frozen = was_frozen
+
+    def __assert_mutable(self, action: str, keypath: Tuple[str, ...]) -> None:
+        '''
+        Raises :class:`SchemaFrozenError` if this schema is frozen.
+        '''
+        if self._is_frozen:
+            raise SchemaFrozenError(
+                f"cannot {action} {self.__format_key(*keypath)}: "
+                "schema is frozen. Use copy() to obtain a mutable version or "
+                "_thaw() to modify in place.")
+
+    @staticmethod
+    def __instantiate(cls: Type[TSchema]) -> TSchema:
+        """
+        Constructs a schema object while loading from disk. Objects loaded from
+        disk are repopulated in place, so cached (:class:`CachedSchema`) classes
+        must be built fresh and unfrozen rather than returning the shared,
+        frozen singleton.
+        """
+        if isinstance(cls, CachedSchemaMeta):
+            # Loading from disk repopulates the object in place, so it must not
+            # return the shared, frozen singleton. Construct a private instance
+            # directly, bypassing the cache, rather than copying the singleton:
+            # every value is about to be replaced from the manifest, and a deep
+            # copy of a large library costs far more than building it again.
+            obj = type.__call__(cls)
+            if any(node._is_frozen for node in obj.__iter_subtree()):
+                # The constructor embedded another shared, frozen object.
+                # Copying is the only way to get a mutable version of it
+                # without unfreezing the original in place.
+                return obj.copy()
+            return obj
+        return cls()
+
+    @staticmethod
+    @cache
+    def __get_child_classes() -> Dict[str, Type["BaseSchema"]]:
+        """
+        Returns all known subclasses of BaseSchema
+        """
+        def recurse(cls):
+            subclss = set()
+            subclss.add(cls)
+            for subcls in cls.__subclasses__():
+                subclss.update(recurse(subcls))
+            return subclss
+
+        # Resolve true base
+        cls_mapping = {}
+        for cls in recurse(BaseSchema):
+            try:
+                cls_mapping.setdefault(cls._getdict_type(), set()).add(cls)
+            except NotImplementedError:
+                pass
+
+        # Build lookup table
+        cls_map = {}
+        for cls_type, clss in cls_mapping.items():
+            for cls in clss:
+                cls_map[f"{cls.__module__}/{cls.__name__}"] = cls
+
+            if len(clss) > 1:
+                found = False
+                for cls in clss:
+                    if cls.__name__ == cls_type:
+                        cls_map[cls_type] = cls
+                        found = True
+                        break
+                if not found:
+                    candidates = sorted(f"{c.__module__}/{c.__name__}" for c in clss)
+                    raise RuntimeError(
+                        f"Ambiguous schema type '{cls_type}'. Candidates: {', '.join(candidates)}"
+                    )
+            else:
+                cls_map[cls_type] = list(clss)[0]
+        return cls_map
+
+    @staticmethod
+    @cache
+    def __load_schema_class(cls_name: str) -> Optional[Type["BaseSchema"]]:
+        """
+        Load a schema class from a string
+        """
+        try:
+            module_name, cls_name = cls_name.split("/")
+        except (ValueError, AttributeError):
+            return None
+
+        try:
+            module = importlib.import_module(module_name)
+        except (ImportError, ModuleNotFoundError, SyntaxError):
+            return None
+
+        cls = getattr(module, cls_name, None)
+        if not cls:
+            return None
+        if not issubclass(cls, BaseSchema):
+            raise TypeError(f"{cls_name} must be a BaseSchema type")
+        return cls
+
+    @staticmethod
+    def __process_meta_section(meta: Dict[str, str]) -> List[Type["BaseSchema"]]:
+        """
+        Handle __meta__ section of the schema by loading the appropriate class
+        """
+        cls_map = BaseSchema.__get_child_classes()
+
+        # Lookup object, use class first, then type
+        cls_name = meta.get("class", None)
+        clss = []
+        if cls_name:
+            cls = cls_map.get(cls_name, None)
+            if not cls:
+                cls = BaseSchema.__load_schema_class(cls_name)
+            if cls:
+                clss.append(cls)
+        sc_type = cls_map.get(meta.get("sctype", None), None)
+        if sc_type and sc_type not in clss:
+            clss.append(sc_type)
+        return clss
+
+    @staticmethod
+    def __extractversion(manifest: Dict) -> Optional[Tuple[int, ...]]:
+        schema_version = manifest.get(BaseSchema._version_key, None)
+        if schema_version:
+            param = Parameter.from_dict(schema_version,
+                                        tuple([BaseSchema._version_key]),
+                                        None)
+            return tuple([int(v) for v in param.get().split('.')])
+        return None
+
+    @staticmethod
+    def _resolve_version(manifest: Dict) -> Tuple[int, ...]:
+        """
+        Returns the schema version a manifest was written with, warning when it
+        is newer than this schema's.
+
+        Shared with :class:`SafeSchema`, which decodes manifests without any of
+        the classes that wrote them and so overrides :meth:`_from_dict` rather
+        than reaching this through it.
+
+        Args:
+            manifest (dict): Manifest to read the version from.
+        """
+        version = BaseSchema.__extractversion(manifest)
+
+        if version is None:
+            # Not every manifest records one -- a design or library written on
+            # its own does not -- so read it as this schema's own.
+            return BaseSchema.__version
+
+        if version > BaseSchema.__version:
+            warnings.warn(
+                f"manifest schema version ({'.'.join([str(v) for v in version])}) is "
+                "newer than the supported schema version "
+                f"({'.'.join([str(v) for v in BaseSchema.__version])}), "
+                "values may be incomplete or incorrect",
+                SchemaVersionWarning, stacklevel=2)
+
+        return version
+
+    def __ensure_lazy_elab(self):
+        if not self.__lazy:
+            return
+
+        version, manifest = self.__lazy
+        self.__lazy = None
+
+        self._from_dict(manifest, self._keypath, version=version, lazyload=LazyLoad.FORWARD)
+
+    def _from_dict(self, manifest: Dict,
+                   keypath: Union[List[str], Tuple[str, ...]],
+                   version: Optional[Tuple[int, ...]] = None,
+                   lazyload: LazyLoad = LazyLoad.ON) \
+            -> Tuple[Set[Tuple[str, ...]], Set[Tuple[str, ...]]]:
+        '''
+        Decodes a dictionary into a schema object
+
+        Args:
+            manifest (dict): Manifest to decide.
+            keypath (list of str): Path to the current keypath.
+            version ((int, int, int)): Version of the dictionary schema
+        '''
+        # find schema version
+        if not version:
+            version = BaseSchema._resolve_version(manifest)
+
+        handled = set()
+        missing = set()
+
+        if "__journal__" in manifest:
+            self.__journal.from_dict(manifest["__journal__"])
+            if lazyload != LazyLoad.ON:
+                del manifest["__journal__"]
+
+        if lazyload == LazyLoad.ON:
+            self.__lazy = (version, manifest)
+            return set(), set()
+
+        if "__meta__" in manifest:
+            del manifest["__meta__"]
+
+        if self.__default:
+            data = manifest.pop("default", None)
+            if data:
+                if isinstance(self.__default, BaseSchema):
+                    self.__default._from_dict(data, tuple([*keypath, "default"]), version=version,
+                                              lazyload=lazyload.next)
+                else:
+                    self.__default._from_dict(data, tuple([*keypath, "default"]), version=version)
+                handled.add("default")
+
+            # Remove preloaded information manifest
+            self.__manifest.clear()
+
+        for key, data in manifest.items():
+            data_keypath = tuple([*keypath, key])
+            obj = self.__manifest.get(key, None)
+            if not obj and isinstance(data, dict) and "__meta__" in data:
+                # Lookup object, use class first, then type
+                clss = BaseSchema.__process_meta_section(data["__meta__"])
+                if clss and clss[0] is BaseSchema and self.__default:
+                    # Use default when BaseSchema is the class
+                    obj = self.__default.copy(key=data_keypath)
+                    self.__manifest[key] = obj
+                elif clss:
+                    for cls in clss:
+                        # Create object and connect to schema
+                        try:
+                            obj = BaseSchema.__instantiate(cls)
+                            break
+                        except Exception:
+                            continue
+                    obj.__parent = self
+                    obj.__key = key
+                    self.__manifest[key] = obj
+
+            # Use default if it is available
+            if not obj and self.__default:
+                obj = self.__default.copy(key=data_keypath)
+                self.__manifest[key] = obj
+
+            if obj:
+                if isinstance(obj, BaseSchema):
+                    obj._from_dict(data, data_keypath, version=version, lazyload=lazyload.next)
+                else:
+                    obj._from_dict(data, data_keypath, version=version)
+                handled.add(key)
+            else:
+                missing.add(key)
+
+        return missing, set(self.__manifest.keys()).difference(handled)
+
+    # Manifest methods
+    @classmethod
+    def from_manifest(cls: Type[TSchema],
+                      filepath: Union[None, str] = None,
+                      cfg: Union[None, Dict] = None,
+                      lazyload: bool = True) -> TSchema:
+        '''
+        Create a new schema based on the provided source files.
+
+        The two arguments to this method are mutually exclusive.
+
+        Args:
+            filepath (path): Initial manifest.
+            cfg (dict): Initial configuration dictionary.
+        '''
+
+        if not filepath and cfg is None:
+            raise RuntimeError("filepath or dictionary is required")
+
+        if filepath:
+            cfg = BaseSchema._read_manifest(filepath)
+
+        new_clss = []
+        if "__meta__" in cfg:
+            # Determine correct class
+            new_clss = BaseSchema.__process_meta_section(cfg["__meta__"])
+        schema = None
+        for new_cls in new_clss:
+            try:
+                schema = BaseSchema.__instantiate(new_cls)
+                break
+            except Exception:
+                pass
+
+        if schema is None:
+            schema = cls()
+
+        if lazyload:
+            do_lazyload = LazyLoad.ON
+        else:
+            do_lazyload = LazyLoad.OFF
+
+        schema._from_dict(cfg, tuple(), lazyload=do_lazyload)
+
+        return schema
+
+    @staticmethod
+    @contextlib.contextmanager
+    def __open_file(filepath: Union[str, bytes, pathlib.Path],
+                    is_read: bool = True) -> Iterator[TextIO]:
+        # fsdecode so the extension test is str-vs-str for every path flavour:
+        # splitext on a bytes path yields b".gz", which never equals ".gz".
+        _, ext = os.path.splitext(os.fsdecode(filepath))
+        if ext.lower() == ".gz":
+            if not _has_gzip:
+                raise RuntimeError("gzip is not available")
+            fileobj = gzip.open(filepath, mode="rt" if is_read else "wt", encoding="utf-8")
+        else:
+            fileobj = open(filepath, mode="r" if is_read else "w", encoding="utf-8")
+
+        try:
+            yield fileobj
+        finally:
+            fileobj.close()
+
+    def __format_key(self, *key: str):
+        return f"[{','.join([*self._keypath, *key])}]"
+
+    @staticmethod
+    def _read_manifest(filepath: str) -> Dict:
+        """
+        Reads a manifest from disk and returns dictionary.
+
+        Args:
+            filename (path): Path to a manifest file to be loaded.
+        """
+
+        with BaseSchema.__open_file(filepath) as fin:
+            return json.loads(fin.read())
+
+    def read_manifest(self, filepath: str) -> None:
+        """
+        Reads a manifest from disk and replaces the current data with the data in the file.
+
+        Args:
+            filename (path): Path to a manifest file to be loaded.
+
+        Examples:
+            >>> schema.read_manifest('mychip.json')
+            Loads the file mychip.json into the current Schema object.
+        """
+
+        self._from_dict(BaseSchema._read_manifest(filepath), [])
+
+    def write_manifest(self, filepath: Union[str, bytes, pathlib.Path, TextIO]) -> None:
+        '''
+        Writes the manifest to a file or an open text stream.
+
+        Args:
+            filepath (path or stream): Output filepath, or an already-open text
+                stream. A stream is written to directly -- nothing touches the
+                filesystem -- and is left open for its owner to close.
+
+        Examples:
+            >>> schema.write_manifest('mydump.json')
+            Dumps the current manifest into mydump.json
+            >>> buf = io.StringIO()
+            >>> schema.write_manifest(buf)
+            Dumps the current manifest into buf
+        '''
+
+        # Serialized before the destination is touched: opening first meant a
+        # failure part way through getdict() had already truncated the file.
+        def default(obj: Any) -> Any:
+            if isinstance(obj, pathlib.PurePath):
+                # Cast everything to a windows path and convert to posix.
+                # https://stackoverflow.com/questions/73682260
+                return pathlib.PureWindowsPath(obj).as_posix()
+            raise TypeError
+
+        manifest = self.getdict()
+        if _has_orjson:
+            manifest_str = json.dumps(manifest, option=json.OPT_INDENT_2,
+                                      default=default).decode()
+            # orjson emits UTF-8 and has no ensure_ascii; the stdlib escapes
+            # non-ASCII by default. Without this the manifest's encoding
+            # depends on which JSON library happened to be installed, and an
+            # ASCII manifest is the thing that lets any reader decode it
+            # whatever the host locale claims -- a server running under
+            # LANG=C failed a whole job on one Greek letter in a journal.
+            #
+            # Escape in place rather than re-serializing with the stdlib:
+            # json.dumps skips its C encoder whenever indent is set, so the
+            # fallback would push the whole manifest -- megabytes of it --
+            # through the pure-Python encoder. One Greek letter in a help
+            # string made the manifest non-ASCII and cost 45% of a test
+            # suite's runtime. Only \uXXXX is a legal JSON escape, so this
+            # cannot use backslashreplace, which works per byte and yields
+            # \xNN. isascii() is a C-level scan, so ASCII manifests (the
+            # overwhelming majority) pay nothing.
+            if not manifest_str.isascii():
+                manifest_str = manifest_str \
+                    .encode("ascii", _JSON_ASCII_ERRORS) \
+                    .decode("ascii")
+        else:
+            manifest_str = json.dumps(manifest, indent=2, default=default)
+
+        # The caller's stream: borrowed, so write to it and leave it open. Keyed
+        # off the path types because those are the closed set -- "has a .write()"
+        # is open-ended, and a pathlib.Path has no .write() to be caught by it.
+        # (str, bytes, os.PathLike) is what os.fspath itself accepts as a path.
+        if not isinstance(filepath, (str, bytes, os.PathLike)):
+            filepath.write(manifest_str)
+            return
+
+        with BaseSchema.__open_file(filepath, is_read=False) as fout:
+            fout.write(manifest_str)
+
+    # Accessor methods
+    def __search(self,
+                 *keypath: str,
+                 insert_defaults: bool = False,
+                 use_default: bool = False,
+                 require_leaf: bool = True,
+                 complete_path: Optional[List[str]] = None,
+                 elaborate_leaf: bool = True) -> Union["BaseSchema", Parameter]:
+
+        if len(keypath) == 0:
+            if require_leaf:
+                raise KeyError
+            else:
+                if elaborate_leaf:
+                    self.__ensure_lazy_elab()
+                return self
+
+        self.__ensure_lazy_elab()
+
+        if complete_path is None:
+            complete_path = []
+        complete_path.append(keypath[0])
+
+        if keypath[0] == "default":
+            key_param = self.__default
+        else:
+            key_param = self.__manifest.get(keypath[0], None)
+        if not key_param:
+            if insert_defaults and self.__default:
+                if isinstance(self.__default, Parameter) and self.__default.get(field='lock'):
+                    raise KeyError
+                key_param = self.__default.copy(key=complete_path)
+                self.__manifest[keypath[0]] = key_param
+                # Keep lazily-materialized children as frozen as their parent so
+                # freezing cannot be escaped by reaching a not-yet-instantiated
+                # keypath (e.g. via get(field="schema")).
+                if self._is_frozen and isinstance(key_param, BaseSchema):
+                    key_param._freeze()
+            elif use_default and self.__default:
+                key_param = self.__default
+            else:
+                raise KeyError
+        if isinstance(key_param, BaseSchema):
+            if len(keypath) == 1:
+                if require_leaf:
+                    raise KeyError
+                else:
+                    if elaborate_leaf:
+                        key_param.__ensure_lazy_elab()
+                    return key_param
+            return key_param.__search(*keypath[1:],
+                                      insert_defaults=insert_defaults,
+                                      use_default=use_default,
+                                      require_leaf=require_leaf,
+                                      complete_path=complete_path)
+        elif len(keypath) != 1:
+            # Key extends beyond parameter
+            raise KeyError
+        return key_param
+
+    def get(self, *keypath: str, field: Optional[str] = 'value',
+            step: Optional[str] = None, index: Optional[Union[int, str]] = None):
+        """
+        Returns a parameter field from the schema.
+
+        Returns a schema parameter field based on the keypath provided in the
+        ``*keypath``. The returned type is consistent with the type field of the parameter.
+        Accessing a non-existent keypath raises a KeyError.
+
+        Args:
+            keypath (list of str): Keypath to access.
+            field (str): Parameter field to fetch, if None will return the :class:`Parameter`
+                object stored, if field is 'schema' the schema at this keypath will be returned.
+            step (str): Step name to access for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to access for parameters that may be specified
+                on a per-node basis.
+
+        Returns:
+            Value found for the keypath and field provided.
+
+        Examples:
+            >>> foundry = schema.get('pdk', 'virtual', 'foundry')
+            Returns the value of [pdk,virtual,foundry].
+        """
+
+        try:
+            require_leaf = True
+            insert_defaults = False
+            if field == 'schema':
+                require_leaf = False
+                insert_defaults = True
+            param = self.__search(
+                *keypath,
+                insert_defaults=insert_defaults,
+                use_default=True,
+                require_leaf=require_leaf)
+            if field == 'schema':
+                if isinstance(param, Parameter):
+                    raise ValueError(f"{self.__format_key(*keypath)} is a complete keypath")
+                self.__journal.record("get", keypath, field=field, step=step, index=index)
+                param.__journal = self.__journal.get_child(*keypath)
+                return param
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+        if field is None:
+            return param
+
+        try:
+            get_ret = param.get(field, step=step, index=index)
+            self.__journal.record("get", keypath, field=field, step=step, index=index)
+            return get_ret
+        except Exception as e:
+            new_msg = f"error while accessing {self.__format_key(*keypath)}: {e.args[0]}"
+            e.args = (new_msg, *e.args[1:])
+            raise
+
+    def set(self, *args, field: str = 'value', clobber: bool = True,
+            step: Optional[str] = None, index: Optional[Union[int, str]] = None) \
+            -> Optional[Union[List[NodeValue], NodeValue]]:
+        '''
+        Sets a schema parameter field.
+
+        Sets a schema parameter field based on the keypath and value provided in
+        the ``*args``. New schema entries are automatically created for keypaths
+        that overlap with 'default' entries.
+
+        Args:
+            args (list): Parameter keypath followed by a value to set.
+            field (str): Parameter field to set.
+            clobber (bool): Existing value is overwritten if True.
+            step (str): Step name to set for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to set for parameters that may be specified
+                on a per-node basis.
+
+        Examples:
+            >>> schema.set('design', 'top')
+            Sets the [design] value to 'top'
+        '''
+
+        if len(args) < 2:
+            raise KeyError("keypath and value is required")
+
+        *keypath, value = args
+
+        self.__assert_mutable("set", tuple(keypath))
+
+        try:
+            param: Parameter = self.__search(*keypath, insert_defaults=True)
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+
+        try:
+            set_ret = param.set(value, field=field, clobber=clobber,
+                                step=step, index=index)
+            if set_ret:
+                self.__journal.record("set", keypath, value=value, field=field,
+                                      step=step, index=index)
+                self.__process_active(param, set_ret)
+            return set_ret
+        except Exception as e:
+            new_msg = f"error while setting {self.__format_key(*keypath)}: {e.args[0]}"
+            e.args = (new_msg, *e.args[1:])
+            raise
+
+    def add(self, *args, field: str = 'value',
+            step: Optional[str] = None, index: Optional[Union[int, str]] = None) \
+            -> Optional[Union[List[NodeValue], NodeValue]]:
+        '''
+        Adds item(s) to a schema parameter list.
+
+        Adds item(s) to schema parameter list based on the keypath and value
+        provided in the ``*args``.  New schema entries are automatically created
+        for keypaths that overlap with 'default' entries.
+
+        Args:
+            args (list): Parameter keypath followed by a value to add.
+            field (str): Parameter field to modify.
+            step (str): Step name to modify for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to modify for parameters that may be specified
+                on a per-node basis.
+
+        Examples:
+            >>> schema.add('input', 'rtl', 'verilog', 'hello.v')
+            Adds the file 'hello.v' to the [input,rtl,verilog] key.
+        '''
+
+        if len(args) < 2:
+            raise KeyError("keypath and value is required")
+
+        *keypath, value = args
+
+        self.__assert_mutable("add to", tuple(keypath))
+
+        try:
+            param: Parameter = self.__search(*keypath, insert_defaults=True)
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+
+        try:
+            add_ret = param.add(value, field=field, step=step, index=index)
+            if add_ret:
+                self.__journal.record("add", keypath, value=value, field=field,
+                                      step=step, index=index)
+                self.__process_active(param, add_ret)
+            return add_ret
+        except Exception as e:
+            new_msg = f"error while adding to {self.__format_key(*keypath)}: {e.args[0]}"
+            e.args = (new_msg, *e.args[1:])
+            raise
+
+    def unset(self, *keypath: str,
+              step: Optional[str] = None,
+              index: Optional[Union[int, str]] = None) -> None:
+        '''
+        Unsets a schema parameter.
+
+        This method effectively undoes any previous calls to :meth:`set()` made to
+        the given keypath and step/index. For parameters with required or no
+        per-node values, unsetting a parameter always causes it to revert to its
+        default value, and future calls to :meth:`set()` with ``clobber=False`` will
+        once again be able to modify the value.
+
+        If you unset a particular step/index for a parameter with optional
+        per-node values, note that the newly returned value will be the global
+        value if it has been set. To completely return the parameter to its
+        default state, the global value has to be unset as well.
+
+        ``unset()`` has no effect if called on a parameter that has not been
+        previously set.
+
+        Args:
+            keypath (list): Parameter keypath to clear.
+            step (str): Step name to unset for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to unset for parameters that may be specified
+                on a per-node basis.
+        '''
+
+        self.__assert_mutable("unset", tuple(keypath))
+
+        try:
+            param = self.__search(*keypath, use_default=True)
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+
+        try:
+            param.unset(step=step, index=index)
+            self.__journal.record("unset", keypath, step=step, index=index)
+        except Exception as e:
+            new_msg = f"error while unsetting {self.__format_key(*keypath)}: {e.args[0]}"
+            e.args = (new_msg, *e.args[1:])
+            raise
+
+    def remove(self, *keypath: str):
+        '''
+        Remove a schema parameter and its subparameters.
+
+        Args:
+            keypath (list): Parameter keypath to clear.
+        '''
+
+        self.__assert_mutable("remove", tuple(keypath))
+
+        search_path = keypath[0:-1]
+        removal_key = keypath[-1]
+        if removal_key == "default":
+            return
+
+        try:
+            key_param = self.__search(*search_path, require_leaf=False)
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+
+        if removal_key not in key_param.__manifest:
+            return
+
+        if not key_param.__default:
+            return
+
+        if any([key_param.get(*key, field='lock') for key in key_param.allkeys()]):
+            return
+
+        del key_param.__manifest[removal_key]
+        self.__journal.record("remove", keypath)
+
+    def valid(self, *keypath: str, default_valid: bool = False,
+              check_complete: bool = False) -> bool:
+        """
+        Checks validity of a keypath.
+
+        Checks the validity of a parameter keypath and returns True if the
+        keypath is valid and False if invalid.
+
+        Args:
+            keypath (list of str): keypath to check if valid.
+            default_valid (bool): Whether to consider "default" in valid
+            keypaths as a wildcard.
+            check_complete (bool): Require the keypath be a complete path.
+
+        Returns:
+            Boolean indicating validity of keypath.
+
+        Examples:
+            >>> check = schema.valid('design')
+            Returns True
+            >>> check = schema.valid('blah')
+            Returns False.
+            >>> check = schema.valid('metric', 'foo', '0', 'tasktime', default_valid=True)
+            Returns True, even if "foo" and "0" aren't in current configuration.
+        """
+
+        try:
+            param = self.__search(*keypath, use_default=default_valid, require_leaf=False)
+        except KeyError:
+            return False
+
+        if param is None:
+            return False
+
+        if check_complete:
+            return isinstance(param, Parameter)
+        return True
+
+    def getkeys(self, *keypath: str) -> Tuple[str, ...]:
+        """
+        Returns a tuple of schema dictionary keys.
+
+        Searches the schema for the keypath provided and returns a list of
+        keys found, excluding the generic 'default' key.
+
+        Args:
+            keypath (list of str): Keypath to get keys for.
+
+        Returns:
+            tuple of keys found for the keypath provided.
+
+        Examples:
+            >>> keylist = schema.getkeys('pdk')
+            Returns all keys for the [pdk] keypath.
+        """
+        try:
+            key_param = self.__search(*keypath, require_leaf=False)
+        except KeyError:
+            raise KeyError(f"{self.__format_key(*keypath)} is not a valid keypath")
+
+        if isinstance(key_param, Parameter):
+            return tuple()
+
+        return tuple(sorted(key_param.__manifest.keys()))
+
+    def allkeys(self, *keypath: str, include_default: bool = True) -> Set[Tuple[str, ...]]:
+        '''
+        Returns all keypaths in the schema as a set of tuples.
+
+        Arg:
+            keypath (list of str): Keypath prefix to search under. The
+                returned keypaths do not include the prefix.
+        '''
+        try:
+            key_param = self.__search(*keypath, require_leaf=False)
+        except KeyError:
+            return set()
+
+        if isinstance(key_param, Parameter):
+            return set()
+
+        def add(keys: List[Tuple[str, ...]],
+                key: str,
+                item: Union["BaseSchema", Parameter]) -> None:
+            if isinstance(item, Parameter):
+                keys.append((key,))
+            else:
+                for subkeypath in item.allkeys(include_default=include_default):
+                    keys.append((key, *subkeypath))
+
+        keys = []
+        if include_default and key_param.__default:
+            add(keys, "default", key_param.__default)
+        for key, item in key_param.__manifest.items():
+            add(keys, key, item)
+        return set(keys)
+
+    @classmethod
+    def _getdict_type(cls) -> str:
+        """
+        Returns the type data for getdict
+        """
+
+        return "BaseSchema"
+
+    def _getdict_meta(self) -> Dict[str, Optional[Union[str, int, float]]]:
+        """
+        Returns the meta data for getdict
+        """
+
+        return {}
+
+    def getdict(self, *keypath: str, include_default: bool = True,
+                values_only: bool = False) -> Dict:
+        """
+        Returns a schema dictionary.
+
+        Searches the schema for the keypath provided and returns a complete
+        dictionary.
+
+        Args:
+            keypath (list of str): Variable length ordered schema key list
+            include_default (boolean): If true will include default key paths
+            values_only (boolean): If true will only return values
+
+        Returns:
+            A schema dictionary
+
+        Examples:
+            >>> pdk = schema.getdict('pdk')
+            Returns the complete dictionary found for the keypath [pdk]
+        """
+        try:
+            if not values_only and include_default:
+                key_param = self.__search(*keypath, require_leaf=False, elaborate_leaf=False)
+
+                if isinstance(key_param, Parameter):
+                    return key_param.getdict(include_default=include_default,
+                                             values_only=values_only)
+
+                if key_param.__lazy:
+                    return key_param.__lazy[1]
+            else:
+                key_param = self.__search(*keypath, require_leaf=False)
+        except KeyError:
+            return {}
+
+        if isinstance(key_param, Parameter):
+            return key_param.getdict(include_default=include_default, values_only=values_only)
+
+        manifest = {}
+        if include_default and key_param.__default:
+            manifest_dict = key_param.__default.getdict(include_default=include_default,
+                                                        values_only=values_only)
+            if manifest_dict or not values_only:
+                manifest["default"] = manifest_dict
+        for key, item in key_param.__manifest.items():
+            manifest_dict = item.getdict(include_default=include_default,
+                                         values_only=values_only)
+            if manifest_dict or not values_only:
+                manifest[key] = manifest_dict
+
+        if not values_only and key_param.__journal.has_journaling():
+            manifest["__journal__"] = key_param.__journal.get()
+
+        if not values_only and key_param.__class__ is not BaseSchema:
+            manifest["__meta__"] = {}
+
+            try:
+                cls_meta = key_param._getdict_meta()
+                manifest["__meta__"].update(cls_meta)
+            except NotImplementedError:
+                pass
+
+            manifest["__meta__"]["class"] = \
+                f"{key_param.__class__.__module__}/{key_param.__class__.__name__}"
+            try:
+                manifest["__meta__"]["sctype"] = key_param._getdict_type()
+            except NotImplementedError:
+                pass
+
+        return manifest
+
+    # Utility functions
+    def copy(self: TSchema, key: Optional[Tuple[str, ...]] = None) -> TSchema:
+        """
+        Returns a copy of this schema.
+
+        Args:
+            key (list of str): keypath to this schema
+        """
+
+        parent = self.__parent
+        self.__parent = None
+        schema_copy = copy.deepcopy(self)
+        self.__parent = parent
+        schema_copy.__parent = self.__parent
+
+        if key:
+            schema_copy.__key = key[-1]
+
+        # A copy is always mutable, even when derived from a frozen (cached)
+        # object, so callers are free to modify their own instance.
+        schema_copy._unfreeze()
+
+        return schema_copy
+
+    def _find_files_search_paths(self, key: str,
+                                 step: Optional[str],
+                                 index: Optional[Union[int, str]],
+                                 missing_ok: bool) -> List[str]:
+        """
+        Returns a list of paths to search during find files.
+
+        Args:
+            key (str): final component of keypath
+            step (str): Step name.
+            index (str): Index name.
+            missing_ok (bool): If True, silently return empty list when files are not found.
+        """
+        return []
+
+    def _find_files_dataroot_resolvers(self, resolvers: bool = False) \
+            -> Dict[str, Union[str, Callable]]:
+        """
+        Returns a dictionary of path resolvers data directory handling for find_files
+
+        Args:
+            resolvers (bool, optional): Returns the resolvers instead of callables
+
+        Returns:
+            dictionary of str to resolver mapping
+        """
+        if self.__is_root:
+            return {}
+        return self.__parent._find_files_dataroot_resolvers(resolvers=resolvers)
+
+    def _find_files(self, *keypath: str, missing_ok: bool = False,
+                    step: Optional[str] = None, index: Optional[Union[int, str]] = None,
+                    dataroots: Optional[Dict[str, Union[str, Callable]]] = None,
+                    collection_dir: Optional[str] = None,
+                    cwd: Optional[str] = None,
+                    select: Optional[Callable[[NodeValue], bool]] = None) \
+            -> Union[Optional[str], List[Optional[str]], Set[Optional[str]]]:
+        """
+        Returns absolute paths to files or directories based on the keypath
+        provided.
+
+        The keypath provided must point to a schema parameter of type file, dir,
+        or lists of either. Otherwise, it will trigger an error.
+
+        Args:
+            keypath (list of str): Variable length schema key list.
+            missing_ok (bool): If True, silently return None when files aren't
+                found. If False, print an error and set the error flag.
+            step (str): Step name to access for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to access for parameters that may be specified
+                on a per-node basis.
+            dataroots (dict of resolvers): dirctionary of path resolvers for dataroot
+                paths, these can either be a path, a callable function or a resolver
+            collection_dir (path): optional path to a collections directory
+            cwd (path): optional path to current working directory, this will default
+                to os.getcwd() if not provided.
+            select (callable): optional filter, called with each
+                :class:`PathNodeValue` of the parameter. A value it rejects is left
+                out of the result, and its dataroot is not resolved.
+
+        Returns:
+            If keys points to a scalar entry, returns an absolute path to that
+            file/directory, or None if not found. It keys points to a list
+            entry, returns a list of either the absolute paths or None for each
+            entry, depending on whether it is found.
+
+        Examples:
+            >>> schema.find_files('input', 'verilog')
+            Returns a list of absolute paths to source files, as specified in
+            the schema.
+        """
+        return self.__find_files_or_hash(
+            *keypath, missing_ok=missing_ok,
+            step=step, index=index,
+            dataroots=dataroots,
+            collection_dir=collection_dir,
+            cwd=cwd, hash=False,
+            select=select)
+
+    def __find_files_or_hash(self, *keypath: str, missing_ok: bool = False,
+                             step: Optional[str] = None, index: Optional[Union[int, str]] = None,
+                             dataroots: Optional[Dict[str, Union[str, Callable]]] = None,
+                             collection_dir: Optional[str] = None,
+                             cwd: Optional[str] = None,
+                             hash: bool = False,
+                             select: Optional[Callable[[NodeValue], bool]] = None) \
+            -> Union[Optional[str], List[Optional[str]], Set[Optional[str]]]:
+        """
+        Returns absolute paths to files or directories based on the keypath
+        provided.
+
+        The keypath provided must point to a schema parameter of type file, dir,
+        or lists of either. Otherwise, it will trigger an error.
+
+        Args:
+            keypath (list of str): Variable length schema key list.
+            missing_ok (bool): If True, silently return None when files aren't
+                found. If False, print an error and set the error flag.
+            step (str): Step name to access for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to access for parameters that may be specified
+                on a per-node basis.
+            dataroots (dict of resolvers): dirctionary of path resolvers for dataroot
+                paths, these can either be a path, a callable function or a resolver
+            collection_dir (path): optional path to a collections directory
+            cwd (path): optional path to current working directory, this will default
+                to os.getcwd() if not provided.
+            hash (bool): hash the files insteasd of getting the paths
+            select (callable): optional filter, called with each
+                :class:`PathNodeValue` of the parameter. A value it rejects is left
+                out of the result, and its dataroot is not resolved.
+
+        Returns:
+            If keys points to a scalar entry, returns an absolute path to that
+            file/directory, or None if not found. It keys points to a list
+            entry, returns a list of either the absolute paths or None for each
+            entry, depending on whether it is found.
+
+        Examples:
+            >>> schema.find_files('input', 'verilog')
+            Returns a list of absolute paths to source files, as specified in
+            the schema.
+        """
+
+        base_schema: BaseSchema = self.get(*keypath[0:-1], field="schema")
+
+        param: Parameter = base_schema.get(keypath[-1], field=None)
+        if not param.is_path:
+            raise TypeError(
+                f'Cannot find files on {self.__format_key(*keypath)}, must be a path type')
+
+        hashalgo: Optional[str] = None
+        if hash:
+            hashalgo = param.get(field="hashalgo")
+
+        paths = param.get(field=None, step=step, index=index)
+
+        is_list = True
+        if not isinstance(paths, list):
+            is_list = False
+            if paths._getunsafe():
+                paths = [paths]
+            else:
+                paths = []
+
+        if select is not None:
+            paths = [path for path in paths if select(path)]
+
+        # Ignore collection directory if it does not exist
+        if collection_dir and not os.path.exists(collection_dir):
+            collection_dir = None
+
+        if cwd is None:
+            cwd = os.getcwd()
+
+        if dataroots is None:
+            dataroots = base_schema._find_files_dataroot_resolvers(resolvers=True)
+
+        resolved_paths = []
+        root_search_paths = base_schema._find_files_search_paths(keypath[-1],
+                                                                 step, index,
+                                                                 missing_ok)
+        for path in paths:
+            search_paths = root_search_paths.copy()
+
+            dataroot: Optional[str] = path.get(field="dataroot")
+            dataroot_id: Optional[str] = None
+            dataroot_except: Optional[Exception] = None
+            if dataroot:
+                if dataroot not in dataroots:
+                    raise ValueError(f"Resolver for {dataroot} not provided: "
+                                     f"{self.__format_key(*keypath)}")
+                dataroot_path = dataroots[dataroot]
+                if isinstance(dataroot_path, str):
+                    search_paths.append(os.path.abspath(dataroot_path))
+                elif callable(getattr(dataroot_path, "get_path", None)):
+                    # A resolver, whose ID is known without fetching, so a dataroot
+                    # missing here is still found in the collection
+                    try:
+                        if collection_dir:
+                            dataroot_id = dataroot_path.collection_id
+                        search_paths.append(dataroot_path.get_path())
+                    except Exception as e:
+                        dataroot_except = e
+                elif callable(dataroot_path):
+                    try:
+                        search_paths.append(dataroot_path())
+                    except Exception as e:
+                        dataroot_except = e
+                else:
+                    raise TypeError(f"Resolver for {dataroot} is not a recognized type: "
+                                    f"{self.__format_key(*keypath)}")
+            else:
+                if cwd:
+                    search_paths.append(os.path.abspath(cwd))
+
+            try:
+                if hash:
+                    resolved = path.hash(hashalgo,
+                                         search=search_paths,
+                                         collection_dir=collection_dir,
+                                         dataroot_id=dataroot_id)
+                else:
+                    resolved = path.resolve_path(search=search_paths,
+                                                 collection_dir=collection_dir,
+                                                 dataroot_id=dataroot_id)
+            except FileNotFoundError:
+                resolved = None
+                if not missing_ok:
+                    report_paths = ", ".join(search_paths)
+                    if dataroot:
+                        if dataroot_except:
+                            raise FileNotFoundError(
+                                f"Dataroot {dataroot} not found: {dataroot_except}") \
+                                    from dataroot_except
+                        raise FileNotFoundError(
+                            f'Could not find "{path._getunsafe()}" in {dataroot} '
+                            f'{self.__format_key(*keypath)}: {report_paths}')
+                    else:
+                        raise FileNotFoundError(
+                            f'Could not find "{path._getunsafe()}" {self.__format_key(*keypath)}: '
+                            f'{report_paths}')
+            resolved_paths.append(resolved)
+
+        if not is_list:
+            if not resolved_paths:
+                return None
+            return resolved_paths[0]
+        return resolved_paths
+
+    def _check_filepaths(self, ignore_keys: Optional[Iterable[Tuple[str, ...]]] = None,
+                         logger: Optional[logging.Logger] = None,
+                         dataroots: Optional[Dict[str, Union[str, Callable]]] = None,
+                         collection_dir: Optional[str] = None,
+                         cwd: Optional[str] = None) -> bool:
+        '''
+        Verifies that paths to all files in manifest are valid.
+
+        Args:
+            ignore_keys (list of keypaths): list of keypaths to ignore while checking
+            logger (:class:`logging.Logger`): optional logger to use to report errors
+            dataroots (dict of resolvers): dirctionary of path resolvers for dataroot
+                paths, these can either be a path, a callable function or a resolver
+            collection_dir (path): optional path to a collections directory
+            cwd (path): optional path to current working directory, this will default
+                to os.getcwd() if not provided.
+
+        Returns:
+            True if all file paths are valid, otherwise False.
+        '''
+
+        if ignore_keys is None:
+            ignore_keys = set()
+        else:
+            ignore_keys = set([
+                tuple(keypath) for keypath in ignore_keys
+            ])
+
+        error = False
+
+        for keypath in self.allkeys():
+            if keypath in ignore_keys:
+                continue
+
+            param: Parameter = self.get(*keypath, field=None)
+
+            if not param.is_path:
+                continue
+
+            for check_files, step, index in param.getvalues():
+                if not check_files:
+                    # nothing set so continue
+                    continue
+
+                found_files = BaseSchema._find_files(
+                    self, *keypath, missing_ok=True, step=step, index=index,
+                    dataroots=dataroots, collection_dir=collection_dir, cwd=cwd)
+
+                if not param.istype("list", "set"):
+                    check_files = [check_files]
+                    found_files = [found_files]
+
+                for check_file, found_file in zip(check_files, found_files):
+                    if not found_file:
+                        error = True
+                        if logger:
+                            node_indicator = ""
+                            if step is not None:
+                                if index is None:
+                                    node_indicator = f" ({step})"
+                                else:
+                                    node_indicator = f" ({step}/{index})"
+
+                            name = ""
+                            if hasattr(self, "name"):
+                                name = f"({self.name}) "
+
+                            logger.error(f"Parameter {name}"
+                                         f"{self.__format_key(*keypath)}{node_indicator} "
+                                         f"path {check_file} is invalid")
+
+        return not error
+
+    def _hash_files(self, *keypath, missing_ok: bool = False,
+                    step: Optional[str] = None, index: Optional[Union[int, str]] = None,
+                    dataroots: Optional[Dict[str, Union[str, Callable]]] = None,
+                    collection_dir: Optional[str] = None,
+                    cwd: Optional[str] = None):
+        '''Generates hash values for a list of parameter files.
+
+        Generates a hash value for each file found in the keypath. If existing
+        hash values are stored, this method will compare hashes and trigger an
+        error if there's a mismatch. If the update variable is True, the
+        computed hash values are recorded in the 'filehash' field of the
+        parameter, following the order dictated by the files within the 'value'
+        parameter field.
+
+        Files are located using the find_files() function.
+
+        The file hash calculation is performed based on the 'algo' setting.
+        Supported algorithms include SHA1, SHA224, SHA256, SHA384, SHA512,
+        and MD5.
+
+        Args:
+            *keypath(str): Keypath to parameter.
+            missing_ok (bool): If True, silently return None when files aren't
+                found. If False, print an error and set the error flag.
+            step (str): Step name to access for parameters that may be specified
+                on a per-node basis.
+            index (str): Index name to access for parameters that may be specified
+                on a per-node basis.
+            dataroots (dict of resolvers): dirctionary of path resolvers for dataroot
+                paths, these can either be a path, a callable function or a resolver
+            collection_dir (path): optional path to a collections directory
+            cwd (path): optional path to current working directory, this will default
+                to os.getcwd() if not provided.
+
+        Returns:
+            A list of hash values.
+
+        Examples:
+            >>> hashlist = hash_files('input', 'rtl', 'verilog')
+            Computes, stores, and returns hashes of files in :keypath:`input, rtl, verilog`.
+        '''
+        return self.__find_files_or_hash(
+            *keypath, missing_ok=missing_ok,
+            step=step, index=index,
+            dataroots=dataroots,
+            collection_dir=collection_dir,
+            cwd=cwd, hash=True)
+
+    def _parent(self, root: bool = False) -> "BaseSchema":
+        '''
+        Returns the parent of this schema section, if root is true the root parent
+        will be returned.
+
+        Args:
+            root (bool): if true, returns the root of the schemas.
+        '''
+        if self.__is_root:
+            return self
+
+        if not root:
+            return self.__parent
+        return self.__parent._parent(root=root)
+
+    @contextlib.contextmanager
+    def _active(self, **kwargs):
+        '''
+        Use this context to temporarily set additional fields in :meth:`.set` and :meth:`.add`.
+        Additional fields can be specified which can be accessed by :meth:`._get_active`.
+
+        Args:
+            kwargs (dict of str): keyword arguments that are used for setting values
+
+        Example:
+            >>> with schema._active(dataroot="lambdalib"):
+            ...     schema.set("file", "top.v")
+            Sets the file to top.v and associates lambdalib as the dataroot.
+        '''
+
+        if self.__active is None:
+            orig_active = None
+            self.__active = {}
+        else:
+            orig_active = self.__active.copy()
+
+        self.__active.update(kwargs)
+
+        try:
+            yield
+        finally:
+            self.__active = orig_active
+
+    def _get_active(self, field: str, defvalue=None):
+        '''
+        Get the value of a specific field.
+
+        Args:
+            field (str): if None, return the current active dictionary,
+                         otherwise the value, if the field is not present, defvalue is returned.
+            defvalue (any): value to return if the field is not present.
+        '''
+        actives = self.__get_active()
+        if actives is None:
+            return defvalue
+
+        if field is None:
+            return actives
+
+        return actives.get(field, defvalue)
+
+    def __get_active(self) -> Optional[Dict[str, Any]]:
+        '''
+        Get the actives this point in the schema
+        '''
+        schemas: List["BaseSchema"] = [self]
+
+        root = self._parent(root=True)
+        curr = schemas[-1]
+        while curr is not root:
+            schemas.append(curr._parent())
+            curr = schemas[-1]
+
+        active = {}
+        for schema in reversed(schemas):
+            if schema.__active:
+                active.update(schema.__active)
+        if not active:
+            return None
+        return active
+
+    def __process_active(self, param: Parameter,
+                         nodevalues: Optional[Union[List[NodeValue],
+                                                    Set[NodeValue],
+                                                    Tuple[NodeValue, ...],
+                                                    NodeValue]]) -> None:
+        actives = self.__get_active()
+        if actives is None:
+            return
+
+        if not isinstance(nodevalues, (list, set, tuple)):
+            # Make everything a list
+            nodevalues = [nodevalues]
+
+        if not all([isinstance(v, NodeValue) for v in nodevalues]):
+            nodevalues = []
+            nodevalues_fields = []
+        else:
+            nodevalues_fields = nodevalues[0].fields
+
+        key_fields = ("copy", "lock")
+
+        for field, value in actives.items():
+            if field in key_fields:
+                param.set(value, field=field)
+                continue
+
+            if field not in nodevalues_fields:
+                continue
+
+            for param in nodevalues:
+                param.set(value, field=field)
+
+    def _generate_doc(self, doc,
+                      ref_root: str = "",
+                      key_offset: Optional[Tuple[str, ...]] = None,
+                      detailed: bool = True):
+        from .docs.utils import build_section_with_target, build_schema_value_table, get_key_ref, \
+            parse_rst
+        from docutils import nodes
+
+        if not key_offset:
+            key_offset = tuple()
+
+        if detailed:
+            sections = []
+            if not self.__class__.__module__.startswith("siliconcompiler.schema."):
+                cls_info = nodes.paragraph()
+                parse_rst(
+                    doc.state,
+                    f"Class :class:`{self.__class__.__name__} "
+                    f"<{self.__class__.__module__}.{self.__class__.__name__}>`",
+                    cls_info,
+                    __file__)
+                sections.append(cls_info)
+            if self.__default:
+                if isinstance(self.__default, Parameter):
+                    sections.extend(Parameter._generate_doc(self.__default, doc))
+                else:
+                    sections.extend(BaseSchema._generate_doc(self.__default,
+                                                             doc,
+                                                             ref_root=ref_root,
+                                                             key_offset=key_offset,
+                                                             detailed=detailed))
+            for name, obj in self.__manifest.items():
+                root = self._parent(root=True)
+
+                # Title each section with its full keypath rather than the bare
+                # leaf key. Leaf keys repeat heavily across the schema (fileset
+                # and dataroot each appear nine times), and identical titles are
+                # indistinguishable in search results and share a single score.
+                keypath = [*self._keypath, name]
+                section = build_section_with_target(",".join(keypath),
+                                                    get_key_ref(keypath, ref=root),
+                                                    doc.state.document)
+                if isinstance(obj, Parameter):
+                    for n in Parameter._generate_doc(obj, doc):
+                        section += n
+                else:
+                    for n in BaseSchema._generate_doc(obj,
+                                                      doc,
+                                                      ref_root=ref_root,
+                                                      key_offset=key_offset,
+                                                      detailed=detailed):
+                        section += n
+                sections.append(section)
+
+            # Sort all sections alphabetically by title. We may also have nodes
+            # in this list that aren't sections if `schema` has a 'default'
+            # entry that's a leaf. In this case, we sort this as an empty string
+            # in order to put this node at the beginning of the list.
+            return sorted(sections, key=lambda s: s[0][0] if isinstance(s, nodes.section) else '')
+        else:
+            params = {}
+            for key in self.allkeys(include_default=False):
+                params[key] = self.get(*key, field=None)
+            table = build_schema_value_table(params, doc.env.docname, (*key_offset, *self._keypath))
+            if table:
+                return table
+            return None
+
+
+class CachedSchemaMeta(type):
+    """
+    Metaclass that memoizes instances of :class:`CachedSchema` subclasses.
+
+    Instantiating a class that uses this metaclass with the same arguments
+    returns the same (frozen) instance every time, so schema objects that are a
+    pure function of their construction arguments are built once and reused.
+
+    Because instances are cached and shared, all construction arguments must be
+    hashable and the returned object is frozen to guard against accidental
+    in-place mutation. Use :meth:`BaseSchema.copy` to obtain a mutable version.
+
+    Deserialization (loading from disk) copies the shared instance to get a
+    fresh, unfrozen object to repopulate, rather than returning the shared
+    singleton.
+    """
+
+    @lru_cache(maxsize=None)
+    def __call__(cls, *args, **kwargs):
+        obj = super().__call__(*args, **kwargs)
+        obj._freeze()
+        return obj
+
+
+class CachedSchema(BaseSchema, metaclass=CachedSchemaMeta):
+    """
+    Base for schema objects that are a pure function of their construction
+    arguments -- built once, reused.
+
+    Subclasses are instantiated once per unique set of (hashable) construction
+    arguments; subsequent instantiations with the same arguments return the same
+    shared, frozen instance. This is useful for heavy objects (such as PDKs)
+    that are otherwise rebuilt many times over the course of loading a target.
+
+    The shared instance is frozen; obtain a mutable, independent object with
+    :meth:`copy`.
+    """
