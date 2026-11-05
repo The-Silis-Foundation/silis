@@ -10,6 +10,10 @@ from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from backendflow.siliconpeeker.peeker import FastSiliconPeeker
 from backendflow.gdsviewer.gds3d import GDS3DPort
+try:
+    from layer_viewer.layer_viewer_panel import LayerViewerPanel
+except ImportError:
+    from silis.core.layer_viewer.layer_viewer_panel import LayerViewerPanel
 from pdkmanagers.pdk.manager import SSAForge, PDKSelector
 from config import USER_SETTINGS, THEMES
 from editor.editor import ScintillaEditor
@@ -229,6 +233,7 @@ class BackendWidget(QWidget):
         
         # --- 1. INITIALIZE WIDGETS ---
         self.fast_peeker = FastSiliconPeeker(self.ide)
+        self.layer_panel = LayerViewerPanel(self.ide)
         self.gds3d_port = GDS3DPort(self.ide) # [NEW] 3D Viewer Port
         
         self.spinner_timer = QTimer(self)
@@ -403,7 +408,10 @@ class BackendWidget(QWidget):
         h_lay.addWidget(sidebar)
         
         self.viz_tabs = QTabWidget(); self.viz_tabs.setTabPosition(QTabWidget.TabPosition.South)
-        self.viz_tabs.addTab(self.fast_peeker, "Fast Layout Viewer")
+        self.viz_stack = QStackedWidget()
+        self.viz_stack.addWidget(self.fast_peeker)
+        self.viz_stack.addWidget(self.layer_panel)
+        self.viz_tabs.addTab(self.viz_stack, "Fast Layout Viewer")
         
         # --- CLOCK TREE VIEWER ---
         import sys
@@ -1940,7 +1948,9 @@ foreach net [$blk getNets] {
                 "met5": self.chk_layer_met5.isChecked(),
                 "vias": self.chk_layer_vias.isChecked(),
             }
-            if hasattr(self, 'fast_peeker'):
+            if hasattr(self, 'layer_panel'):
+                self.layer_panel.set_layer_visibility(layer_map)
+            elif hasattr(self, 'fast_peeker'):
                 if hasattr(self.fast_peeker, 'set_layer_visibility'):
                     self.fast_peeker.set_layer_visibility(layer_map)
                 elif hasattr(self.fast_peeker, 'redraw'):
@@ -2004,6 +2014,8 @@ foreach net [$blk getNets] {
         def_path = os.path.join(proj_root, "results", "temp.def")
         if os.path.exists(def_path): 
             self.fast_peeker.load_def_file(def_path)
+            if hasattr(self, 'layer_panel'):
+                self.layer_panel.load_layout_from_opendb(def_path)
 
     def load_checkpoint(self):
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
@@ -2051,12 +2063,11 @@ foreach net [$blk getNets] {
             return
         idx = 1 if mode in ["layer", "layer-wise", "layer_wise", 1] else 0
         self.sidebar_stack.setCurrentIndex(idx)
-        if hasattr(self, 'fast_peeker'):
-            if hasattr(self.fast_peeker, 'set_view_mode'):
-                self.fast_peeker.set_view_mode(mode)
-            elif idx == 1:
-                # Layer-wise view: emphasize physical wires and power mesh
-                self.update_layer_view()
-            else:
-                # Instance-wise view: restore standard cell & macro view
-                self.update_view()
+        if hasattr(self, 'viz_stack'):
+            self.viz_stack.setCurrentIndex(idx)
+        if idx == 1:
+            # Layer-wise view: emphasize physical wires and power mesh
+            self.update_layer_view()
+        else:
+            # Instance-wise view: restore standard cell & macro view
+            self.update_view()
