@@ -2,6 +2,7 @@
 #include "LayoutViewer.h"
 #include <QPainter>
 #include <QDebug>
+#include <QMutexLocker>
 
 RenderThread::RenderThread(LayoutViewer* viewer, QObject* parent)
     : QThread(parent), m_viewer(viewer), m_abort(false), m_restart(false) {}
@@ -11,10 +12,11 @@ RenderThread::~RenderThread() {
 }
 
 void RenderThread::exitThread() {
-    m_mutex.lock();
-    m_abort = true;
-    m_condition.wakeOne();
-    m_mutex.unlock();
+    {
+        QMutexLocker locker(&m_mutex);
+        m_abort = true;
+        m_condition.wakeOne();
+    }
     wait();
 }
 
@@ -34,9 +36,11 @@ void RenderThread::render(const QRect& draw_rect) {
 
 void RenderThread::run() {
     forever {
-        m_mutex.lock();
-        QRect draw_bounds = m_drawRect;
-        m_mutex.unlock();
+        QRect draw_bounds;
+        {
+            QMutexLocker locker(&m_mutex);
+            draw_bounds = m_drawRect;
+        }
 
         // 1. Setup Image Buffer
         QImage image(draw_bounds.size(), QImage::Format_ARGB32_Premultiplied);
@@ -76,11 +80,12 @@ void RenderThread::run() {
 
         if (m_abort) return;
 
-        m_mutex.lock();
-        if (!m_restart) {
-            m_condition.wait(&m_mutex);
+        {
+            QMutexLocker locker(&m_mutex);
+            if (!m_restart) {
+                m_condition.wait(&m_mutex);
+            }
+            m_restart = false;
         }
-        m_restart = false;
-        m_mutex.unlock();
     }
 }

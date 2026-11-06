@@ -271,27 +271,56 @@ class BackendWidget(QWidget):
         lbl_orc_hdr.setStyleSheet("color: #58a6ff; font-size: 11px;")
         orc_layout.addWidget(lbl_orc_hdr)
 
-        self.chk_layer_li1 = QCheckBox("li1 (Local Interconnect)")
-        self.chk_layer_li1.setChecked(True)
-        self.chk_layer_met1 = QCheckBox("met1 (Power Rails/M1)")
-        self.chk_layer_met1.setChecked(True)
-        self.chk_layer_met2 = QCheckBox("met2 (Signals/M2)")
-        self.chk_layer_met2.setChecked(True)
-        self.chk_layer_met3 = QCheckBox("met3 (Signals/M3)")
-        self.chk_layer_met3.setChecked(True)
-        self.chk_layer_met4 = QCheckBox("met4 (Power Trunks/M4)")
-        self.chk_layer_met4.setChecked(True)
-        self.chk_layer_met5 = QCheckBox("met5 (Top Power Mesh/M5)")
-        self.chk_layer_met5.setChecked(True)
-        self.chk_layer_vias = QCheckBox("Vias (mcon, via1..via4)")
-        self.chk_layer_vias.setChecked(True)
+        # Batch All / None row
+        batch_box = QHBoxLayout()
+        batch_box.setContentsMargins(0, 0, 0, 2)
+        batch_box.setSpacing(6)
 
-        for chk in [
-            self.chk_layer_li1, self.chk_layer_met1, self.chk_layer_met2,
-            self.chk_layer_met3, self.chk_layer_met4, self.chk_layer_met5,
-            self.chk_layer_vias
-        ]:
-            chk.setStyleSheet("font-size: 10px; color: #c9d1d9;")
+        btn_all = QPushButton("All")
+        btn_all.setFixedHeight(20)
+        btn_all.setStyleSheet("font-size: 10px; padding: 1px 6px;")
+        btn_all.clicked.connect(lambda: self.set_all_layers(True))
+
+        btn_none = QPushButton("None")
+        btn_none.setFixedHeight(20)
+        btn_none.setStyleSheet("font-size: 10px; padding: 1px 6px;")
+        btn_none.clicked.connect(lambda: self.set_all_layers(False))
+
+        batch_box.addWidget(btn_all)
+        batch_box.addWidget(btn_none)
+        batch_box.addStretch()
+        orc_layout.addLayout(batch_box)
+
+        # Layer definitions with exact canvas colors: (attr_name, label_name, QColor)
+        mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        mono_font.setPointSize(9)
+
+        def make_swatch_icon(color: QColor) -> QIcon:
+            px = QPixmap(12, 12)
+            px.fill(color)
+            p = QPainter(px)
+            p.setPen(QColor(50, 50, 50))
+            p.drawRect(0, 0, 11, 11)
+            p.end()
+            return QIcon(px)
+
+        layer_defs = [
+            ("chk_layer_li1", "li1", QColor(126, 126, 255)),
+            ("chk_layer_met1", "met1", QColor(0, 0, 254)),
+            ("chk_layer_met2", "met2", QColor(254, 0, 0)),
+            ("chk_layer_met3", "met3", QColor(9, 221, 0)),
+            ("chk_layer_met4", "met4", QColor(190, 244, 81)),
+            ("chk_layer_met5", "met5", QColor(222, 33, 96)),
+            ("chk_layer_vias", "vias", QColor(255, 126, 126)),
+        ]
+
+        for attr, name, col in layer_defs:
+            chk = QCheckBox(name)
+            chk.setFont(mono_font)
+            chk.setIcon(make_swatch_icon(col))
+            chk.setIconSize(QSize(12, 12))
+            chk.setChecked(True)
+            setattr(self, attr, chk)
             orc_layout.addWidget(chk)
 
         orc_layout.addStretch()
@@ -411,7 +440,7 @@ class BackendWidget(QWidget):
         self.viz_stack = QStackedWidget()
         self.viz_stack.addWidget(self.fast_peeker)
         self.viz_stack.addWidget(self.layer_panel)
-        self.viz_tabs.addTab(self.viz_stack, "Fast Layout Viewer")
+        self.viz_tabs.addTab(self.viz_stack, "Layout")
         
         # --- CLOCK TREE VIEWER ---
         import sys
@@ -1012,8 +1041,8 @@ class BackendWidget(QWidget):
                             tree_json = self.sta_anal.get_clock_tree_json(port)
                             if hasattr(self, 'clock_engine'):
                                 self.clock_engine.load_tree_data(tree_json)
-                                # Switch to Clock Tree tab (index 2)
-                                self.viz_tabs.setCurrentIndex(2)
+                                # Switch to Clock Tree tab (index 1)
+                                self.viz_tabs.setCurrentIndex(1)
                                 self.term_log.append(f"[SUCCESS] Rendered Clock Tree for {port}!")
             except Exception as e:
                 self.term_log.append(f"[ERR] Failed to extract clock tree: {e}")
@@ -1937,6 +1966,17 @@ foreach net [$blk getNets] {
             self.fast_peeker.redraw()
         except: pass
 
+    def set_all_layers(self, visible: bool):
+        for chk in [
+            self.chk_layer_li1, self.chk_layer_met1, self.chk_layer_met2,
+            self.chk_layer_met3, self.chk_layer_met4, self.chk_layer_met5,
+            self.chk_layer_vias
+        ]:
+            chk.blockSignals(True)
+            chk.setChecked(visible)
+            chk.blockSignals(False)
+        self.update_layer_view()
+
     def update_layer_view(self):
         try:
             layer_map = {
@@ -2012,9 +2052,11 @@ foreach net [$blk getNets] {
             return  # Do not waste cycles parsing DEF if viewer tab is not active
         proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
         def_path = os.path.join(proj_root, "results", "temp.def")
-        if os.path.exists(def_path): 
-            self.fast_peeker.load_def_file(def_path)
-            if hasattr(self, 'layer_panel'):
+        if os.path.exists(def_path):
+            active_stack_idx = self.viz_stack.currentIndex() if hasattr(self, 'viz_stack') else 0
+            if active_stack_idx == 0:
+                self.fast_peeker.load_def_file(def_path)
+            elif active_stack_idx == 1 and hasattr(self, 'layer_panel'):
                 self.layer_panel.load_layout_from_opendb(def_path)
 
     def load_checkpoint(self):
@@ -2066,8 +2108,16 @@ foreach net [$blk getNets] {
         if hasattr(self, 'viz_stack'):
             self.viz_stack.setCurrentIndex(idx)
         if idx == 1:
-            # Layer-wise view: emphasize physical wires and power mesh
+            # Layer-wise view: load OpenDB layout on demand if not already loaded, then emphasize physical wires
+            proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+            def_path = os.path.join(proj_root, "results", "temp.def")
+            if os.path.exists(def_path) and hasattr(self, 'layer_panel'):
+                self.layer_panel.load_layout_from_opendb(def_path)
             self.update_layer_view()
         else:
             # Instance-wise view: restore standard cell & macro view
+            proj_root = self.ide.get_proj_root(self.ide.get_context()[0] or "design")
+            def_path = os.path.join(proj_root, "results", "temp.def")
+            if os.path.exists(def_path) and hasattr(self, 'fast_peeker'):
+                self.fast_peeker.load_def_file(def_path)
             self.update_view()

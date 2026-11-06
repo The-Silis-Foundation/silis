@@ -302,6 +302,13 @@ class SignoffRunnerWorker(QThread):
         pat_proc = subprocess.run(["openroad", "-exit", pat_tcl], capture_output=True, text=True, cwd=self.project_root)
         pat_out = pat_proc.stdout
 
+        if pat_proc.returncode != 0:
+            err_msg = f"MCMM Timing & Power Analysis failed with return code {pat_proc.returncode}."
+            rep_path = os.path.join(self.reports_dir, "signoff_report.md")
+            SignoffAuditReport.generate(self.top_module, pdk_name, os.path.expanduser(f"~/.silis/designs/{self.top_module}"), gate_results, out_path=rep_path)
+            self.pipeline_failed.emit("MCMM Timing & Power", err_msg, (pat_proc.stderr or pat_out)[-3000:], rep_path)
+            return
+
         import re
         wns_val = "0.00"
         timing_violated = False

@@ -68,6 +68,7 @@ from .report import (
 )
 from .viewers import (
     view_layout,
+    view_layers,
     view_gds3d,
     view_waveforms,
     view_schematic,
@@ -160,6 +161,7 @@ __all__ = [
     "suggest_box",
     "auto_place_regions",
     "view_layout",
+    "view_layers",
     "view_gds3d",
     "view_waveforms",
     "view_schematic",

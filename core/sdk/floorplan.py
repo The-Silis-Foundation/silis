@@ -236,10 +236,46 @@ class Floorplan:
     def get_macros(self) -> List[MacroInstance]:
         return list(self.macros.values())
 
+    def check_collisions(self) -> None:
+        """
+        Sweep-and-prune macro-to-macro keepout collision verification.
+        Pre-sorts macros by x1 coordinate so pairs whose X-distance exceeds the
+        macro width + halo can be skipped early, reducing average collision
+        verification time from O(N^2) to O(N log N).
+        """
+        insts = list(self.macros.values())
+        if len(insts) < 2:
+            return
+
+        # Pre-calculate halo bounding boxes: (x1, y1, x2, y2, inst)
+        halo_boxes = []
+        for inst in insts:
+            x1, y1, x2, y2 = inst.get_halo_bbox()
+            halo_boxes.append((x1, y1, x2, y2, inst))
+
+        # Pre-sort by left X coordinate (x1)
+        halo_boxes.sort(key=lambda b: b[0])
+
+        num_insts = len(halo_boxes)
+        for i in range(num_insts):
+            ax1, ay1, ax2, ay2, inst_a = halo_boxes[i]
+            for j in range(i + 1, num_insts):
+                bx1, by1, bx2, by2, inst_b = halo_boxes[j]
+                # Sweep-and-prune early exit: if next macro's x1 >= current macro's x2,
+                # then all subsequent macros also have bx1 >= ax2 (due to sorting)
+                if bx1 >= ax2:
+                    break
+                # Check Y collision
+                if not (ay2 <= by1 or ay1 >= by2):
+                    raise DRCViolationError(
+                        1,
+                        f"Macro collision detected between '{inst_a.name}' and '{inst_b.name}'"
+                    )
+
     def verify_legal_placement(self) -> bool:
         """
         Executes pre-flight DRC checks:
-        1. Macro-to-macro keepout collision verification.
+        1. Macro-to-macro keepout collision verification (sweep-and-prune).
         2. Core containment assertion.
         """
         insts = list(self.macros.values())
@@ -254,14 +290,8 @@ class Floorplan:
                     f"Macro {inst.name} ({inst.master}) at [{mx1}, {my1}, {mx2}, {my2}] exceeds core boundary [{cx1}, {cy1}, {cx2}, {cy2}]"
                 )
 
-        # Check collision invariant
-        for i in range(len(insts)):
-            for j in range(i + 1, len(insts)):
-                if insts[i].overlaps(insts[j]):
-                    raise DRCViolationError(
-                        1,
-                        f"Macro collision detected between '{insts[i].name}' and '{insts[j].name}'"
-                    )
+        # Check collision invariant via sweep-and-prune
+        self.check_collisions()
 
         return True
 

@@ -136,6 +136,15 @@ class Project:
         return self._layout
 
     @property
+    def layout(self):
+        """Property returning the Layout engine for idiomatic proj.layout access."""
+        return self.get_layout()
+
+    def view_layers(self, show: bool = True, detach: Optional[bool] = None, **kwargs):
+        """Launches the C++ OpenROAD Native Layer Viewer for this project's layout."""
+        return self.get_layout().view_layers(show=show, detach=detach, **kwargs)
+
+    @property
     def db(self):
         """Returns the OpenDBBridge query engine for direct in-memory OpenROAD database introspection."""
         if not hasattr(self, "_db") or self._db is None:
@@ -168,14 +177,16 @@ class Project:
         """Discovers existing RTL source files from config and rtl/ or source/ directory."""
         existing = [p for p in self.rtl_files if os.path.isfile(p)]
         if not existing:
+            existing_set = set(existing)
             search_dirs = [d for d in [self.rtl_dir, self.source_dir] if os.path.isdir(d)]
             for sdir in search_dirs:
                 for pat in ("*.v", "*.sv", "*.vhd", "*.vhdl"):
                     for f in glob.glob(os.path.join(sdir, pat)):
                         bname = os.path.basename(f).lower()
                         if not any(x in bname for x in ["tb_", "_tb", "test_"]):
-                            if f not in existing:
+                            if f not in existing_set:
                                 existing.append(f)
+                                existing_set.add(f)
         return existing
 
     def is_vhdl(self) -> bool:
@@ -194,11 +205,13 @@ class Project:
         """Discovers existing SDC timing constraint files."""
         existing = [p for p in self.sdc_files if os.path.isfile(p)]
         if not existing:
+            existing_set = set(existing)
             search_dirs = [d for d in [self.constr_dir, self.rtl_dir, self.source_dir] if os.path.isdir(d)]
             for sdir in search_dirs:
                 for f in glob.glob(os.path.join(sdir, "*.sdc")):
-                    if f not in existing:
+                    if f not in existing_set:
                         existing.append(f)
+                        existing_set.add(f)
         return existing
 
     def get_upf_file(self) -> Optional[str]:
@@ -249,14 +262,16 @@ class Project:
         """Discovers existing testbench files."""
         existing = [p for p in self.tb_files if os.path.isfile(p)]
         if not existing:
+            existing_set = set(existing)
             search_dirs = [d for d in [self.tb_dir, self.rtl_dir, self.source_dir] if os.path.isdir(d)]
             for sdir in search_dirs:
                 for pat in ("*.v", "*.sv", "*.py", "*.vhd", "*.vhdl"):
                     for f in glob.glob(os.path.join(sdir, pat)):
                         bname = os.path.basename(f).lower()
                         if any(x in bname for x in ["tb_", "_tb", "test_"]) or sdir == self.tb_dir:
-                            if f not in existing:
+                            if f not in existing_set:
                                 existing.append(f)
+                                existing_set.add(f)
         return existing
 
     def get_netlists(self) -> List[str]:

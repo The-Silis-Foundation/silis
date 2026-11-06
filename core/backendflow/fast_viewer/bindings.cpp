@@ -20,6 +20,9 @@ PYBIND11_MODULE(fast_layout_viewer, m) {
             if (info.ndim != 1 || (info.size % 4) != 0) {
                 throw std::runtime_error("load_cells_flat requires a 1D float buffer whose length is a multiple of 4 (x,y,w,h)");
             }
+            if (info.strides.empty() || info.strides[0] != static_cast<py::ssize_t>(sizeof(float))) {
+                throw std::runtime_error("load_cells_flat requires a contiguous C-style buffer (stride == sizeof(float))");
+            }
             size_t cell_count = info.size / 4;
             const float* ptr = static_cast<const float*>(info.ptr);
             self.load_cells_flat(ptr, cell_count);

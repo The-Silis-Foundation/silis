@@ -21,12 +21,17 @@ PYBIND11_MODULE(silis_layer_viewer, m) {
         .def("set_dbu", &SilisNativeLayerViewer::set_dbu, py::arg("dbu"))
         .def("load_layer_shapes", &SilisNativeLayerViewer::load_layer_shapes,
              py::arg("layer_name"), py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"))
+        .def("load_power_rails", &SilisNativeLayerViewer::load_power_rails,
+             py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"),
+             py::arg("net_names"), py::arg("layer_names"))
         .def("set_layer_visible", &SilisNativeLayerViewer::set_layer_visible, py::arg("layer_name"), py::arg("visible"))
         .def("set_all_layers_visible", &SilisNativeLayerViewer::set_all_layers_visible, py::arg("visible"))
         .def("load_instances", &SilisNativeLayerViewer::load_instances,
              py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"),
              py::arg("names"), py::arg("masters"), py::arg("is_macro"))
         .def("select_instance", &SilisNativeLayerViewer::select_instance, py::arg("name"))
+        .def("select_instances", &SilisNativeLayerViewer::select_instances, py::arg("names"))
+        .def("select_power_net", &SilisNativeLayerViewer::select_power_net, py::arg("net_name"))
         .def("clear_selection", &SilisNativeLayerViewer::clear_selection)
         .def("set_flightlines", &SilisNativeLayerViewer::set_flightlines,
              py::arg("x1"), py::arg("y1"), py::arg("x2"), py::arg("y2"))

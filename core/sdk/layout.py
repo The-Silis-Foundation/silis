@@ -5,6 +5,7 @@ Provides direct manipulation of OpenDB instances, nets, terminals, and bounding 
 without requiring intermediate DEF file emission or disk roundtrips.
 """
 
+import os
 from typing import Dict, Any, List, Optional, Tuple
 from .opendb_bridge import OpenDBBridge, OpenDBInstance, OpenDBPin
 
@@ -109,6 +110,41 @@ class Layout:
         """Returns top-level I/O boundary pins."""
         self._ensure_loaded()
         return self.bridge.get_pins()
+
+    def view(self, show: bool = True, detach: Optional[bool] = None, layer_view: bool = False, **kwargs) -> Any:
+        """
+        Interactive visualization of the physical layout directly from SDK.
+        
+        Args:
+            show: Whether to display the window.
+            detach: Launch as detached background GUI process (default True for non-blocking SDK).
+            layer_view: If True, uses the C++ OpenROAD Native Layer Viewer with layer controls
+                        and cell/macro internal shapes. If False, uses FastSiliconPeeker.
+            **kwargs: Extra viewer arguments (e.g., layer_visibility, heatmap, show_rulers).
+        """
+        proj = self.project
+        def_path = ""
+        if proj:
+            cand = getattr(proj, "get_def", lambda: None)()
+            if cand and os.path.isfile(cand):
+                def_path = cand
+            elif hasattr(proj, "results_dir"):
+                cand2 = os.path.join(proj.results_dir, "temp.def")
+                if os.path.isfile(cand2):
+                    def_path = cand2
+
+        if not def_path:
+            raise FileNotFoundError("No DEF or layout file found to visualize.")
+
+        from .viewers import view_layout, view_layers
+        if layer_view:
+            return view_layers(def_path, show=show, detach=detach, **kwargs)
+        else:
+            return view_layout(def_path, show=show, detach=detach, **kwargs)
+
+    def view_layers(self, show: bool = True, detach: Optional[bool] = None, **kwargs) -> Any:
+        """Convenience method to launch the C++ OpenROAD Layer Viewer directly."""
+        return self.view(show=show, detach=detach, layer_view=True, **kwargs)
 
     def __repr__(self):
         die = self.get_die_area()

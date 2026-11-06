@@ -12,7 +12,7 @@ maximize, close), zoom/pan controls, and search for:
 
 import os
 import sys
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, Dict
 
 from PyQt6.QtWidgets import (
     QApplication,
@@ -57,7 +57,7 @@ def _ensure_desktop_env():
             if sockets:
                 os.environ["DISPLAY"] = sockets[-1].replace("X", ":")
         if "DISPLAY" not in os.environ or not os.environ["DISPLAY"]:
-            os.environ["DISPLAY"] = ":1"
+            os.environ["DISPLAY"] = ":0"
     
     if "XAUTHORITY" not in os.environ or not os.environ["XAUTHORITY"]:
         for cand in [
@@ -149,7 +149,7 @@ def view_layout(
         cmd = [sys.executable, "-c", launcher_script, repo_root, silis_dir, abs_def, win_title, hm_arg]
         env = os.environ.copy()
         _ensure_desktop_env()
-        env["DISPLAY"] = os.environ.get("DISPLAY", ":1")
+        env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
         if "XAUTHORITY" in os.environ:
             env["XAUTHORITY"] = os.environ["XAUTHORITY"]
         env["QT_QPA_PLATFORM"] = "xcb"
@@ -653,7 +653,7 @@ def view_magic(gds_path: str, tech_path: Optional[str] = None) -> Optional[subpr
     cmd.append(abs_gds)
 
     env = os.environ.copy()
-    env["DISPLAY"] = os.environ.get("DISPLAY", ":1")
+    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
     if "XAUTHORITY" in os.environ:
         env["XAUTHORITY"] = os.environ["XAUTHORITY"]
 
@@ -672,7 +672,7 @@ def view_gtkwave(vcd_path: str) -> Optional[subprocess.Popen]:
         raise FileNotFoundError(f"VCD file not found: {abs_vcd}")
 
     env = os.environ.copy()
-    env["DISPLAY"] = os.environ.get("DISPLAY", ":1")
+    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
     if "XAUTHORITY" in os.environ:
         env["XAUTHORITY"] = os.environ["XAUTHORITY"]
 
@@ -691,7 +691,7 @@ def view_openroad_gui(def_or_odb_path: str) -> Optional[subprocess.Popen]:
         raise FileNotFoundError(f"DEF/ODB file not found: {abs_file}")
 
     env = os.environ.copy()
-    env["DISPLAY"] = os.environ.get("DISPLAY", ":1")
+    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
     if "XAUTHORITY" in os.environ:
         env["XAUTHORITY"] = os.environ["XAUTHORITY"]
 
@@ -747,4 +747,101 @@ def view_openroad_gui(def_or_odb_path: str) -> Optional[subprocess.Popen]:
     proc = subprocess.Popen(cmd, cwd=os.path.dirname(abs_file), env=env, start_new_session=True)
     print(f"[SILIS] OpenROAD Native GUI launched for '{os.path.basename(abs_file)}' (PID: {proc.pid})")
     return proc
+
+
+# ------------------------------------------------------------------------------
+# 8. OpenROAD C++ Native Layer Viewer
+# ------------------------------------------------------------------------------
+def view_layers(
+    def_or_odb_path: str,
+    parent: Optional[QWidget] = None,
+    title: Optional[str] = None,
+    show: bool = True,
+    detach: Optional[bool] = None,
+    layer_visibility: Optional[Dict[str, bool]] = None,
+) -> Any:
+    """
+    Opens a standalone window hosting the high-performance OpenROAD C++ Layer Viewer
+    (SilisNativeLayerViewer & LayerViewerPanel) with physical layer rendering,
+    macro/standard cell internal pin/obstruction inspection, flightlines, and inspector panel.
+
+    By default (detach=None), when called standalone with show=True, it automatically
+    launches in a detached interactive desktop process so scripts never block.
+    Pass detach=False to construct and return a QMainWindow in-process.
+    """
+    _ensure_desktop_env()
+    abs_file = os.path.abspath(def_or_odb_path)
+    if os.path.isdir(abs_file):
+        candidates = [
+            os.path.join(abs_file, "results", "temp.def"),
+            os.path.join(abs_file, "results", "temp.odb"),
+            os.path.join(abs_file, "results", "final_routed.def"),
+            os.path.join(abs_file, "results", "routed.def"),
+        ]
+        import glob
+        candidates.extend(glob.glob(os.path.join(abs_file, "results", "*.def")))
+        candidates.extend(glob.glob(os.path.join(abs_file, "*.def")))
+        for cand in candidates:
+            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
+                abs_file = cand
+                break
+
+    win_title = title or f"Silis OpenROAD Native Layer Viewer — {os.path.basename(abs_file)}"
+
+    if detach is None:
+        detach = (show and parent is None)
+
+    if detach:
+        silis_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        repo_root = os.path.dirname(silis_dir)
+        import json
+        vis_json = json.dumps(layer_visibility or {})
+        launcher_script = (
+            "import sys, os, json; "
+            "repo_root = sys.argv[1]; silis_dir = sys.argv[2]; abs_file = sys.argv[3]; win_title = sys.argv[4]; vis_json = sys.argv[5]; "
+            "sys.path.insert(0, silis_dir); sys.path.insert(0, repo_root); import silis; "
+            "from PyQt6.QtWidgets import QApplication; "
+            "app = QApplication(sys.argv); "
+            "layer_vis = json.loads(vis_json) if vis_json else None; "
+            "win = silis.view_layers(abs_file, title=win_title, show=True, detach=False, layer_visibility=layer_vis); "
+            "win.resize(1200, 800); win.show(); win.raise_(); win.activateWindow(); "
+            "sys.exit(app.exec())"
+        )
+        cmd = [sys.executable, "-c", launcher_script, repo_root, silis_dir, abs_file, win_title, vis_json]
+        env = os.environ.copy()
+        _ensure_desktop_env()
+        env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+        if "XAUTHORITY" in os.environ:
+            env["XAUTHORITY"] = os.environ["XAUTHORITY"]
+        env["QT_QPA_PLATFORM"] = "xcb"
+        proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+        print(f"[SILIS] Desktop OpenROAD Layer Viewer window launched (PID: {proc.pid})")
+        return proc
+
+    _ensure_app()
+    from layer_viewer.layer_viewer_panel import LayerViewerPanel
+
+    win = QMainWindow(parent)
+    win.setWindowFlags(
+        Qt.WindowType.Window
+        | Qt.WindowType.WindowMinMaxButtonsHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )
+    win.setWindowTitle(win_title)
+    win.resize(1200, 800)
+
+    panel = LayerViewerPanel(ide=None, parent=win)
+    win.setCentralWidget(panel)
+    win.layer_panel = panel
+
+    if os.path.isfile(abs_file):
+        panel.load_layout_from_opendb(abs_file)
+
+    if layer_visibility and hasattr(panel, "set_layer_visibility"):
+        panel.set_layer_visibility(layer_visibility)
+
+    if show:
+        win.show()
+    return win
+
 

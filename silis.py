@@ -910,7 +910,7 @@ class SilisIDE(QMainWindow):
 
             elif key == Qt.Key.Key_F5:
                 self.switch_world(1)
-                self.backend_widget.viz_tabs.setCurrentIndex(2)
+                self.backend_widget.viz_tabs.setCurrentIndex(1)
                 return True
 
         # --- SUPER KEY LOGIC (` + Key) ---
@@ -3123,7 +3123,7 @@ if __name__ == "__main__":
     elif proj_to_open and window.project_config:
         # Smart auto-detection: if DEF exists, open Layout view; else if netlist exists, open Synthesis log view
         top = window.project_config.get("top_module", "design")
-        root = os.path.dirname(os.path.abspath(proj_to_open)) if proj_to_open.endswith(".json") else os.path.abspath(proj_to_open)
+        root = os.path.dirname(os.path.abspath(proj_to_open)) if os.path.isfile(proj_to_open) else os.path.abspath(proj_to_open)
         if os.path.exists(os.path.join(root, "results", "temp.def")) or os.path.exists(os.path.join(root, "results", "design.def")):
             window.switch_world(1)
         elif os.path.exists(os.path.join(root, "netlist", f"{top}_netlist.v")) or os.path.exists(os.path.join(root, "netlist", "design.v")):

@@ -5,6 +5,7 @@
 #include <QRect>
 #include <QMutex>
 #include <QWaitCondition>
+#include <atomic>
 
 class LayoutViewer;
 
@@ -31,6 +32,6 @@ private:
     QWaitCondition m_condition;
     
     QRect m_drawRect;
-    bool m_abort;
+    std::atomic<bool> m_abort{false};
     bool m_restart;
 };

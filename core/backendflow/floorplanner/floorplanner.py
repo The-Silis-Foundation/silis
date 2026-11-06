@@ -3,6 +3,7 @@ import re
 import json
 import glob
 import math
+import collections
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -1494,7 +1495,7 @@ class InteractiveFloorplannerWidget(QDialog):
         self.total_std_cell_area = 0.0
         self.module_areas = {}
         self.inclusive_module_areas = {}
-        self.undo_stack = []
+        self.undo_stack = collections.deque(maxlen=50)
         self.redo_stack = []
         self.is_undoing = False
         self._user_custom_dimensions = False
@@ -2052,6 +2053,27 @@ class InteractiveFloorplannerWidget(QDialog):
             try:
                 with open(session_file, "r") as f:
                     state = json.load(f)
+
+                # Check if netlist checksum changed compared to saved session
+                saved_checksum = state.get("netlist_checksum", "")
+                if saved_checksum:
+                    netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
+                    if not os.path.isfile(netlist_path):
+                        netlist_path = os.path.join(proj_root, "source", f"{base}.v")
+                    if os.path.isfile(netlist_path):
+                        with open(netlist_path, "rb") as nf:
+                            cur_sha = hashlib.sha256(nf.read()).hexdigest()
+                        if cur_sha != saved_checksum:
+                            print(f"[FPS ALERT] Netlist checksum mismatch on session load! Saved: {saved_checksum[:16]}..., Current: {cur_sha[:16]}...")
+                            QMessageBox.warning(
+                                self,
+                                "Netlist Modified Warning",
+                                f"Warning: Gate-level netlist has changed since this floorplan session was saved!\n\n"
+                                f"Saved Checksum:   {saved_checksum[:16]}...\n"
+                                f"Current Checksum: {cur_sha[:16]}...\n\n"
+                                f"Existing macro and region coordinates may be invalid or out of sync with new module ports."
+                            )
+
                 self.load_state(state)
             except Exception as e:
                 self.is_undoing = False
@@ -2079,6 +2101,7 @@ class InteractiveFloorplannerWidget(QDialog):
         with open(netlist_path, "rb") as f:
             cur_sha = hashlib.sha256(f.read()).hexdigest()
         if self.netlist_checksum and self.netlist_checksum != cur_sha:
+            print(f"[FPS ALERT] Netlist integrity alert: SHA-256 changed from {self.netlist_checksum[:16]}... to {cur_sha[:16]}...")
             QMessageBox.warning(
                 self, "Checksum Mismatch Detected",
                 f"Netlist SHA-256 has changed since session creation!\n\nSaved:   {self.netlist_checksum[:16]}...\nCurrent: {cur_sha[:16]}...\n\nPlease review your region modules."

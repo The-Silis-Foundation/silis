@@ -39,13 +39,59 @@ class TimingGraph:
         self._cached_slacks: Dict[str, TimingPin] = {}
         self._wns: Optional[float] = None
         self._tns: Optional[float] = None
+        self._cached_files_signature: Optional[Tuple[Optional[Tuple[int, float]], ...]] = None
+
+    def _get_files_signature(self) -> Tuple[Optional[Tuple[int, float]], ...]:
+        """Computes (size, mtime) signature for timing input files (temp.def, constr.sdc, etc.)."""
+        proj_root = getattr(self.project, "root_dir", ".")
+        top_name = getattr(self.project, "top_module", "design")
+        netlist_path = os.path.join(proj_root, "netlist", f"{top_name}_netlist.v")
+        sdc_path = os.path.join(proj_root, "constr", f"{top_name}.sdc")
+        def_path = os.path.join(proj_root, "results", "temp.def")
+        if not os.path.isfile(def_path):
+            def_cand = os.path.join(proj_root, "results", f"{top_name}.def")
+            if os.path.isfile(def_cand):
+                def_path = def_cand
+
+        sig = []
+        for path in (def_path, sdc_path, netlist_path):
+            try:
+                st = os.stat(path)
+                sig.append((st.st_size, st.st_mtime))
+            except OSError:
+                sig.append(None)
+        return tuple(sig)
+
+    def invalidate_cache(self) -> None:
+        """Invalidates all cached timing slacks and WNS/TNS metrics."""
+        self._wns = None
+        self._tns = None
+        self._cached_slacks.clear()
+        self._cached_files_signature = None
+
+    @property
+    def wns(self) -> float:
+        """Worst Negative Slack in nanoseconds."""
+        return self.get_wns()
+
+    @property
+    def tns(self) -> float:
+        """Total Negative Slack in nanoseconds."""
+        return self.get_tns()
 
     def query_live_metrics(self, force_refresh: bool = False) -> Tuple[float, float]:
         """
         Queries WNS and TNS from the active OpenROAD runtime.
         Returns (wns, tns) in nanoseconds.
+        Uses cached metrics if underlying files (DEF/SDC/netlist) have not changed.
         """
-        if self._wns is not None and not force_refresh:
+        current_sig = self._get_files_signature()
+        if (
+            not force_refresh
+            and self._wns is not None
+            and self._cached_files_signature is not None
+            and self._cached_files_signature == current_sig
+        ):
             return self._wns, (self._tns or 0.0)
 
         # In embedded/in-process OpenROAD mode, query directly:
@@ -96,18 +142,25 @@ puts "SILIS_TIMING_METRICS: $wns $tns"
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            out, _ = p.communicate(cmd.encode("utf-8"), timeout=15)
-            for line in out.decode("utf-8").splitlines():
-                if line.startswith("SILIS_TIMING_METRICS:"):
-                    parts = line.split()
-                    self._wns = float(parts[1]) if len(parts) > 1 else 0.0
-                    self._tns = float(parts[2]) if len(parts) > 2 else 0.0
-                    return self._wns, self._tns
-        except Exception:
-            pass
+            out, err = p.communicate(cmd.encode("utf-8"), timeout=15)
+            if p.returncode == 0:
+                for line in out.decode("utf-8").splitlines():
+                    if line.startswith("SILIS_TIMING_METRICS:"):
+                        parts = line.split()
+                        self._wns = float(parts[1]) if len(parts) > 1 else 0.0
+                        self._tns = float(parts[2]) if len(parts) > 2 else 0.0
+                        self._cached_files_signature = current_sig
+                        return self._wns, self._tns
+            else:
+                import sys
+                print(f"[WARN] OpenROAD timing evaluation exited with return code {p.returncode}: {err.decode('utf-8', errors='ignore').strip()}", file=sys.stderr)
+        except Exception as e:
+            import sys
+            print(f"[WARN] Failed to query live timing metrics: {e}", file=sys.stderr)
 
         self._wns = 0.0
         self._tns = 0.0
+        self._cached_files_signature = current_sig
         return self._wns, self._tns
 
     def get_wns(self, corner: str = "nom") -> float:

@@ -229,12 +229,17 @@ def check_floorplan_collisions(
                 "message": f"Region '{r['module']}' bounds {_format_collision_box(bx)} extends outside die bounds {_format_collision_box([dx1, dy1, dx2, dy2])}."
             })
 
-    # 2. Macro vs Macro Collisions (halo-expanded)
-    num_m = len(norm_macros)
+    # 2. Macro vs Macro Collisions (halo-expanded, sweep-and-prune)
+    sorted_macros = sorted(norm_macros, key=lambda m: m["eff_box"][0])
+    num_m = len(sorted_macros)
     for i in range(num_m):
+        m1 = sorted_macros[i]
+        ax1, ay1, ax2, ay2 = m1["eff_box"]
         for j in range(i + 1, num_m):
-            m1 = norm_macros[i]
-            m2 = norm_macros[j]
+            m2 = sorted_macros[j]
+            bx1, by1, bx2, by2 = m2["eff_box"]
+            if bx1 >= ax2:
+                break
             ov_box, ov_area = _calc_overlap(m1["eff_box"], m2["eff_box"])
             if ov_box:
                 collisions.append({
@@ -661,6 +666,8 @@ class Pipeline:
         pitch_um: float = 40.0,
         domains: Optional[List[str]] = None,
         adaptive_placement: bool = False,
+        shrink_wrap: bool = True,
+        tile_size_um: Tuple[float, float] = (24.840, 21.760),
     ) -> "Pipeline":
         """
         Declaratively specifies physical power switch column synthesis in gated domains.
@@ -668,7 +675,9 @@ class Pipeline:
         - columns: Number of vertical header switch columns.
         - pitch_um: Horizontal column pitch.
         - domains: Target gated power domain names.
-        - adaptive_placement: When True, power switch columns automatically center around logic centroids.
+        - adaptive_placement: When True, enables coarse-placement guided logic shrink-wrapping.
+        - shrink_wrap: When True, uses site-aligned 2D rectilinear tile occupancy bins + 1-hop dilation.
+        - tile_size_um: (W_tile, H_tile) aligned to site pitch (24.840 um = 54 sites x 0.460 um, 21.760 um = 8 rows x 2.720 um).
         """
         if not hasattr(self, "_spec_fps"):
             self._spec_fps = {}
@@ -679,6 +688,8 @@ class Pipeline:
             "pitch_um": pitch_um,
             "domains": domains or [],
             "adaptive_placement": adaptive_placement,
+            "shrink_wrap": shrink_wrap,
+            "tile_size_um": tile_size_um,
         }
         return self
 
@@ -953,6 +964,9 @@ class Pipeline:
                 sw_c = getattr(spd, "switch_columns", sw_cols)
                 sw_p = getattr(spd, "switch_pitch", sw_pitch)
                 is_adaptive = getattr(spd, "adaptive_placement", False) or psw_spec.get("adaptive_placement", False)
+                use_shrink_wrap = psw_spec.get("shrink_wrap", True)
+                tile_w, tile_h = psw_spec.get("tile_size_um", (24.840, 21.760))
+
                 lines.extend([
                     f"\n# Synthesizing Power Switch Matrix for {spd_name}",
                     'if {$_sw_master ne "NULL"} {',
@@ -961,7 +975,111 @@ class Pipeline:
                     "    set _sw_idx 0",
                 ])
 
-                if is_adaptive:
+                if is_adaptive and use_shrink_wrap:
+                    # Tapeout-grade Rectilinear Tile Shrink-Wrap:
+                    # 1. Discretize domain fence into exact site-pitch aligned tiles (W_tile=24.840 um = 54 sites x 0.460 um, H_tile=21.760 um = 8 rows x 2.720 um).
+                    # 2. Map coarse-placed cell instances into occupancy bins.
+                    # 3. Dilate active bins by 1 tile hop (+20 um routing corridor) clipped against legal UPF domain fence.
+                    # 4. Stamp switches strictly inside dilated tiles on 5.44 um even-row boundaries.
+                    # 5. Place placement blockages over empty tiles to prevent logic drift.
+                    lines.extend([
+                        f'    # Rectilinear Tile-Grid Shrink-Wrap for {spd_name}',
+                        f'    set _tw {tile_w}; set _th {tile_h}',
+                        f'    set _nx [expr {{int(ceil(($_rx2 - $_rx1) / $_tw))}}]',
+                        f'    set _ny [expr {{int(ceil(($_ry2 - $_ry1) / $_th))}}]',
+                        '    array unset _tile_occ; array unset _tile_active',
+                        '',
+                        '    # Step 1: Detect occupied bins from cell logic',
+                        '    set _cell_cnt 0',
+                        '    foreach _i [$_blk getInsts] {',
+                        '        set _master [$_i getMaster]',
+                        '        if {[$_master getType] eq "CORE"} {',
+                        '            set _bbox [$_i getBBox]',
+                        '            set _cx [expr {([$_bbox xMin] + [$_bbox xMax]) / 2000.0}]',
+                        '            set _cy [expr {([$_bbox yMin] + [$_bbox yMax]) / 2000.0}]',
+                        '            if {$_cx >= $_rx1 && $_cx <= $_rx2 && $_cy >= $_ry1 && $_cy <= $_ry2} {',
+                        '                set _ti [expr {int(floor(($_cx - $_rx1) / $_tw))}]',
+                        '                set _tj [expr {int(floor(($_cy - $_ry1) / $_th))}]',
+                        '                if {$_ti >= 0 && $_ti < $_nx && $_tj >= 0 && $_tj < $_ny} {',
+                        '                    set _tile_occ($_ti,$_tj) 1',
+                        '                    incr _cell_cnt',
+                        '                }',
+                        '            }',
+                        '        }',
+                        '    }',
+                        '',
+                        '    # Step 2: 1-hop morphological dilation clipped to legal domain fence',
+                        '    if {$_cell_cnt > 0} {',
+                        '        for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
+                        '            for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
+                        '                if {[info exists _tile_occ($_ti,$_tj)]} {',
+                        '                    for {set _di -1} {$_di <= 1} {incr _di} {',
+                        '                        for {set _dj -1} {$_dj <= 1} {incr _dj} {',
+                        '                            set _ni [expr {$_ti + $_di}]',
+                        '                            set _nj [expr {$_tj + $_dj}]',
+                        '                            if {$_ni >= 0 && $_ni < $_nx && $_nj >= 0 && $_nj < $_ny} {',
+                        '                                set _tile_active($_ni,$_nj) 1',
+                        '                            }',
+                        '                        }',
+                        '                    }',
+                        '                }',
+                        '            }',
+                        '        }',
+                        '    } else {',
+                        '        # Fallback if unplaced: activate all tiles in domain',
+                        '        for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
+                        '            for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
+                        '                set _tile_active($_ti,$_tj) 1',
+                        '            }',
+                        '        }',
+                        '    }',
+                        '',
+                        '    # Step 3: Stamp switches strictly inside dilated tiles',
+                        '    # Row snapping to 5.44 um (even 2.72 um site rows) for VPWR/VGND polarity',
+                        '    for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
+                        '        for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
+                        '            if {[info exists _tile_active($_ti,$_tj)]} {',
+                        '                set _bx1 [expr {$_rx1 + $_ti * $_tw}]',
+                        '                set _by1 [expr {$_ry1 + $_tj * $_th}]',
+                        '                set _bx2 [expr {$_bx1 + $_tw}]',
+                        '                set _by2 [expr {$_by1 + $_th}]',
+                        '                if {$_bx2 > $_rx2} { set _bx2 $_rx2 }',
+                        '                if {$_by2 > $_ry2} { set _by2 $_ry2 }',
+                        '                set _mid_x [expr {($_bx1 + $_bx2) / 2.0}]',
+                        '                set _y_start [expr {ceil($_by1 / 5.44) * 5.44}]',
+                        '                for {set _sw_y $_y_start} {$_sw_y < [expr {$_by2 - 4.0}]} {set _sw_y [expr {$_sw_y + 10.88}]} {',
+                        f'                    set _sw_name "sw_{spd_name}_c${{_ti}}_r${{_sw_idx}}"',
+                        '                    set _inst [odb::dbInst_create $_blk $_sw_master $_sw_name]',
+                        '                    if {$_inst ne "NULL"} {',
+                        '                        set _ix_dbu [expr {int(round($_mid_x * 1000))}]',
+                        '                        set _iy_dbu [expr {int(round($_sw_y * 1000))}]',
+                        '                        $_inst setOrigin $_ix_dbu $_iy_dbu',
+                        '                        $_inst setOrient "R0"',
+                        '                        $_inst setPlacementStatus "COVER"',
+                        '                    }',
+                        '                    incr _sw_idx',
+                        '                }',
+                        '            }',
+                        '        }',
+                        '    }',
+                        '',
+                        '    # Step 4: Add soft placement blockages over empty tiles to prevent logic drift',
+                        '    for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
+                        '        for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
+                        '            if {![info exists _tile_active($_ti,$_tj)]} {',
+                        '                set _blk_x1 [expr {$_rx1 + $_ti * $_tw}]',
+                        '                set _blk_y1 [expr {$_ry1 + $_tj * $_th}]',
+                        '                set _blk_x2 [expr {$_blk_x1 + $_tw}]',
+                        '                set _blk_y2 [expr {$_blk_y1 + $_th}]',
+                        '                if {$_blk_x2 > $_rx2} { set _blk_x2 $_rx2 }',
+                        '                if {$_blk_y2 > $_ry2} { set _blk_y2 $_ry2 }',
+                        '                # Mark tile as placement blockage in OpenROAD',
+                        '                catch { create_placement_blockage -soft -name "blk_${spd_name}_${_ti}_${_tj}" -box "$_blk_x1 $_blk_y1 $_blk_x2 $_blk_y2" }',
+                        '            }',
+                        '        }',
+                        '    }',
+                    ])
+                elif is_adaptive:
                     # Adaptive Centroid Anchoring: Calculate center of gravity (X_CoG, Y_CoG) of standard cells in this domain
                     lines.extend([
                         f'    # Adaptive CoG Switch Placement: Center power switch columns around {spd_name} cell centroid',
@@ -1056,25 +1174,67 @@ class Pipeline:
                 if src_area and len(src_area) == 4:
                     sx1, sy1, sx2, sy2 = [float(v) for v in src_area]
                     lines.extend([
-                        f"    # Level shifters for crossing: {src_dom} -> {snk_dom}",
+                        f"    # Crossing-Net Adaptive Snapping for {src_dom} -> {snk_dom}",
                         f"    set _sx1 {sx1}; set _sy1 {sy1}; set _sx2 {sx2}; set _sy2 {sy2}",
-                        "    # Place 16 level shifters along the perimeter rows of the domain cut",
-                        "    for {set _k 0} {$_k < 16} {incr _k} {",
+                        "    # Trace actual cross-domain nets connecting from source domain to target domain",
+                        f'    set _cross_nets {{}}',
+                        f'    foreach _net [$_blk getNets] {{',
+                        f'        set _sig_type [$_net getSigType]',
+                        f'        if {{$_sig_type eq "POWER" || $_sig_type eq "GROUND"}} continue',
+                        f'        set _has_src 0; set _has_snk 0; set _driver_pt ""',
+                        '        foreach _it [$_net getITerms] {',
+                        '            set _inst [$_it getInst]',
+                        '            set _bbox [$_inst getBBox]',
+                        '            set _cx [expr {([$_bbox xMin] + [$_bbox xMax]) / 2000.0}]',
+                        '            set _cy [expr {([$_bbox yMin] + [$_bbox yMax]) / 2000.0}]',
+                        '            set _in_src [expr {$_cx >= $_sx1 && $_cx <= $_sx2 && $_cy >= $_sy1 && $_cy <= $_sy2}]',
+                        '            if {$_in_src} {',
+                        '                set _has_src 1',
+                        '                set _iotype [$_it getIoType]',
+                        '                if {[string match "*output*" $_iotype] || [string match "*OUTPUT*" $_iotype]} {',
+                        '                    set _driver_pt [list $_cx $_cy]',
+                        '                }',
+                        '            } else {',
+                        '                set _has_snk 1',
+                        '            }',
+                        '        }',
+                        f'        if {{$_has_src && $_has_snk && [llength $_driver_pt] == 2}} {{',
+                        f'            lappend _cross_nets $_driver_pt',
+                        f'        }}',
+                        f'    }}',
+                        f'    set _num_cross [llength $_cross_nets]',
+                        f'    if {{$_num_cross == 0}} {{',
+                        f'        # Fallback perimeter default',
+                        f'        for {{set _k 0}} {{$_k < 16}} {{incr _k}} {{',
+                        f'            set _lx [expr {{$_sx1 + 8.0 + $_k * 12.0}}]',
+                        f'            if {{$_lx > [expr {{$_sx2 - 10.0}}]}} {{ set _lx [expr {{$_sx2 - 10.0}}] }}',
+                        f'            lappend _cross_nets [list $_lx [expr {{$_sy1 + 10.0}}]]',
+                        f'        }}',
+                        f'    }}',
+                        f'    set _k 0',
+                        f'    foreach _pt $_cross_nets {{',
+                        f'        set _dcx [lindex $_pt 0]; set _dcy [lindex $_pt 1]',
+                        f'        # Snap to outer tile perimeter of active shrink-wrapped logic cluster facing PD_TOP',
+                        f'        set _lx $_dcx',
+                        f'        set _ly [expr {{$_sy2 - 5.44}}]',
+                        f'        # Site row legalization (0.460 um site pitch, 2.72 um row pitch)',
+                        f'        set _lx [expr {{round($_lx / 0.460) * 0.460}}]',
+                        f'        set _ly [expr {{round($_ly / 2.720) * 2.720}}]',
+                        f'        if {{$_lx < [expr {{$_sx1 + 4.0}}]}} {{ set _lx [expr {{$_sx1 + 4.0}}] }}',
+                        f'        if {{$_lx > [expr {{$_sx2 - 10.0}}]}} {{ set _lx [expr {{$_sx2 - 10.0}}] }}',
                         f'        set _ls_name "ls_{src_dom}_${{_k}}"',
-                        "        set _inst [odb::dbInst_create $_blk $_ls_master $_ls_name]",
-                        '        if {$_inst ne "NULL"} {',
-                        "            # Align on boundary edge spaced by 12 um",
-                        "            set _lx [expr {$_sx1 + 8.0 + $_k * 12.0}]",
-                        "            if {$_lx > [expr {$_sx2 - 10.0}]} { set _lx [expr {$_sx2 - 10.0}] }",
-                        "            set _ly [expr {ceil($_sy1 / 5.44) * 5.44}]",
-                        "            set _lx_dbu [expr {int(round($_lx * 1000))}]",
-                        "            set _ly_dbu [expr {int(round($_ly * 1000))}]",
-                        "            $_inst setOrigin $_lx_dbu $_ly_dbu",
-                        '            $_inst setOrient "R0"',
-                        '            $_inst setPlacementStatus "COVER"',
-                        "            incr _ls_idx",
-                        "        }",
-                        "    }",
+                        f'        set _inst [odb::dbInst_create $_blk $_ls_master $_ls_name]',
+                        f'        if {{$_inst ne "NULL"}} {{',
+                        f'            set _lx_dbu [expr {{int(round($_lx * 1000))}}]',
+                        f'            set _ly_dbu [expr {{int(round($_ly * 1000))}}]',
+                        f'            $_inst setOrigin $_lx_dbu $_ly_dbu',
+                        f'            $_inst setOrient "R0"',
+                        f'            $_inst setPlacementStatus "COVER"',
+                        f'            incr _ls_idx',
+                        f'        }}',
+                        f'        incr _k',
+                        f'        if {{$_k >= 32}} break',
+                        f'    }}',
                     ])
             lines.extend([
                 '    puts "SILIS: Synthesized $_ls_idx boundary level shifters across voltage islands"',

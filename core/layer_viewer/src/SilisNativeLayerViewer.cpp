@@ -45,6 +45,10 @@ void SilisNativeLayerViewer::clear() {
     inst_name_index_.clear();
     selected_inst_name_.clear();
     selected_rect_ = QRectF();
+    multi_selected_rects_.clear();
+    power_rails_.clear();
+    selected_power_net_.clear();
+    selected_power_rects_.clear();
     flightlines_.clear();
     rubber_band_ = QRect();
     rubber_band_showing_ = false;
@@ -71,6 +75,25 @@ void SilisNativeLayerViewer::load_layer_shapes(const std::string& layer_name,
     shapes.resize(count);
     for (size_t i = 0; i < count; ++i) {
         shapes[i] = {x[i], y[i], w[i], h[i]};
+    }
+    update();
+}
+
+void SilisNativeLayerViewer::load_power_rails(const std::vector<float>& x,
+                                           const std::vector<float>& y,
+                                           const std::vector<float>& w,
+                                           const std::vector<float>& h,
+                                           const std::vector<std::string>& net_names,
+                                           const std::vector<std::string>& layer_names) {
+    size_t count = std::min({x.size(), y.size(), w.size(), h.size(), net_names.size()});
+    power_rails_.clear();
+    power_rails_.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        PowerRailSegment seg;
+        seg.rect = QRectF(x[i], y[i], w[i], h[i]);
+        seg.net_name = net_names[i];
+        seg.layer_name = (i < layer_names.size()) ? layer_names[i] : "";
+        power_rails_.push_back(seg);
     }
     update();
 }
@@ -113,6 +136,9 @@ void SilisNativeLayerViewer::load_instances(const std::vector<float>& x,
 
 void SilisNativeLayerViewer::select_instance(const std::string& name) {
     selected_inst_name_ = name;
+    multi_selected_rects_.clear();
+    selected_power_net_.clear();
+    selected_power_rects_.clear();
     auto it = inst_name_index_.find(name);
     if (it != inst_name_index_.end()) {
         selected_rect_ = instances_[it->second].rect;
@@ -122,9 +148,45 @@ void SilisNativeLayerViewer::select_instance(const std::string& name) {
     update();
 }
 
+void SilisNativeLayerViewer::select_instances(const std::vector<std::string>& names) {
+    selected_inst_name_.clear();
+    selected_rect_ = QRectF();
+    multi_selected_rects_.clear();
+    selected_power_net_.clear();
+    selected_power_rects_.clear();
+    for (const auto& name : names) {
+        auto it = inst_name_index_.find(name);
+        if (it != inst_name_index_.end()) {
+            multi_selected_rects_.push_back(instances_[it->second].rect);
+        }
+    }
+    if (!multi_selected_rects_.empty()) {
+        selected_rect_ = multi_selected_rects_.front();
+        if (!names.empty()) selected_inst_name_ = names.front();
+    }
+    update();
+}
+
+void SilisNativeLayerViewer::select_power_net(const std::string& net_name) {
+    selected_inst_name_.clear();
+    selected_rect_ = QRectF();
+    multi_selected_rects_.clear();
+    selected_power_net_ = net_name;
+    selected_power_rects_.clear();
+    for (const auto& pr : power_rails_) {
+        if (pr.net_name == net_name) {
+            selected_power_rects_.push_back(pr.rect);
+        }
+    }
+    update();
+}
+
 void SilisNativeLayerViewer::clear_selection() {
     selected_inst_name_.clear();
     selected_rect_ = QRectF();
+    multi_selected_rects_.clear();
+    selected_power_net_.clear();
+    selected_power_rects_.clear();
     clear_flightlines();
     update();
 }
@@ -225,7 +287,19 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
     p.setBrush(QColor(10, 10, 10));
     p.drawRect(core_rect_);
 
-    // 2. Render Placed Macros & Outlines (OpenROAD style orange-brown blocks)
+    // 2. Render Placed Macros & Standard Cells (OpenROAD style outlines)
+    // Draw standard cells when zoomed in sufficiently or as subtle site outlines
+    double min_cell_dim = 2.0 / zoom_factor_;
+    p.setPen(QPen(QColor(80, 140, 200, 160), 1.0 / zoom_factor_));
+    p.setBrush(QColor(40, 90, 140, 60));
+    for (const auto& inst : instances_) {
+        if (inst.is_macro) continue;
+        if (inst.rect.width() >= min_cell_dim || inst.rect.height() >= min_cell_dim) {
+            p.drawRect(inst.rect);
+        }
+    }
+
+    // Draw Macros (OpenROAD style orange-brown blocks)
     for (const auto& inst : instances_) {
         if (!inst.is_macro) continue;
         p.setPen(QPen(QColor(230, 130, 20), 1.5 / zoom_factor_));
@@ -235,6 +309,17 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
 
     // 3. Render Metal & Via Layers in Authentic OpenROAD Stacking Order
     const std::vector<std::string> render_order = {"li1", "vias", "met1", "met2", "met3", "met4", "met5"};
+    // Screen bounds in DBU world coordinates for viewport culling
+    double view_half_w = (width() / 2.0) / zoom_factor_;
+    double view_half_h = (height() / 2.0) / zoom_factor_;
+    double cx = core_rect_.center().x() - pan_offset_.x();
+    double cy = core_rect_.center().y() - pan_offset_.y();
+    double min_x = cx - view_half_w;
+    double max_x = cx + view_half_w;
+    double min_y = cy - view_half_h;
+    double max_y = cy + view_half_h;
+    double min_screen_dim = 1.0 / zoom_factor_; // Shapes smaller than 1px screen space are culled
+
     for (const auto& lname : render_order) {
         auto it_vis = layer_visible_.find(lname);
         if (it_vis != layer_visible_.end() && !it_vis->second) continue;
@@ -247,6 +332,11 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
         p.setBrush(color);
 
         for (const auto& s : it_layer->second) {
+            // Viewport frustum culling
+            if (s.x + s.w < min_x || s.x > max_x || s.y + s.h < min_y || s.y > max_y) continue;
+            // Sub-pixel LOD culling
+            if (s.w < min_screen_dim && s.h < min_screen_dim) continue;
+
             p.drawRect(QRectF(s.x, s.y, s.w, s.h));
         }
     }
@@ -259,8 +349,21 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
         }
     }
 
-    // 5. Render Selected Highlight Box (Exact OpenROAD White Selection Outline + Yellow Halo)
-    if (!selected_rect_.isNull()) {
+    // 5. Render Selected Highlight Boxes (Single or Multi-select or Power Rails)
+    if (!selected_power_rects_.empty()) {
+        // Highlight entire power rail net in glowing electric yellow
+        p.setPen(QPen(QColor(255, 235, 59), 2.0 / zoom_factor_));
+        p.setBrush(QColor(255, 235, 59, 120));
+        for (const auto& pr : selected_power_rects_) {
+            p.drawRect(pr);
+        }
+    } else if (!multi_selected_rects_.empty()) {
+        p.setPen(QPen(QColor(255, 255, 255), 1.5 / zoom_factor_));
+        p.setBrush(QColor(255, 255, 255, 35));
+        for (const auto& mr : multi_selected_rects_) {
+            p.drawRect(mr);
+        }
+    } else if (!selected_rect_.isNull()) {
         p.setPen(QPen(QColor(255, 255, 255), 2.0 / zoom_factor_));
         p.setBrush(QColor(255, 255, 255, 40));
         p.drawRect(selected_rect_);
@@ -465,25 +568,22 @@ void SilisNativeLayerViewer::mouseReleaseEvent(QMouseEvent* event) {
         QRectF box(x1, y1, x2 - x1, y2 - y1);
 
         if (event->button() == Qt::LeftButton) {
-            // Select all objects intersecting the marquee box
-            int best_hit = -1;
-            double best_area = 1e20;
+            // Select all objects intersecting the marquee box (Multi-Select)
+            std::vector<std::string> hit_names;
             for (size_t i = 0; i < instances_.size(); ++i) {
                 if (box.intersects(instances_[i].rect)) {
-                    double area = instances_[i].rect.width() * instances_[i].rect.height();
-                    if (area < best_area) {
-                        best_area = area;
-                        best_hit = static_cast<int>(i);
-                    }
+                    hit_names.push_back(instances_[i].name);
                 }
             }
 
-            if (best_hit >= 0) {
-                const auto& hit = instances_[best_hit];
-                select_instance(hit.name);
-                emit instance_clicked(QString::fromStdString(hit.name),
-                                      QString::fromStdString(hit.master),
-                                      hit.rect.x(), hit.rect.y(), hit.rect.width(), hit.rect.height());
+            if (!hit_names.empty()) {
+                select_instances(hit_names);
+                const auto& first_hit = instances_[inst_name_index_[hit_names.front()]];
+                emit instance_clicked(QString::fromStdString(first_hit.name),
+                                      QString::fromStdString(first_hit.master),
+                                      first_hit.rect.x(), first_hit.rect.y(), first_hit.rect.width(), first_hit.rect.height());
+            } else {
+                clear_selection();
             }
             emit area_selected(x1, y1, x2, y2);
         } else if (event->button() == Qt::RightButton) {
@@ -517,8 +617,31 @@ void SilisNativeLayerViewer::mouseReleaseEvent(QMouseEvent* event) {
                                   QString::fromStdString(hit.master),
                                   hit.rect.x(), hit.rect.y(), hit.rect.width(), hit.rect.height());
         } else {
-            clear_selection();
-            emit canvas_clicked(wpos.x(), wpos.y());
+            // Check if user clicked on a Power Rail / Strap
+            int best_rail = -1;
+            double best_rail_area = 1e20;
+            for (size_t i = 0; i < power_rails_.size(); ++i) {
+                const auto& pr = power_rails_[i];
+                if (pr.rect.contains(wpos)) {
+                    double area = pr.rect.width() * pr.rect.height();
+                    if (area < best_rail_area) {
+                        best_rail_area = area;
+                        best_rail = static_cast<int>(i);
+                    }
+                }
+            }
+
+            if (best_rail >= 0) {
+                const auto& hit_rail = power_rails_[best_rail];
+                select_power_net(hit_rail.net_name);
+                emit power_rail_clicked(QString::fromStdString(hit_rail.net_name),
+                                        QString::fromStdString(hit_rail.layer_name),
+                                        hit_rail.rect.x(), hit_rail.rect.y(),
+                                        hit_rail.rect.width(), hit_rail.rect.height());
+            } else {
+                clear_selection();
+                emit canvas_clicked(wpos.x(), wpos.y());
+            }
         }
     }
 }

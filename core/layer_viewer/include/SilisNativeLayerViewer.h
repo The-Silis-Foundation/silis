@@ -45,6 +45,10 @@ public:
     void load_layer_shapes(const std::string& layer_name, const std::vector<float>& x,
                           const std::vector<float>& y, const std::vector<float>& w,
                           const std::vector<float>& h);
+    void load_power_rails(const std::vector<float>& x, const std::vector<float>& y,
+                         const std::vector<float>& w, const std::vector<float>& h,
+                         const std::vector<std::string>& net_names,
+                         const std::vector<std::string>& layer_names);
     void set_layer_visible(const std::string& layer_name, bool visible);
     void set_all_layers_visible(bool visible);
 
@@ -57,6 +61,8 @@ public:
 
     // Selection & Highlighting
     void select_instance(const std::string& name);
+    void select_instances(const std::vector<std::string>& names);
+    void select_power_net(const std::string& net_name);
     void clear_selection();
 
     // Flightlines
@@ -79,6 +85,7 @@ public:
 
 signals:
     void instance_clicked(const QString& name, const QString& master, float x, float y, float w, float h);
+    void power_rail_clicked(const QString& net_name, const QString& layer_name, float x, float y, float w, float h);
     void area_selected(float x1, float y1, float x2, float y2);
     void canvas_clicked(float x, float y);
 
@@ -120,6 +127,17 @@ private:
     // Selection
     std::string selected_inst_name_;
     QRectF selected_rect_;
+    std::vector<QRectF> multi_selected_rects_;
+
+    // Power Rails
+    struct PowerRailSegment {
+        QRectF rect;
+        std::string net_name;
+        std::string layer_name;
+    };
+    std::vector<PowerRailSegment> power_rails_;
+    std::string selected_power_net_;
+    std::vector<QRectF> selected_power_rects_;
 
     // Flightlines
     std::vector<Flightline> flightlines_;

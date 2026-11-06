@@ -21,8 +21,8 @@
   ],
   "contextMenuEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    580,
-    614
+    581,
+    615
   ],
   "SilisExplorer.on_double_click": [
     "silis/silis.py",
@@ -231,8 +231,8 @@
   ],
   "eventFilter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    230,
-    249
+    242,
+    261
   ],
   "SilisIDE.closeEvent": [
     "silis/silis.py",
@@ -241,8 +241,8 @@
   ],
   "closeEvent": [
     "silis/core/backendflow/flow/backendflow.py",
-    137,
-    139
+    141,
+    143
   ],
   "SilisIDE.reset_sk": [
     "silis/silis.py",
@@ -357,27 +357,27 @@
   "SilisIDE.setup_toolbar": [
     "silis/silis.py",
     1934,
-    2163
+    2186
   ],
   "setup_toolbar": [
     "silis/silis.py",
     1934,
-    2163
+    2186
   ],
   "SilisIDE._populate_recent_menu": [
     "silis/silis.py",
-    2166,
-    2180
+    2189,
+    2203
   ],
   "_populate_recent_menu": [
     "silis/silis.py",
-    2166,
-    2180
+    2189,
+    2203
   ],
   "SilisIDE.new_project": [
     "silis/silis.py",
-    2182,
-    2186
+    2205,
+    2209
   ],
   "new_project": [
     "silis/core/projectwizard/codes.py",
@@ -386,8 +386,8 @@
   ],
   "SilisIDE.open_project": [
     "silis/silis.py",
-    2188,
-    2281
+    2211,
+    2304
   ],
   "open_project": [
     "silis/core/projectwizard/codes.py",
@@ -396,48 +396,48 @@
   ],
   "SilisIDE.open_openram_studio": [
     "silis/silis.py",
-    2283,
-    2286
+    2306,
+    2309
   ],
   "open_openram_studio": [
     "silis/silis.py",
-    2283,
-    2286
+    2306,
+    2309
   ],
   "SilisIDE.open_intake_wizard": [
     "silis/silis.py",
-    2288,
-    2292
+    2311,
+    2315
   ],
   "open_intake_wizard": [
     "silis/silis.py",
-    2288,
-    2292
+    2311,
+    2315
   ],
   "SilisIDE._apply_intake_result": [
     "silis/silis.py",
-    2294,
-    2321
+    2317,
+    2344
   ],
   "_apply_intake_result": [
     "silis/silis.py",
-    2294,
-    2321
+    2317,
+    2344
   ],
   "SilisIDE.open_settings": [
     "silis/silis.py",
-    2323,
-    2325
+    2346,
+    2348
   ],
   "open_settings": [
     "silis/silis.py",
-    2323,
-    2325
+    2346,
+    2348
   ],
   "SilisIDE.log_system": [
     "silis/silis.py",
-    2326,
-    2343
+    2349,
+    2366
   ],
   "log_system": [
     "silis/core/sdk/viewers.py",
@@ -446,198 +446,208 @@
   ],
   "SilisIDE.change_directory": [
     "silis/silis.py",
-    2344,
-    2347
+    2367,
+    2370
   ],
   "change_directory": [
     "silis/silis.py",
-    2344,
-    2347
+    2367,
+    2370
   ],
   "SilisIDE.open_file_in_editor": [
     "silis/silis.py",
-    2349,
-    2352
+    2372,
+    2375
   ],
   "open_file_in_editor": [
     "silis/silis.py",
-    2349,
-    2352
+    2372,
+    2375
   ],
   "SilisIDE._trigger_find_instance": [
     "silis/silis.py",
-    2354,
-    2356
+    2377,
+    2379
   ],
   "_trigger_find_instance": [
     "silis/silis.py",
-    2354,
-    2356
+    2377,
+    2379
   ],
   "SilisIDE.show_module_schematic": [
     "silis/silis.py",
-    2358,
-    2366
+    2381,
+    2389
   ],
   "show_module_schematic": [
     "silis/silis.py",
-    2358,
-    2366
+    2381,
+    2389
   ],
   "SilisIDE.add_waveform_signal": [
     "silis/silis.py",
-    2368,
-    2378
+    2391,
+    2401
   ],
   "add_waveform_signal": [
     "silis/silis.py",
-    2368,
-    2378
+    2391,
+    2401
   ],
   "SilisIDE.open_gds3d": [
     "silis/silis.py",
-    2380,
-    2385
+    2403,
+    2408
   ],
   "open_gds3d": [
     "silis/silis.py",
-    2380,
-    2385
+    2403,
+    2408
   ],
   "SilisIDE.handle_terminal_input": [
     "silis/silis.py",
-    2387,
-    2389
+    2410,
+    2412
   ],
   "handle_terminal_input": [
     "silis/silis.py",
-    2387,
-    2389
+    2410,
+    2412
   ],
   "SilisIDE.handle_terminal_cmd": [
     "silis/silis.py",
-    2391,
-    2432
+    2414,
+    2455
   ],
   "handle_terminal_cmd": [
     "silis/silis.py",
-    2391,
-    2432
+    2414,
+    2455
   ],
   "SilisIDE.open_pdk_selector": [
     "silis/silis.py",
-    2435,
-    2442
+    2458,
+    2465
   ],
   "open_pdk_selector": [
     "silis/core/backendflow/flow/backendflow.py",
-    1809,
-    1820
+    1894,
+    1905
   ],
   "SilisIDE.browse_open_file": [
     "silis/silis.py",
-    2444,
-    2450
+    2467,
+    2473
   ],
   "browse_open_file": [
     "silis/silis.py",
-    2444,
-    2450
+    2467,
+    2473
   ],
   "SilisIDE.import_rtl_files": [
     "silis/silis.py",
-    2452,
-    2480
+    2475,
+    2503
   ],
   "import_rtl_files": [
     "silis/silis.py",
-    2452,
-    2480
+    2475,
+    2503
   ],
   "SilisIDE.import_sim_files": [
     "silis/silis.py",
-    2482,
-    2501
+    2505,
+    2524
   ],
   "import_sim_files": [
     "silis/silis.py",
-    2482,
-    2501
+    2505,
+    2524
   ],
   "SilisIDE.import_constr_files": [
     "silis/silis.py",
-    2503,
-    2529
+    2526,
+    2552
   ],
   "import_constr_files": [
     "silis/silis.py",
-    2503,
-    2529
+    2526,
+    2552
   ],
   "SilisIDE.import_macro_ip": [
     "silis/silis.py",
-    2531,
-    2592
+    2554,
+    2615
   ],
   "import_macro_ip": [
     "silis/silis.py",
-    2531,
-    2592
+    2554,
+    2615
   ],
   "SilisIDE.import_power_intent_file": [
     "silis/silis.py",
-    2594,
-    2630
+    2617,
+    2653
   ],
   "import_power_intent_file": [
     "silis/silis.py",
-    2594,
-    2630
+    2617,
+    2653
   ],
   "SilisIDE.import_io_config_file": [
     "silis/silis.py",
-    2632,
-    2676
+    2655,
+    2699
   ],
   "import_io_config_file": [
     "silis/silis.py",
-    2632,
-    2676
+    2655,
+    2699
   ],
   "SilisIDE.save_project_state": [
     "silis/silis.py",
-    2678,
-    2694
+    2701,
+    2717
   ],
   "save_project_state": [
     "silis/silis.py",
-    2678,
-    2694
+    2701,
+    2717
   ],
   "SilisIDE.save_project_state_as": [
     "silis/silis.py",
-    2696,
-    2704
+    2719,
+    2727
   ],
   "save_project_state_as": [
     "silis/silis.py",
-    2696,
-    2704
+    2719,
+    2727
+  ],
+  "SilisIDE.set_viewer_mode": [
+    "silis/silis.py",
+    2730,
+    2739
+  ],
+  "set_viewer_mode": [
+    "silis/core/backendflow/flow/backendflow.py",
+    2102,
+    2123
   ],
   "SilisIDE.activate_heatmap": [
     "silis/silis.py",
-    2706,
-    2715
+    2741,
+    2750
   ],
   "activate_heatmap": [
     "silis/silis.py",
-    2706,
-    2715
+    2741,
+    2750
   ],
   "SilisIDE.toggle_ruler": [
     "silis/silis.py",
-    2717,
-    2729
+    2752,
+    2764
   ],
   "toggle_ruler": [
     "silis/core/backendflow/siliconpeeker/peeker.py",
@@ -646,38 +656,38 @@
   ],
   "SilisIDE.zoom_font": [
     "silis/silis.py",
-    2731,
-    2745
+    2766,
+    2780
   ],
   "zoom_font": [
     "silis/silis.py",
-    2731,
-    2745
+    2766,
+    2780
   ],
   "SilisIDE.set_font_family": [
     "silis/silis.py",
-    2747,
-    2759
+    2782,
+    2794
   ],
   "set_font_family": [
     "silis/silis.py",
-    2747,
-    2759
+    2782,
+    2794
   ],
   "SilisIDE.set_editor_backend": [
     "silis/silis.py",
-    2761,
-    2772
+    2796,
+    2807
   ],
   "set_editor_backend": [
     "silis/silis.py",
-    2761,
-    2772
+    2796,
+    2807
   ],
   "SilisIDE.set_theme": [
     "silis/silis.py",
-    2774,
-    2784
+    2809,
+    2819
   ],
   "set_theme": [
     "silis/core/editor/editor.py",
@@ -686,148 +696,148 @@
   ],
   "SilisIDE.open_custom_palette_dialog": [
     "silis/silis.py",
-    2786,
-    2789
+    2821,
+    2824
   ],
   "open_custom_palette_dialog": [
     "silis/silis.py",
-    2786,
-    2789
+    2821,
+    2824
   ],
   "SilisIDE.toggle_line_numbers": [
     "silis/silis.py",
-    2791,
-    2794
+    2826,
+    2829
   ],
   "toggle_line_numbers": [
     "silis/silis.py",
-    2791,
-    2794
+    2826,
+    2829
   ],
   "SilisIDE.show_shortcuts_dialog": [
     "silis/silis.py",
-    2796,
-    2819
+    2831,
+    2854
   ],
   "show_shortcuts_dialog": [
     "silis/silis.py",
-    2796,
-    2819
+    2831,
+    2854
   ],
   "SilisIDE.new_file": [
     "silis/silis.py",
-    2821,
-    2822
+    2856,
+    2857
   ],
   "new_file": [
     "silis/silis.py",
-    2821,
-    2822
+    2856,
+    2857
   ],
   "SilisIDE.save_file": [
     "silis/silis.py",
-    2824,
-    2845
+    2859,
+    2880
   ],
   "save_file": [
     "silis/silis.py",
-    2824,
-    2845
+    2859,
+    2880
   ],
   "SilisIDE.get_context": [
     "silis/silis.py",
-    2847,
-    2860
+    2882,
+    2895
   ],
   "get_context": [
-    "silis/silis.py",
-    2847,
-    2860
+    "silis/tests/test_ui_state_verifier.py",
+    47,
+    48
   ],
   "SilisIDE.get_proj_root": [
     "silis/silis.py",
-    2862,
-    2880
+    2897,
+    2915
   ],
   "get_proj_root": [
-    "silis/silis.py",
-    2862,
-    2880
+    "silis/tests/test_ui_state_verifier.py",
+    45,
+    46
   ],
   "SilisIDE.prep_workspace": [
     "silis/silis.py",
-    2882,
-    2904
+    2917,
+    2939
   ],
   "prep_workspace": [
     "silis/silis.py",
-    2882,
-    2904
+    2917,
+    2939
   ],
   "SilisIDE.open_waves": [
     "silis/silis.py",
-    2906,
-    2909
+    2941,
+    2944
   ],
   "open_waves": [
     "silis/silis.py",
-    2906,
-    2909
+    2941,
+    2944
   ],
   "SilisIDE.harvest_logs": [
     "silis/silis.py",
-    2911,
-    2919
+    2946,
+    2954
   ],
   "harvest_logs": [
     "silis/silis.py",
-    2911,
-    2919
+    2946,
+    2954
   ],
   "SilisIDE.process_queue": [
     "silis/silis.py",
-    2923,
-    2993
+    2958,
+    3028
   ],
   "process_queue": [
     "silis/silis.py",
-    2923,
-    2993
+    2958,
+    3028
   ],
   "SilisIDE.load_violation_log": [
     "silis/silis.py",
-    2995,
-    2998
+    3030,
+    3033
   ],
   "load_violation_log": [
     "silis/silis.py",
-    2995,
-    2998
+    3030,
+    3033
   ],
   "SilisIDE.check_dependencies": [
     "silis/silis.py",
-    3000,
-    3001
+    3035,
+    3036
   ],
   "check_dependencies": [
     "silis/silis.py",
-    3000,
-    3001
+    3035,
+    3036
   ],
   "SilisIDE.update_ui_labels": [
     "silis/silis.py",
-    3003,
-    3003
+    3038,
+    3038
   ],
   "update_ui_labels": [
     "silis/silis.py",
-    3003,
-    3003
+    3038,
+    3038
   ],
   "SilisIDE": [
     "silis/silis.py",
     587,
-    3003
+    3038
   ],
   "create_overlay": [
     "silis/silis.py",
@@ -856,8 +866,28 @@
   ],
   "_run": [
     "silis/silis.py",
-    2418,
-    2431
+    2441,
+    2454
+  ],
+  "MockIDE.__init__": [
+    "silis/tests/test_ui_state_verifier.py",
+    37,
+    44
+  ],
+  "MockIDE.get_proj_root": [
+    "silis/tests/test_ui_state_verifier.py",
+    45,
+    46
+  ],
+  "MockIDE.get_context": [
+    "silis/tests/test_ui_state_verifier.py",
+    47,
+    48
+  ],
+  "MockIDE": [
+    "silis/tests/test_ui_state_verifier.py",
+    36,
+    48
   ],
   "TestSDKCapabilities.setUpClass": [
     "silis/tests/test_sdk_capabilities.py",
@@ -1096,8 +1126,8 @@
   ],
   "run": [
     "silis/core/backendflow/flow/backendflow.py",
-    32,
-    38
+    36,
+    42
   ],
   "SetupWorker._do_setup": [
     "silis/core/setup_wizard.py",
@@ -1126,8 +1156,8 @@
   ],
   "_build_ui": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1271,
-    1334
+    1272,
+    1335
   ],
   "FirstBootSetupDialog.start_setup": [
     "silis/core/setup_wizard.py",
@@ -1711,8 +1741,8 @@
   ],
   "run_lvs": [
     "silis/core/cli/flow.py",
-    895,
-    896
+    901,
+    902
   ],
   "LVSEngine._run_netgen_lvs": [
     "silis/core/lvs/lvs_engine.py",
@@ -1886,8 +1916,8 @@
   ],
   "dragEnterEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1049,
-    1051
+    1050,
+    1052
   ],
   "DropZoneWidget.dropEvent": [
     "silis/core/intake/intake_dialog.py",
@@ -1896,8 +1926,8 @@
   ],
   "dropEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1057,
-    1067
+    1058,
+    1068
   ],
   "DropZoneWidget": [
     "silis/core/intake/intake_dialog.py",
@@ -2066,8 +2096,8 @@
   ],
   "to_dict": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    62,
-    78
+    68,
+    87
   ],
   "ScanCellInfo": [
     "silis/core/dft/scandef.py",
@@ -2328,6 +2358,171 @@
     "silis/core/dft/dft_engine.py",
     91,
     774
+  ],
+  "LayerLoadWorker.__init__": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    41,
+    46
+  ],
+  "LayerLoadWorker.run": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    48,
+    268
+  ],
+  "LayerLoadWorker": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    37,
+    268
+  ],
+  "LayerViewerPanel.__init__": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    278,
+    318
+  ],
+  "LayerViewerPanel.load_layout_from_opendb": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    320,
+    365
+  ],
+  "load_layout_from_opendb": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    320,
+    365
+  ],
+  "LayerViewerPanel._on_worker_data_loaded": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    367,
+    371
+  ],
+  "_on_worker_data_loaded": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    367,
+    371
+  ],
+  "LayerViewerPanel._apply_opendb_data": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    373,
+    419
+  ],
+  "_apply_opendb_data": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    373,
+    419
+  ],
+  "LayerViewerPanel.set_layer_visibility": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    421,
+    424
+  ],
+  "set_layer_visibility": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    421,
+    424
+  ],
+  "LayerViewerPanel.on_instance_selected": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    426,
+    431
+  ],
+  "on_instance_selected": [
+    "silis/core/schematicviewer/graphiccanvas.py",
+    167,
+    168
+  ],
+  "LayerViewerPanel.on_power_rail_selected": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    433,
+    442
+  ],
+  "on_power_rail_selected": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    433,
+    442
+  ],
+  "LayerViewerPanel.highlight_net": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    444,
+    470
+  ],
+  "highlight_net": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    444,
+    470
+  ],
+  "LayerViewerPanel": [
+    "silis/core/layer_viewer/layer_viewer_panel.py",
+    271,
+    470
+  ],
+  "DesignPropertyInspector.__init__": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    35,
+    75
+  ],
+  "DesignPropertyInspector.set_dbu": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    77,
+    79
+  ],
+  "set_dbu": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    77,
+    79
+  ],
+  "DesignPropertyInspector.clear_inspector": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    81,
+    84
+  ],
+  "clear_inspector": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    81,
+    84
+  ],
+  "DesignPropertyInspector.inspect_instance": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    86,
+    122
+  ],
+  "inspect_instance": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    86,
+    122
+  ],
+  "DesignPropertyInspector.inspect_net": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    124,
+    150
+  ],
+  "inspect_net": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    124,
+    150
+  ],
+  "DesignPropertyInspector._on_item_double_clicked": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    152,
+    160
+  ],
+  "_on_item_double_clicked": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    152,
+    160
+  ],
+  "DesignPropertyInspector._filter_tree": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    162,
+    174
+  ],
+  "_filter_tree": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    162,
+    174
+  ],
+  "DesignPropertyInspector": [
+    "silis/core/layer_viewer/inspector_widget.py",
+    25,
+    174
   ],
   "SignalPeeker.__init__": [
     "silis/core/signalpeeker/code.py",
@@ -2739,11 +2934,6 @@
     167,
     168
   ],
-  "on_instance_selected": [
-    "silis/core/schematicviewer/graphiccanvas.py",
-    167,
-    168
-  ],
   "SchematicTab.go_home": [
     "silis/core/schematicviewer/graphiccanvas.py",
     170,
@@ -2840,9 +3030,9 @@
     317
   ],
   "invalidate_cache": [
-    "silis/core/schematicviewer/graphiccanvas.py",
-    313,
-    317
+    "silis/core/sdk/timing.py",
+    65,
+    70
   ],
   "SchematicTab.highlight_net_or_cell": [
     "silis/core/schematicviewer/graphiccanvas.py",
@@ -2931,8 +3121,8 @@
   ],
   "summary": [
     "silis/core/sdk/project.py",
-    861,
-    883
+    889,
+    911
   ],
   "SynthesisReport.load": [
     "silis/core/sdk/report.py",
@@ -2941,8 +3131,8 @@
   ],
   "load": [
     "silis/core/sdk/project.py",
-    889,
-    891
+    917,
+    919
   ],
   "SynthesisReport.__repr__": [
     "silis/core/sdk/report.py",
@@ -2951,8 +3141,8 @@
   ],
   "__repr__": [
     "silis/core/sdk/timing.py",
-    166,
-    169
+    219,
+    222
   ],
   "SynthesisReport": [
     "silis/core/sdk/report.py",
@@ -3256,28 +3446,28 @@
   ],
   "get_utilization": [
     "silis/core/sdk/layout.py",
-    103,
-    106
+    104,
+    107
   ],
   "get_required_area": [
     "silis/core/sdk/project.py",
-    605,
-    620
+    633,
+    648
   ],
   "suggest_box": [
     "silis/core/sdk/project.py",
-    622,
-    659
+    650,
+    687
   ],
   "auto_place_regions": [
     "silis/core/sdk/pipeline.py",
-    825,
-    902
+    1683,
+    1760
   ],
   "place_io": [
     "silis/core/sdk/__init__.py",
-    111,
-    117
+    112,
+    118
   ],
   "SilisEDAError": [
     "silis/core/sdk/exceptions.py",
@@ -3362,637 +3552,707 @@
   "check_floorplan_collisions": [
     "silis/core/sdk/pipeline.py",
     69,
-    343
+    354
   ],
   "Pipeline.__init__": [
     "silis/core/sdk/pipeline.py",
-    392,
-    424
+    403,
+    435
   ],
   "Pipeline.process_events": [
     "silis/core/sdk/pipeline.py",
-    426,
-    433
+    437,
+    444
   ],
   "process_events": [
     "silis/core/sdk/pipeline.py",
-    426,
-    433
+    437,
+    444
   ],
   "Pipeline.synthesis": [
     "silis/core/sdk/pipeline.py",
-    438,
-    453
+    449,
+    464
   ],
   "synthesis": [
     "silis/core/sdk/pipeline.py",
-    438,
-    453
+    449,
+    464
   ],
   "Pipeline.init": [
     "silis/core/sdk/pipeline.py",
-    458,
-    470
+    469,
+    481
   ],
   "init": [
     "silis/core/sdk/pipeline.py",
-    458,
-    470
+    469,
+    481
   ],
   "Pipeline._discover_macro_dimensions": [
     "silis/core/sdk/pipeline.py",
-    472,
-    514
+    483,
+    525
   ],
   "_discover_macro_dimensions": [
     "silis/core/sdk/pipeline.py",
-    472,
-    514
+    483,
+    525
+  ],
+  "Pipeline.spec_floorplan": [
+    "silis/core/sdk/pipeline.py",
+    531,
+    569
+  ],
+  "spec_floorplan": [
+    "silis/core/sdk/pipeline.py",
+    531,
+    569
+  ],
+  "Pipeline.spec_iopins": [
+    "silis/core/sdk/pipeline.py",
+    571,
+    608
+  ],
+  "spec_iopins": [
+    "silis/core/sdk/pipeline.py",
+    571,
+    608
+  ],
+  "Pipeline.spec_pdn": [
+    "silis/core/sdk/pipeline.py",
+    610,
+    639
+  ],
+  "spec_pdn": [
+    "silis/core/sdk/pipeline.py",
+    610,
+    639
+  ],
+  "Pipeline.spec_tapcells": [
+    "silis/core/sdk/pipeline.py",
+    641,
+    660
+  ],
+  "spec_tapcells": [
+    "silis/core/sdk/pipeline.py",
+    641,
+    660
+  ],
+  "Pipeline.spec_power_switches": [
+    "silis/core/sdk/pipeline.py",
+    662,
+    688
+  ],
+  "spec_power_switches": [
+    "silis/core/sdk/pipeline.py",
+    662,
+    688
+  ],
+  "Pipeline.spec_level_shifters": [
+    "silis/core/sdk/pipeline.py",
+    690,
+    705
+  ],
+  "spec_level_shifters": [
+    "silis/core/sdk/pipeline.py",
+    690,
+    705
+  ],
+  "Pipeline.run_fps": [
+    "silis/core/sdk/pipeline.py",
+    707,
+    1307
+  ],
+  "run_fps": [
+    "silis/core/sdk/pipeline.py",
+    707,
+    1307
   ],
   "Pipeline.floorplan": [
     "silis/core/sdk/pipeline.py",
-    516,
-    727
+    1313,
+    1584
   ],
   "floorplan": [
     "silis/core/sdk/pipeline.py",
-    516,
-    727
+    1313,
+    1584
   ],
   "Pipeline.place_macro": [
     "silis/core/sdk/pipeline.py",
-    729,
-    752
+    1586,
+    1610
   ],
   "place_macro": [
     "silis/core/sdk/pipeline.py",
-    729,
-    752
+    1586,
+    1610
   ],
   "Pipeline.add_fence": [
     "silis/core/sdk/pipeline.py",
-    754,
-    787
+    1612,
+    1645
   ],
   "add_fence": [
     "silis/core/sdk/pipeline.py",
-    754,
-    787
+    1612,
+    1645
   ],
   "Pipeline.add_region": [
     "silis/core/sdk/pipeline.py",
-    789,
-    823
+    1647,
+    1681
   ],
   "add_region": [
     "silis/core/sdk/pipeline.py",
-    789,
-    823
+    1647,
+    1681
   ],
   "Pipeline.auto_place_regions": [
     "silis/core/sdk/pipeline.py",
-    825,
-    902
+    1683,
+    1760
   ],
   "Pipeline.auto_shape_regions": [
     "silis/core/sdk/pipeline.py",
-    904,
-    954
+    1762,
+    1812
   ],
   "auto_shape_regions": [
     "silis/core/sdk/pipeline.py",
-    904,
-    954
+    1762,
+    1812
   ],
   "Pipeline.add_blockage": [
     "silis/core/sdk/pipeline.py",
-    956,
-    962
+    1814,
+    1820
   ],
   "add_blockage": [
     "silis/core/sdk/pipeline.py",
-    956,
-    962
+    1814,
+    1820
   ],
   "Pipeline.tapcells": [
     "silis/core/sdk/pipeline.py",
-    964,
-    986
+    1822,
+    1844
   ],
   "tapcells": [
     "silis/core/sdk/pipeline.py",
-    964,
-    986
+    1822,
+    1844
   ],
   "Pipeline.configure_power_domain_supply": [
     "silis/core/sdk/pipeline.py",
-    988,
-    997
+    1846,
+    1855
   ],
   "configure_power_domain_supply": [
     "silis/core/sdk/pipeline.py",
-    988,
-    997
+    1846,
+    1855
   ],
   "Pipeline.pdn": [
     "silis/core/sdk/pipeline.py",
-    999,
-    1477
+    1857,
+    2250
   ],
   "pdn": [
     "silis/core/sdk/pipeline.py",
-    999,
-    1477
+    1857,
+    2250
   ],
   "Pipeline.iopins": [
     "silis/core/sdk/pipeline.py",
-    1479,
-    1581
+    2252,
+    2354
   ],
   "iopins": [
     "silis/core/sdk/pipeline.py",
-    1479,
-    1581
+    2252,
+    2354
   ],
   "Pipeline._build_padring_tcl": [
     "silis/core/sdk/pipeline.py",
-    1583,
-    1913
+    2356,
+    2686
   ],
   "_build_padring_tcl": [
     "silis/core/sdk/pipeline.py",
-    1583,
-    1913
+    2356,
+    2686
   ],
   "Pipeline.place": [
     "silis/core/sdk/pipeline.py",
-    1915,
-    2022
+    2688,
+    2781
   ],
   "place": [
     "silis/core/sdk/pipeline.py",
-    1915,
-    2022
+    2688,
+    2781
   ],
   "Pipeline.cts": [
     "silis/core/sdk/pipeline.py",
-    2024,
-    2067
+    2783,
+    2826
   ],
   "cts": [
     "silis/core/sdk/pipeline.py",
-    2024,
-    2067
+    2783,
+    2826
   ],
   "Pipeline.route": [
     "silis/core/sdk/pipeline.py",
-    2069,
-    2145
+    2828,
+    2906
   ],
   "route": [
     "silis/core/sdk/pipeline.py",
-    2069,
-    2145
+    2828,
+    2906
   ],
   "Pipeline.fill": [
     "silis/core/sdk/pipeline.py",
-    2147,
-    2160
+    2908,
+    2921
   ],
   "fill": [
     "silis/core/sdk/pipeline.py",
-    2147,
-    2160
+    2908,
+    2921
   ],
   "Pipeline.gds": [
     "silis/core/sdk/pipeline.py",
-    2162,
-    2182
+    2923,
+    2943
   ],
   "gds": [
     "silis/core/sdk/pipeline.py",
-    2162,
-    2182
+    2923,
+    2943
   ],
   "Pipeline.signoff": [
     "silis/core/sdk/pipeline.py",
-    2184,
-    2226
+    2945,
+    2987
   ],
   "signoff": [
     "silis/core/sdk/pipeline.py",
-    2184,
-    2226
+    2945,
+    2987
   ],
   "Pipeline.dft": [
     "silis/core/sdk/pipeline.py",
-    2228,
-    2230
+    2989,
+    2991
   ],
   "dft": [
     "silis/core/sdk/pipeline.py",
-    2228,
-    2230
+    2989,
+    2991
   ],
   "Pipeline.lvs": [
     "silis/core/sdk/pipeline.py",
-    2232,
-    2234
+    2993,
+    2995
   ],
   "lvs": [
     "silis/core/sdk/pipeline.py",
-    2232,
-    2234
+    2993,
+    2995
   ],
   "Pipeline.gls": [
     "silis/core/sdk/pipeline.py",
-    2236,
-    2238
+    2997,
+    2999
   ],
   "gls": [
     "silis/core/sdk/pipeline.py",
-    2236,
-    2238
+    2997,
+    2999
   ],
   "Pipeline.simulate": [
     "silis/core/sdk/pipeline.py",
-    2240,
-    2330
+    3001,
+    3091
   ],
   "simulate": [
     "silis/core/sdk/pipeline.py",
-    2240,
-    2330
+    3001,
+    3091
   ],
   "Pipeline.lint": [
     "silis/core/sdk/pipeline.py",
-    2332,
-    2355
+    3093,
+    3116
   ],
   "lint": [
     "silis/core/sdk/pipeline.py",
-    2332,
-    2355
+    3093,
+    3116
   ],
   "Pipeline.export_sdf": [
     "silis/core/sdk/pipeline.py",
-    2357,
-    2362
+    3118,
+    3123
   ],
   "export_sdf": [
     "silis/core/cli/flow.py",
-    901,
-    902
+    907,
+    908
   ],
   "Pipeline.tapeout": [
     "silis/core/sdk/pipeline.py",
-    2364,
-    2366
+    3125,
+    3127
   ],
   "tapeout": [
     "silis/core/sdk/pipeline.py",
-    2364,
-    2366
+    3125,
+    3127
   ],
   "Pipeline.export_macro": [
     "silis/core/sdk/pipeline.py",
-    2368,
-    2439
+    3129,
+    3200
   ],
   "export_macro": [
     "silis/core/sdk/pipeline.py",
-    2368,
-    2439
+    3129,
+    3200
   ],
   "Pipeline._normalize_step": [
     "silis/core/sdk/pipeline.py",
-    2444,
-    2446
+    3205,
+    3207
   ],
   "_normalize_step": [
     "silis/core/sdk/pipeline.py",
-    2444,
-    2446
+    3205,
+    3207
   ],
   "Pipeline.run_step": [
     "silis/core/sdk/pipeline.py",
-    2448,
-    2496
+    3209,
+    3257
   ],
   "run_step": [
     "silis/core/cli/flow.py",
-    693,
-    890
+    699,
+    896
   ],
   "Pipeline.run_until": [
     "silis/core/sdk/pipeline.py",
-    2498,
-    2516
+    3259,
+    3277
   ],
   "run_until": [
     "silis/core/sdk/pipeline.py",
-    2498,
-    2516
+    3259,
+    3277
   ],
   "Pipeline.run_from": [
     "silis/core/sdk/pipeline.py",
-    2518,
-    2544
+    3279,
+    3305
   ],
   "run_from": [
     "silis/core/sdk/pipeline.py",
-    2518,
-    2544
+    3279,
+    3305
   ],
   "Pipeline.run_all": [
     "silis/core/sdk/pipeline.py",
-    2546,
-    2548
+    3307,
+    3309
   ],
   "run_all": [
     "silis/core/sdk/pipeline.py",
-    2546,
-    2548
+    3307,
+    3309
   ],
   "Pipeline.get_synthesis_report": [
     "silis/core/sdk/pipeline.py",
-    2553,
-    2555
+    3314,
+    3316
   ],
   "get_synthesis_report": [
     "silis/core/sdk/project.py",
-    389,
-    391
+    417,
+    419
   ],
   "Pipeline.get_signoff_report": [
     "silis/core/sdk/pipeline.py",
-    2557,
-    2559
+    3318,
+    3320
   ],
   "get_signoff_report": [
     "silis/core/sdk/project.py",
-    393,
-    395
+    421,
+    423
   ],
   "Pipeline.get_drc_report": [
     "silis/core/sdk/pipeline.py",
-    2561,
-    2563
+    3322,
+    3324
   ],
   "get_drc_report": [
     "silis/core/sdk/project.py",
-    397,
-    399
+    425,
+    427
   ],
   "Pipeline.get_dft_report": [
     "silis/core/sdk/pipeline.py",
-    2565,
-    2567
+    3326,
+    3328
   ],
   "get_dft_report": [
     "silis/core/sdk/project.py",
-    406,
-    408
+    434,
+    436
   ],
   "Pipeline.get_lvs_report": [
     "silis/core/sdk/pipeline.py",
-    2569,
-    2571
+    3330,
+    3332
   ],
   "get_lvs_report": [
     "silis/core/sdk/project.py",
-    410,
-    413
+    438,
+    441
   ],
   "Pipeline.get_gls_report": [
     "silis/core/sdk/pipeline.py",
-    2573,
-    2575
+    3334,
+    3336
   ],
   "get_gls_report": [
     "silis/core/sdk/project.py",
-    415,
-    418
+    443,
+    446
   ],
   "Pipeline.get_tapeout_report": [
     "silis/core/sdk/pipeline.py",
-    2577,
-    2579
+    3338,
+    3340
   ],
   "get_tapeout_report": [
     "silis/core/sdk/project.py",
-    420,
-    423
+    448,
+    451
   ],
   "Pipeline.get_reports": [
     "silis/core/sdk/pipeline.py",
-    2581,
-    2583
+    3342,
+    3344
   ],
   "get_reports": [
     "silis/core/sdk/project.py",
-    425,
-    447
+    453,
+    475
   ],
   "Pipeline.get_sizes": [
     "silis/core/sdk/pipeline.py",
-    2588,
-    2590
+    3349,
+    3351
   ],
   "get_sizes": [
     "silis/core/sdk/project.py",
-    452,
-    477
+    480,
+    505
   ],
   "Pipeline.get_modules": [
     "silis/core/sdk/pipeline.py",
-    2592,
-    2594
+    3353,
+    3355
   ],
   "get_modules": [
     "silis/core/sdk/project.py",
-    479,
-    482
+    507,
+    510
   ],
   "Pipeline.get_module_area": [
     "silis/core/sdk/pipeline.py",
-    2596,
-    2598
+    3357,
+    3359
   ],
   "get_module_area": [
     "silis/core/sdk/project.py",
-    484,
-    524
+    512,
+    552
   ],
   "Pipeline.get_utilization": [
     "silis/core/sdk/pipeline.py",
-    2600,
-    2612
+    3361,
+    3373
   ],
   "Pipeline.get_required_area": [
     "silis/core/sdk/pipeline.py",
-    2616,
-    2625
+    3377,
+    3386
   ],
   "Pipeline.suggest_box": [
     "silis/core/sdk/pipeline.py",
-    2627,
-    2644
+    3388,
+    3405
   ],
   "Pipeline.convert": [
     "silis/core/sdk/pipeline.py",
-    2649,
-    2717
+    3410,
+    3478
   ],
   "convert": [
     "silis/core/sdk/pipeline.py",
-    2649,
-    2717
+    3410,
+    3478
   ],
   "Pipeline.formal": [
     "silis/core/sdk/pipeline.py",
-    2719,
-    2764
+    3480,
+    3525
   ],
   "formal": [
     "silis/core/sdk/pipeline.py",
-    2719,
-    2764
+    3480,
+    3525
   ],
   "Pipeline.get_heatmap": [
     "silis/core/sdk/pipeline.py",
-    2769,
-    2937
+    3530,
+    3698
   ],
   "get_heatmap": [
     "silis/core/sdk/pipeline.py",
-    2769,
-    2937
+    3530,
+    3698
   ],
   "Pipeline.compute_minimum_die_for_pads": [
     "silis/core/sdk/pipeline.py",
-    2942,
-    3007
+    3703,
+    3768
   ],
   "compute_minimum_die_for_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3388,
-    3490
+    3413,
+    3515
   ],
   "Pipeline.optimize_die": [
     "silis/core/sdk/pipeline.py",
-    3009,
-    3046
+    3770,
+    3807
   ],
   "optimize_die": [
     "silis/core/sdk/pipeline.py",
-    3009,
-    3046
+    3770,
+    3807
   ],
   "Pipeline.apply_clock_ndr": [
     "silis/core/sdk/pipeline.py",
-    3051,
-    3069
+    3812,
+    3830
   ],
   "apply_clock_ndr": [
     "silis/core/backendflow/flow/backendflow.py",
-    539,
-    547
+    625,
+    633
   ],
   "Pipeline.repair_clock_buffers": [
     "silis/core/sdk/pipeline.py",
-    3071,
-    3076
+    3832,
+    3837
   ],
   "repair_clock_buffers": [
     "silis/core/backendflow/flow/backendflow.py",
-    549,
-    556
+    635,
+    642
   ],
   "Pipeline.repair_antennas": [
     "silis/core/sdk/pipeline.py",
-    3078,
-    3093
+    3839,
+    3854
   ],
   "repair_antennas": [
     "silis/core/sdk/pipeline.py",
-    3078,
-    3093
+    3839,
+    3854
   ],
   "Pipeline.save_checkpoint": [
     "silis/core/sdk/pipeline.py",
-    3095,
-    3118
+    3856,
+    3879
   ],
   "save_checkpoint": [
     "silis/core/backendflow/flow/backendflow.py",
-    1973,
-    1978
+    2093,
+    2098
   ],
   "Pipeline.load_checkpoint": [
     "silis/core/sdk/pipeline.py",
-    3120,
-    3131
+    3881,
+    3892
   ],
   "load_checkpoint": [
     "silis/core/backendflow/flow/backendflow.py",
-    1942,
-    1971
+    2062,
+    2091
   ],
   "Pipeline.close": [
     "silis/core/sdk/pipeline.py",
-    3136,
-    3153
+    3897,
+    3914
   ],
   "close": [
     "silis/core/cli/flow.py",
-    151,
-    174
+    157,
+    180
   ],
   "Pipeline.__enter__": [
     "silis/core/sdk/pipeline.py",
-    3155,
-    3156
+    3916,
+    3917
   ],
   "__enter__": [
     "silis/core/sdk/pipeline.py",
-    3155,
-    3156
+    3916,
+    3917
   ],
   "Pipeline.__exit__": [
     "silis/core/sdk/pipeline.py",
-    3158,
-    3159
+    3919,
+    3920
   ],
   "__exit__": [
     "silis/core/sdk/pipeline.py",
-    3158,
-    3159
+    3919,
+    3920
   ],
   "Pipeline.__del__": [
     "silis/core/sdk/pipeline.py",
-    3161,
-    3165
+    3922,
+    3926
   ],
   "__del__": [
     "silis/core/cli/flow.py",
-    177,
-    181
+    183,
+    187
   ],
   "Pipeline.__repr__": [
     "silis/core/sdk/pipeline.py",
-    3167,
-    3168
+    3928,
+    3929
   ],
   "Pipeline": [
     "silis/core/sdk/pipeline.py",
-    348,
-    3168
+    359,
+    3929
   ],
   "_calc_overlap": [
     "silis/core/sdk/pipeline.py",
-    188,
-    195
+    194,
+    201
   ],
   "IsolationRule.__init__": [
     "silis/core/sdk/power.py",
@@ -4027,122 +4287,162 @@
   "PowerDomain.__init__": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
     30,
-    60
+    66
+  ],
+  "PowerDomain.configure_power_switches": [
+    "silis/core/sdk/power.py",
+    56,
+    76
+  ],
+  "configure_power_switches": [
+    "silis/core/sdk/power.py",
+    56,
+    76
+  ],
+  "PowerDomain.add_level_shifter_rule": [
+    "silis/core/sdk/power.py",
+    78,
+    90
+  ],
+  "add_level_shifter_rule": [
+    "silis/core/sdk/power.py",
+    78,
+    90
+  ],
+  "PowerDomain.set_row_site": [
+    "silis/core/sdk/power.py",
+    92,
+    104
+  ],
+  "set_row_site": [
+    "silis/core/sdk/power.py",
+    92,
+    104
+  ],
+  "PowerDomain.enable_physical_power_switches": [
+    "silis/core/sdk/power.py",
+    106,
+    111
+  ],
+  "enable_physical_power_switches": [
+    "silis/core/sdk/power.py",
+    106,
+    111
   ],
   "PowerDomain.set_primary_voltage": [
     "silis/core/sdk/power.py",
-    50,
-    53
+    113,
+    116
   ],
   "set_primary_voltage": [
     "silis/core/sdk/power.py",
-    50,
-    53
+    113,
+    116
   ],
   "PowerDomain.add_element": [
     "silis/core/sdk/power.py",
-    55,
-    57
+    118,
+    120
   ],
   "add_element": [
     "silis/core/sdk/power.py",
-    55,
-    57
+    118,
+    120
   ],
   "PowerDomain.set_power_switch": [
     "silis/core/sdk/power.py",
-    59,
-    62
+    122,
+    125
   ],
   "set_power_switch": [
     "silis/core/sdk/power.py",
-    59,
-    62
+    122,
+    125
   ],
   "PowerDomain.add_isolation_rule": [
     "silis/core/sdk/power.py",
-    64,
-    68
+    127,
+    131
   ],
   "add_isolation_rule": [
     "silis/core/sdk/power.py",
-    64,
-    68
+    127,
+    131
   ],
   "PowerDomain.set_area": [
     "silis/core/sdk/power.py",
-    70,
-    74
+    133,
+    137
   ],
   "set_area": [
     "silis/core/sdk/power.py",
-    70,
-    74
+    133,
+    137
   ],
   "PowerDomain.__repr__": [
     "silis/core/sdk/power.py",
-    76,
-    77
+    139,
+    140
   ],
   "PowerDomain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
     24,
-    98
+    110
   ],
   "PowerNetwork.__init__": [
     "silis/core/sdk/power.py",
-    85,
-    113
+    148,
+    176
   ],
   "PowerNetwork.create_domain": [
     "silis/core/sdk/power.py",
-    115,
-    120
+    178,
+    183
   ],
   "create_domain": [
     "silis/core/sdk/power.py",
-    115,
-    120
+    178,
+    183
   ],
   "PowerNetwork.get_domain": [
     "silis/core/sdk/power.py",
-    122,
-    123
+    185,
+    186
   ],
   "get_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    440,
-    441
+    452,
+    453
   ],
   "PowerNetwork.get_domains": [
     "silis/core/sdk/power.py",
-    125,
-    126
+    188,
+    189
   ],
   "get_domains": [
     "silis/core/sdk/power.py",
-    125,
-    126
+    188,
+    189
   ],
   "PowerNetwork.verify_power_intent": [
     "silis/core/sdk/power.py",
-    128,
-    145
+    191,
+    208
   ],
   "verify_power_intent": [
     "silis/core/sdk/power.py",
-    128,
-    145
+    191,
+    208
   ],
   "PowerNetwork.__repr__": [
     "silis/core/sdk/power.py",
-    147,
-    148
+    210,
+    211
   ],
   "PowerNetwork": [
     "silis/core/sdk/power.py",
-    80,
-    148
+    143,
+    211
   ],
   "_get_silis_pdk_root": [
     "silis/core/sdk/sc_bridge.py",
@@ -4299,40 +4599,80 @@
     112,
     117
   ],
+  "Project.power_network": [
+    "silis/core/sdk/project.py",
+    120,
+    122
+  ],
+  "power_network": [
+    "silis/core/sdk/project.py",
+    120,
+    122
+  ],
   "Project.get_timing_graph": [
     "silis/core/sdk/project.py",
-    119,
-    124
+    124,
+    129
   ],
   "get_timing_graph": [
     "silis/core/sdk/project.py",
-    119,
-    124
+    124,
+    129
   ],
   "Project.get_layout": [
     "silis/core/sdk/project.py",
-    126,
-    131
+    131,
+    136
   ],
   "get_layout": [
     "silis/core/sdk/project.py",
-    126,
-    131
+    131,
+    136
+  ],
+  "Project.layout": [
+    "silis/core/sdk/project.py",
+    139,
+    141
+  ],
+  "layout": [
+    "silis/core/sdk/project.py",
+    139,
+    141
+  ],
+  "Project.view_layers": [
+    "silis/core/sdk/project.py",
+    143,
+    145
+  ],
+  "view_layers": [
+    "silis/core/sdk/layout.py",
+    145,
+    147
+  ],
+  "Project.db": [
+    "silis/core/sdk/project.py",
+    148,
+    153
+  ],
+  "db": [
+    "silis/core/sdk/project.py",
+    148,
+    153
   ],
   "Project._resolve_single_path": [
     "silis/core/sdk/project.py",
-    133,
-    138
+    155,
+    160
   ],
   "_resolve_single_path": [
     "silis/core/sdk/project.py",
-    133,
-    138
+    155,
+    160
   ],
   "Project._resolve_paths": [
     "silis/core/sdk/project.py",
-    140,
-    149
+    162,
+    171
   ],
   "_resolve_paths": [
     "silis/core/sdk/opendb_bridge.py",
@@ -4341,403 +4681,403 @@
   ],
   "Project.get_rtl_files": [
     "silis/core/sdk/project.py",
-    154,
-    166
+    176,
+    190
   ],
   "get_rtl_files": [
     "silis/core/sdk/project.py",
-    154,
-    166
+    176,
+    190
   ],
   "Project.is_vhdl": [
     "silis/core/sdk/project.py",
-    168,
-    170
+    192,
+    194
   ],
   "is_vhdl": [
     "silis/core/sdk/project.py",
-    168,
-    170
+    192,
+    194
   ],
   "Project.get_vhdl_files": [
     "silis/core/sdk/project.py",
-    172,
-    174
+    196,
+    198
   ],
   "get_vhdl_files": [
     "silis/core/sdk/project.py",
-    172,
-    174
+    196,
+    198
   ],
   "Project.get_verilog_files": [
     "silis/core/sdk/project.py",
-    176,
-    178
+    200,
+    202
   ],
   "get_verilog_files": [
     "silis/core/sdk/project.py",
-    176,
-    178
+    200,
+    202
   ],
   "Project.get_sdc_files": [
     "silis/core/sdk/project.py",
-    180,
-    189
+    204,
+    215
   ],
   "get_sdc_files": [
     "silis/core/sdk/project.py",
-    180,
-    189
+    204,
+    215
   ],
   "Project.get_upf_file": [
     "silis/core/sdk/project.py",
-    191,
-    208
+    217,
+    234
   ],
   "get_upf_file": [
     "silis/core/sdk/project.py",
-    191,
-    208
+    217,
+    234
   ],
   "Project.get_power_domains": [
     "silis/core/sdk/project.py",
-    210,
-    216
+    236,
+    242
   ],
   "get_power_domains": [
     "silis/core/sdk/project.py",
-    210,
-    216
+    236,
+    242
   ],
   "Project.get_pin_order_file": [
     "silis/core/sdk/project.py",
-    218,
-    233
+    244,
+    259
   ],
   "get_pin_order_file": [
     "silis/core/sdk/project.py",
-    218,
-    233
+    244,
+    259
   ],
   "Project.get_tb_files": [
     "silis/core/sdk/project.py",
-    235,
-    247
+    261,
+    275
   ],
   "get_tb_files": [
     "silis/core/sdk/project.py",
-    235,
-    247
+    261,
+    275
   ],
   "Project.get_netlists": [
     "silis/core/sdk/project.py",
-    249,
-    256
+    277,
+    284
   ],
   "get_netlists": [
     "silis/core/sdk/project.py",
-    249,
-    256
+    277,
+    284
   ],
   "Project.get_netlist": [
     "silis/core/sdk/project.py",
-    258,
-    264
+    286,
+    292
   ],
   "get_netlist": [
     "silis/core/sdk/project.py",
-    258,
-    264
+    286,
+    292
   ],
   "Project.get_defs": [
     "silis/core/sdk/project.py",
-    266,
-    272
+    294,
+    300
   ],
   "get_defs": [
     "silis/core/sdk/project.py",
-    266,
-    272
+    294,
+    300
   ],
   "Project.get_def": [
     "silis/core/sdk/project.py",
-    274,
-    283
+    302,
+    311
   ],
   "get_def": [
     "silis/core/sdk/project.py",
-    274,
-    283
+    302,
+    311
   ],
   "Project.get_gds_files": [
     "silis/core/sdk/project.py",
-    285,
-    292
+    313,
+    320
   ],
   "get_gds_files": [
     "silis/core/sdk/project.py",
-    285,
-    292
+    313,
+    320
   ],
   "Project.get_gds": [
     "silis/core/sdk/project.py",
-    294,
-    304
+    322,
+    332
   ],
   "get_gds": [
     "silis/core/sdk/project.py",
-    294,
-    304
+    322,
+    332
   ],
   "Project.get_odbs": [
     "silis/core/sdk/project.py",
-    306,
-    310
+    334,
+    338
   ],
   "get_odbs": [
     "silis/core/sdk/project.py",
-    306,
-    310
+    334,
+    338
   ],
   "Project.get_vcd_files": [
     "silis/core/sdk/project.py",
-    312,
-    317
+    340,
+    345
   ],
   "get_vcd_files": [
     "silis/core/sdk/project.py",
-    312,
-    317
+    340,
+    345
   ],
   "Project.get_macro_lefs_and_libs": [
     "silis/core/sdk/project.py",
-    319,
-    366
+    347,
+    394
   ],
   "get_macro_lefs_and_libs": [
     "silis/core/sdk/project.py",
-    319,
-    366
+    347,
+    394
   ],
   "Project.get_pdk_info": [
     "silis/core/sdk/project.py",
-    368,
-    384
+    396,
+    412
   ],
   "get_pdk_info": [
     "silis/core/sdk/project.py",
-    368,
-    384
+    396,
+    412
   ],
   "Project.get_synthesis_report": [
     "silis/core/sdk/project.py",
-    389,
-    391
+    417,
+    419
   ],
   "Project.get_signoff_report": [
     "silis/core/sdk/project.py",
-    393,
-    395
+    421,
+    423
   ],
   "Project.get_drc_report": [
     "silis/core/sdk/project.py",
-    397,
-    399
+    425,
+    427
   ],
   "Project.get_antenna_report": [
     "silis/core/sdk/project.py",
-    401,
-    404
+    429,
+    432
   ],
   "get_antenna_report": [
     "silis/core/sdk/project.py",
-    401,
-    404
+    429,
+    432
   ],
   "Project.get_dft_report": [
     "silis/core/sdk/project.py",
-    406,
-    408
+    434,
+    436
   ],
   "Project.get_lvs_report": [
     "silis/core/sdk/project.py",
-    410,
-    413
+    438,
+    441
   ],
   "Project.get_gls_report": [
     "silis/core/sdk/project.py",
-    415,
-    418
+    443,
+    446
   ],
   "Project.get_tapeout_report": [
     "silis/core/sdk/project.py",
-    420,
-    423
+    448,
+    451
   ],
   "Project.get_reports": [
     "silis/core/sdk/project.py",
-    425,
-    447
+    453,
+    475
   ],
   "Project.get_sizes": [
     "silis/core/sdk/project.py",
-    452,
-    477
+    480,
+    505
   ],
   "Project.get_modules": [
     "silis/core/sdk/project.py",
-    479,
-    482
+    507,
+    510
   ],
   "Project.get_module_area": [
     "silis/core/sdk/project.py",
-    484,
-    524
+    512,
+    552
   ],
   "Project.get_utilization": [
     "silis/core/sdk/project.py",
-    526,
-    601
+    554,
+    629
   ],
   "Project.get_required_area": [
     "silis/core/sdk/project.py",
-    605,
-    620
+    633,
+    648
   ],
   "Project.suggest_box": [
     "silis/core/sdk/project.py",
-    622,
-    659
+    650,
+    687
   ],
   "Project.add_macro": [
     "silis/core/sdk/project.py",
-    664,
-    687
+    692,
+    715
   ],
   "add_macro": [
     "silis/core/sdk/floorplan.py",
-    179,
-    204
+    204,
+    231
   ],
   "Project.add_rtl": [
     "silis/core/sdk/project.py",
-    689,
-    695
+    717,
+    723
   ],
   "add_rtl": [
     "silis/core/sdk/project.py",
-    689,
-    695
+    717,
+    723
   ],
   "Project.add_tb": [
     "silis/core/sdk/project.py",
-    697,
-    703
+    725,
+    731
   ],
   "add_tb": [
     "silis/core/sdk/project.py",
-    697,
-    703
+    725,
+    731
   ],
   "Project.add_sdc": [
     "silis/core/sdk/project.py",
-    705,
-    711
+    733,
+    739
   ],
   "add_sdc": [
     "silis/core/sdk/project.py",
-    705,
-    711
+    733,
+    739
   ],
   "Project.save": [
     "silis/core/sdk/project.py",
-    713,
-    731
+    741,
+    759
   ],
   "save": [
     "silis/core/sdk/project.py",
-    713,
-    731
+    741,
+    759
   ],
   "Project.import_macro": [
     "silis/core/sdk/project.py",
-    733,
-    791
+    761,
+    819
   ],
   "import_macro": [
     "silis/core/sdk/project.py",
-    733,
-    791
+    761,
+    819
   ],
   "Project.import_upf": [
     "silis/core/sdk/project.py",
-    793,
-    809
+    821,
+    837
   ],
   "import_upf": [
     "silis/core/sdk/project.py",
-    793,
-    809
+    821,
+    837
   ],
   "Project.set_power_domain_supply_type": [
     "silis/core/sdk/project.py",
-    811,
-    832
+    839,
+    860
   ],
   "set_power_domain_supply_type": [
     "silis/core/sdk/project.py",
-    811,
-    832
+    839,
+    860
   ],
   "Project.import_io_config": [
     "silis/core/sdk/project.py",
-    834,
-    855
+    862,
+    883
   ],
   "import_io_config": [
     "silis/core/sdk/project.py",
-    834,
-    855
+    862,
+    883
   ],
   "Project.to_dict": [
     "silis/core/sdk/project.py",
-    857,
-    859
+    885,
+    887
   ],
   "Project.summary": [
     "silis/core/sdk/project.py",
-    861,
-    883
+    889,
+    911
   ],
   "Project.load": [
     "silis/core/sdk/project.py",
-    889,
-    891
+    917,
+    919
   ],
   "Project.create": [
     "silis/core/sdk/project.py",
-    894,
-    919
+    922,
+    947
   ],
   "create": [
     "silis/core/sdk/project.py",
-    894,
-    919
+    922,
+    947
   ],
   "Project.__repr__": [
     "silis/core/sdk/project.py",
-    921,
-    925
+    949,
+    953
   ],
   "Project": [
     "silis/core/sdk/project.py",
     30,
-    925
+    953
   ],
   "_snap": [
     "silis/core/sdk/project.py",
-    652,
-    653
+    680,
+    681
   ],
   "_ensure_desktop_env": [
     "silis/core/sdk/viewers.py",
@@ -5059,195 +5399,230 @@
     41,
     46
   ],
+  "snap_to_site_row": [
+    "silis/core/sdk/floorplan.py",
+    49,
+    56
+  ],
   "Halo.__init__": [
     "silis/core/sdk/floorplan.py",
-    51,
-    55
+    61,
+    65
   ],
   "Halo.__repr__": [
     "silis/core/sdk/floorplan.py",
-    57,
-    58
+    67,
+    68
   ],
   "Halo": [
     "silis/core/sdk/floorplan.py",
-    49,
-    58
+    59,
+    68
   ],
   "MacroInstance.__init__": [
     "silis/core/sdk/floorplan.py",
-    66,
-    86
+    76,
+    96
   ],
   "MacroInstance.move_to": [
     "silis/core/sdk/floorplan.py",
-    88,
-    93
+    98,
+    106
   ],
   "move_to": [
     "silis/core/sdk/floorplan.py",
-    88,
-    93
+    98,
+    106
   ],
   "MacroInstance.set_orientation": [
     "silis/core/sdk/floorplan.py",
-    95,
-    98
+    108,
+    111
   ],
   "set_orientation": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1132,
-    1186
+    1133,
+    1187
   ],
   "MacroInstance.set_halo": [
     "silis/core/sdk/floorplan.py",
-    100,
-    103
+    113,
+    116
   ],
   "set_halo": [
     "silis/core/sdk/floorplan.py",
-    100,
-    103
+    113,
+    116
   ],
   "MacroInstance.get_bbox": [
     "silis/core/sdk/floorplan.py",
-    105,
-    107
+    118,
+    120
   ],
   "get_bbox": [
     "silis/core/sdk/floorplan.py",
-    105,
-    107
+    118,
+    120
   ],
   "MacroInstance.get_halo_bbox": [
     "silis/core/sdk/floorplan.py",
-    109,
-    116
+    122,
+    129
   ],
   "get_halo_bbox": [
     "silis/core/sdk/floorplan.py",
-    109,
-    116
+    122,
+    129
   ],
   "MacroInstance.overlaps": [
     "silis/core/sdk/floorplan.py",
-    118,
-    125
+    131,
+    138
   ],
   "overlaps": [
     "silis/core/sdk/floorplan.py",
-    118,
-    125
+    131,
+    138
   ],
   "MacroInstance.__repr__": [
     "silis/core/sdk/floorplan.py",
-    127,
-    128
+    140,
+    141
   ],
   "MacroInstance": [
     "silis/core/sdk/floorplan.py",
-    61,
-    128
+    71,
+    141
   ],
   "Floorplan.__init__": [
     "silis/core/sdk/floorplan.py",
-    136,
-    143
+    149,
+    156
+  ],
+  "Floorplan._resolve_site_row_height": [
+    "silis/core/sdk/floorplan.py",
+    158,
+    162
+  ],
+  "_resolve_site_row_height": [
+    "silis/core/sdk/floorplan.py",
+    158,
+    162
+  ],
+  "Floorplan._resolve_mfg_grid": [
+    "silis/core/sdk/floorplan.py",
+    164,
+    168
+  ],
+  "_resolve_mfg_grid": [
+    "silis/core/sdk/floorplan.py",
+    164,
+    168
   ],
   "Floorplan.set_die_dimensions": [
     "silis/core/sdk/floorplan.py",
-    145,
-    162
+    170,
+    187
   ],
   "set_die_dimensions": [
     "silis/core/sdk/floorplan.py",
-    145,
-    162
+    170,
+    187
   ],
   "Floorplan.get_die_bbox": [
     "silis/core/sdk/floorplan.py",
-    164,
-    165
+    189,
+    190
   ],
   "get_die_bbox": [
     "silis/core/sdk/floorplan.py",
-    164,
-    165
+    189,
+    190
   ],
   "Floorplan.get_core_bbox": [
     "silis/core/sdk/floorplan.py",
-    167,
-    173
+    192,
+    198
   ],
   "get_core_bbox": [
     "silis/core/sdk/floorplan.py",
-    167,
-    173
+    192,
+    198
   ],
   "Floorplan.get_core_dimensions": [
     "silis/core/sdk/floorplan.py",
-    175,
-    177
+    200,
+    202
   ],
   "get_core_dimensions": [
     "silis/core/sdk/floorplan.py",
-    175,
-    177
+    200,
+    202
   ],
   "Floorplan.add_macro": [
     "silis/core/sdk/floorplan.py",
-    179,
-    204
+    204,
+    231
   ],
   "Floorplan.get_macro": [
     "silis/core/sdk/floorplan.py",
-    206,
-    207
+    233,
+    234
   ],
   "get_macro": [
     "silis/core/sdk/floorplan.py",
-    206,
-    207
+    233,
+    234
   ],
   "Floorplan.get_macros": [
     "silis/core/sdk/floorplan.py",
-    209,
-    210
+    236,
+    237
   ],
   "get_macros": [
     "silis/core/projectwizard/codes.py",
     365,
     366
   ],
+  "Floorplan.check_collisions": [
+    "silis/core/sdk/floorplan.py",
+    239,
+    273
+  ],
+  "check_collisions": [
+    "silis/core/sdk/floorplan.py",
+    239,
+    273
+  ],
   "Floorplan.verify_legal_placement": [
     "silis/core/sdk/floorplan.py",
-    212,
-    239
+    275,
+    296
   ],
   "verify_legal_placement": [
     "silis/core/sdk/floorplan.py",
-    212,
-    239
+    275,
+    296
   ],
   "Floorplan._notify_physical_mutation": [
     "silis/core/sdk/floorplan.py",
-    241,
-    244
+    298,
+    301
   ],
   "_notify_physical_mutation": [
     "silis/core/sdk/floorplan.py",
-    241,
-    244
+    298,
+    301
   ],
   "Floorplan.__repr__": [
     "silis/core/sdk/floorplan.py",
-    246,
-    248
+    303,
+    305
   ],
   "Floorplan": [
     "silis/core/sdk/floorplan.py",
-    131,
-    248
+    144,
+    305
   ],
   "OpenDBInstance.__init__": [
     "silis/core/sdk/opendb_bridge.py",
@@ -5292,187 +5667,232 @@
   "OpenDBBridge.inspect": [
     "silis/core/sdk/opendb_bridge.py",
     61,
-    214
+    233
   ],
   "inspect": [
     "silis/core/sdk/opendb_bridge.py",
     61,
-    214
+    233
   ],
   "OpenDBBridge.die_area": [
     "silis/core/sdk/opendb_bridge.py",
-    217,
-    220
+    236,
+    239
   ],
   "die_area": [
     "silis/core/sdk/layout.py",
-    79,
-    81
+    80,
+    82
   ],
   "OpenDBBridge.core_area": [
     "silis/core/sdk/opendb_bridge.py",
-    223,
-    226
+    242,
+    245
   ],
   "core_area": [
     "silis/core/sdk/layout.py",
-    84,
-    86
+    85,
+    87
   ],
   "OpenDBBridge.utilization": [
     "silis/core/sdk/opendb_bridge.py",
-    229,
-    231
+    248,
+    250
   ],
   "utilization": [
     "silis/core/sdk/layout.py",
-    89,
-    91
+    90,
+    92
+  ],
+  "OpenDBBridge.site_height": [
+    "silis/core/sdk/opendb_bridge.py",
+    253,
+    255
+  ],
+  "site_height": [
+    "silis/core/sdk/opendb_bridge.py",
+    253,
+    255
+  ],
+  "OpenDBBridge.site_width": [
+    "silis/core/sdk/opendb_bridge.py",
+    258,
+    260
+  ],
+  "site_width": [
+    "silis/core/sdk/opendb_bridge.py",
+    258,
+    260
+  ],
+  "OpenDBBridge.mfg_grid": [
+    "silis/core/sdk/opendb_bridge.py",
+    263,
+    265
+  ],
+  "mfg_grid": [
+    "silis/core/sdk/opendb_bridge.py",
+    263,
+    265
   ],
   "OpenDBBridge.get_instances": [
     "silis/core/sdk/opendb_bridge.py",
-    233,
-    248
+    267,
+    282
   ],
   "get_instances": [
     "silis/core/sdk/layout.py",
-    54,
-    57
+    55,
+    58
   ],
   "OpenDBBridge.get_pins": [
     "silis/core/sdk/opendb_bridge.py",
-    250,
-    256
+    284,
+    290
   ],
   "get_pins": [
     "silis/core/sdk/layout.py",
-    108,
-    111
+    109,
+    112
   ],
   "OpenDBBridge.extract_layout_geometry": [
     "silis/core/sdk/opendb_bridge.py",
-    259,
-    416
+    293,
+    456
   ],
   "extract_layout_geometry": [
     "silis/core/sdk/opendb_bridge.py",
-    259,
-    416
+    293,
+    456
   ],
   "OpenDBBridge": [
     "silis/core/sdk/opendb_bridge.py",
     42,
-    416
+    456
   ],
   "LayoutNet.__init__": [
     "silis/core/sdk/layout.py",
-    14,
-    17
+    15,
+    18
   ],
   "LayoutNet.__repr__": [
     "silis/core/sdk/layout.py",
-    19,
-    20
+    20,
+    21
   ],
   "LayoutNet": [
     "silis/core/sdk/layout.py",
-    12,
-    20
+    13,
+    21
   ],
   "Layout.__init__": [
     "silis/core/sdk/layout.py",
-    29,
-    33
+    30,
+    34
   ],
   "Layout._ensure_loaded": [
     "silis/core/sdk/layout.py",
-    35,
-    52
+    36,
+    53
   ],
   "_ensure_loaded": [
     "silis/core/sdk/layout.py",
-    35,
-    52
+    36,
+    53
   ],
   "Layout.get_instances": [
     "silis/core/sdk/layout.py",
-    54,
-    57
+    55,
+    58
   ],
   "Layout.find_instance": [
     "silis/core/sdk/layout.py",
-    59,
-    62
+    60,
+    63
   ],
   "find_instance": [
     "silis/core/sdk/layout.py",
-    59,
-    62
+    60,
+    63
   ],
   "Layout.set_instance_location": [
     "silis/core/sdk/layout.py",
-    64,
-    76
+    65,
+    77
   ],
   "set_instance_location": [
     "silis/core/sdk/layout.py",
-    64,
-    76
+    65,
+    77
   ],
   "Layout.die_area": [
     "silis/core/sdk/layout.py",
-    79,
-    81
+    80,
+    82
   ],
   "Layout.core_area": [
     "silis/core/sdk/layout.py",
-    84,
-    86
+    85,
+    87
   ],
   "Layout.utilization": [
     "silis/core/sdk/layout.py",
-    89,
-    91
+    90,
+    92
   ],
   "Layout.get_die_area": [
     "silis/core/sdk/layout.py",
-    93,
-    96
+    94,
+    97
   ],
   "get_die_area": [
     "silis/core/sdk/layout.py",
-    93,
-    96
+    94,
+    97
   ],
   "Layout.get_core_area": [
     "silis/core/sdk/layout.py",
-    98,
-    101
+    99,
+    102
   ],
   "get_core_area": [
     "silis/core/sdk/layout.py",
-    98,
-    101
+    99,
+    102
   ],
   "Layout.get_utilization": [
     "silis/core/sdk/layout.py",
-    103,
-    106
+    104,
+    107
   ],
   "Layout.get_pins": [
     "silis/core/sdk/layout.py",
-    108,
-    111
+    109,
+    112
+  ],
+  "Layout.view": [
+    "silis/core/sdk/layout.py",
+    114,
+    143
+  ],
+  "view": [
+    "silis/core/sdk/layout.py",
+    114,
+    143
+  ],
+  "Layout.view_layers": [
+    "silis/core/sdk/layout.py",
+    145,
+    147
   ],
   "Layout.__repr__": [
     "silis/core/sdk/layout.py",
-    113,
-    115
+    149,
+    151
   ],
   "Layout": [
     "silis/core/sdk/layout.py",
-    23,
-    115
+    24,
+    151
   ],
   "TimingPin.__init__": [
     "silis/core/sdk/timing.py",
@@ -5502,67 +5922,102 @@
   "TimingGraph.__init__": [
     "silis/core/sdk/timing.py",
     37,
-    41
+    42
+  ],
+  "TimingGraph._get_files_signature": [
+    "silis/core/sdk/timing.py",
+    44,
+    63
+  ],
+  "_get_files_signature": [
+    "silis/core/sdk/timing.py",
+    44,
+    63
+  ],
+  "TimingGraph.invalidate_cache": [
+    "silis/core/sdk/timing.py",
+    65,
+    70
+  ],
+  "TimingGraph.wns": [
+    "silis/core/sdk/timing.py",
+    73,
+    75
+  ],
+  "wns": [
+    "silis/core/sdk/timing.py",
+    73,
+    75
+  ],
+  "TimingGraph.tns": [
+    "silis/core/sdk/timing.py",
+    78,
+    80
+  ],
+  "tns": [
+    "silis/core/sdk/timing.py",
+    78,
+    80
   ],
   "TimingGraph.query_live_metrics": [
     "silis/core/sdk/timing.py",
-    43,
-    111
+    82,
+    164
   ],
   "query_live_metrics": [
     "silis/core/sdk/timing.py",
-    43,
-    111
+    82,
+    164
   ],
   "TimingGraph.get_wns": [
-    "silis/core/sdk/timing.py",
-    113,
-    116
-  ],
-  "get_wns": [
-    "silis/core/sdk/timing.py",
-    113,
-    116
-  ],
-  "TimingGraph.get_tns": [
-    "silis/core/sdk/timing.py",
-    118,
-    121
-  ],
-  "get_tns": [
-    "silis/core/sdk/timing.py",
-    118,
-    121
-  ],
-  "TimingGraph.get_pin_slack": [
-    "silis/core/sdk/timing.py",
-    123,
-    156
-  ],
-  "get_pin_slack": [
-    "silis/core/sdk/timing.py",
-    123,
-    156
-  ],
-  "TimingGraph.get_equivalent_cells": [
-    "silis/core/sdk/timing.py",
-    158,
-    164
-  ],
-  "get_equivalent_cells": [
-    "silis/core/sdk/timing.py",
-    158,
-    164
-  ],
-  "TimingGraph.__repr__": [
     "silis/core/sdk/timing.py",
     166,
     169
   ],
+  "get_wns": [
+    "silis/core/sdk/timing.py",
+    166,
+    169
+  ],
+  "TimingGraph.get_tns": [
+    "silis/core/sdk/timing.py",
+    171,
+    174
+  ],
+  "get_tns": [
+    "silis/core/sdk/timing.py",
+    171,
+    174
+  ],
+  "TimingGraph.get_pin_slack": [
+    "silis/core/sdk/timing.py",
+    176,
+    209
+  ],
+  "get_pin_slack": [
+    "silis/core/sdk/timing.py",
+    176,
+    209
+  ],
+  "TimingGraph.get_equivalent_cells": [
+    "silis/core/sdk/timing.py",
+    211,
+    217
+  ],
+  "get_equivalent_cells": [
+    "silis/core/sdk/timing.py",
+    211,
+    217
+  ],
+  "TimingGraph.__repr__": [
+    "silis/core/sdk/timing.py",
+    219,
+    222
+  ],
   "TimingGraph": [
     "silis/core/sdk/timing.py",
     32,
-    169
+    222
   ],
   "TapeoutManifestViewer.__init__": [
     "silis/core/tapeout/manifest_viewer.py",
@@ -5616,8 +6071,8 @@
   ],
   "run_fill": [
     "silis/core/cli/flow.py",
-    892,
-    893
+    898,
+    899
   ],
   "TapeoutEngine.build_tapeout_manifest": [
     "silis/core/tapeout/fill_engine.py",
@@ -5876,8 +6331,8 @@
   ],
   "run_gls": [
     "silis/core/cli/flow.py",
-    898,
-    899
+    904,
+    905
   ],
   "GLSEngine._find_testbench": [
     "silis/core/simulation/gls_engine.py",
@@ -6017,12 +6472,12 @@
   "SignoffRunnerWorker.run": [
     "silis/core/backendflow/signoff_flow.py",
     199,
-    424
+    431
   ],
   "SignoffRunnerWorker": [
     "silis/core/backendflow/signoff_flow.py",
     180,
-    424
+    431
   ],
   "export_full_design_package": [
     "silis/core/backendflow/design_exporter.py",
@@ -6151,8 +6606,8 @@
   ],
   "append_output": [
     "silis/core/backendflow/flow/backendflow.py",
-    1822,
-    1825
+    1907,
+    1910
   ],
   "VSCodeTerminalWidget.clear_log": [
     "silis/core/terminal/terminal.py",
@@ -6186,8 +6641,8 @@
   ],
   "dragMoveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1053,
-    1055
+    1054,
+    1056
   ],
   "DragDropListWidget.dropEvent": [
     "silis/core/projectwizard/codes.py",
@@ -7692,167 +8147,217 @@
   "find_project_file": [
     "silis/core/cli/flow.py",
     26,
-    69
+    75
   ],
   "resolve_tcl_input": [
     "silis/core/cli/flow.py",
-    72,
-    97
+    78,
+    103
   ],
   "HeadlessASICRunner.__init__": [
     "silis/core/cli/flow.py",
-    101,
-    149
+    107,
+    155
   ],
   "HeadlessASICRunner.close": [
     "silis/core/cli/flow.py",
-    151,
-    174
+    157,
+    180
   ],
   "HeadlessASICRunner.__del__": [
     "silis/core/cli/flow.py",
-    177,
-    181
+    183,
+    187
   ],
   "HeadlessASICRunner._streaming_read_stdout": [
     "silis/core/cli/flow.py",
-    183,
-    211
+    189,
+    217
   ],
   "_streaming_read_stdout": [
     "silis/core/cli/flow.py",
-    183,
-    211
+    189,
+    217
   ],
   "HeadlessASICRunner._ensure_backend_running": [
     "silis/core/cli/flow.py",
-    213,
-    227
+    219,
+    233
   ],
   "_ensure_backend_running": [
     "silis/core/cli/flow.py",
-    213,
-    227
+    219,
+    233
   ],
   "HeadlessASICRunner.execute_tcl": [
     "silis/core/cli/flow.py",
-    229,
-    297
+    235,
+    303
   ],
   "execute_tcl": [
     "silis/core/cli/flow.py",
-    229,
-    297
+    235,
+    303
   ],
   "HeadlessASICRunner._wait_for_backend": [
     "silis/core/cli/flow.py",
-    299,
-    307
+    305,
+    313
   ],
   "_wait_for_backend": [
     "silis/core/cli/flow.py",
-    299,
-    307
+    305,
+    313
   ],
   "HeadlessASICRunner.run_synthesis": [
     "silis/core/cli/flow.py",
-    312,
-    365
+    318,
+    371
   ],
   "run_synthesis": [
     "silis/core/cli/flow.py",
-    312,
-    365
+    318,
+    371
   ],
   "HeadlessASICRunner._get_io_lefs": [
     "silis/core/cli/flow.py",
-    367,
-    395
+    373,
+    401
   ],
   "_get_io_lefs": [
     "silis/core/backendflow/flow/backendflow.py",
-    652,
-    680
+    738,
+    766
   ],
   "HeadlessASICRunner._get_macro_lefs_and_libs": [
     "silis/core/cli/flow.py",
-    397,
-    440
+    403,
+    446
   ],
   "_get_macro_lefs_and_libs": [
     "silis/core/cli/flow.py",
-    397,
-    440
+    403,
+    446
   ],
   "HeadlessASICRunner.ensure_design_loaded": [
     "silis/core/cli/flow.py",
-    442,
-    487
+    448,
+    493
   ],
   "ensure_design_loaded": [
     "silis/core/cli/flow.py",
-    442,
-    487
+    448,
+    493
   ],
   "HeadlessASICRunner.run_init": [
     "silis/core/cli/flow.py",
-    489,
-    576
+    495,
+    582
   ],
   "run_init": [
     "silis/core/cli/flow.py",
-    489,
-    576
+    495,
+    582
   ],
   "HeadlessASICRunner.run_floorplan": [
     "silis/core/cli/flow.py",
-    578,
-    691
+    584,
+    697
   ],
   "run_floorplan": [
     "silis/core/cli/flow.py",
-    578,
-    691
+    584,
+    697
   ],
   "HeadlessASICRunner.run_step": [
     "silis/core/cli/flow.py",
-    693,
-    890
-  ],
-  "HeadlessASICRunner.run_fill": [
-    "silis/core/cli/flow.py",
-    892,
-    893
-  ],
-  "HeadlessASICRunner.run_lvs": [
-    "silis/core/cli/flow.py",
-    895,
+    699,
     896
   ],
-  "HeadlessASICRunner.run_gls": [
+  "HeadlessASICRunner.run_fill": [
     "silis/core/cli/flow.py",
     898,
     899
   ],
-  "HeadlessASICRunner.export_sdf": [
+  "HeadlessASICRunner.run_lvs": [
     "silis/core/cli/flow.py",
     901,
     902
   ],
-  "HeadlessASICRunner.run_tapeout": [
+  "HeadlessASICRunner.run_gls": [
     "silis/core/cli/flow.py",
     904,
     905
+  ],
+  "HeadlessASICRunner.export_sdf": [
+    "silis/core/cli/flow.py",
+    907,
+    908
+  ],
+  "HeadlessASICRunner.run_tapeout": [
+    "silis/core/cli/flow.py",
+    910,
+    911
   ],
   "run_tapeout": [
     "silis/core/cli/flow.py",
-    904,
-    905
+    910,
+    911
   ],
   "HeadlessASICRunner": [
     "silis/core/cli/flow.py",
-    100,
-    905
+    106,
+    911
+  ],
+  "OpenRoadLayoutViewerWidget.__init__": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    29,
+    53
+  ],
+  "OpenRoadLayoutViewerWidget._on_item_selected": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    55,
+    62
+  ],
+  "_on_item_selected": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    55,
+    62
+  ],
+  "OpenRoadLayoutViewerWidget.load_odb": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    64,
+    70
+  ],
+  "load_odb": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    64,
+    70
+  ],
+  "OpenRoadLayoutViewerWidget.ensure_odb_and_load": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    72,
+    143
+  ],
+  "ensure_odb_and_load": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    72,
+    143
+  ],
+  "OpenRoadLayoutViewerWidget.fit": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    145,
+    147
+  ],
+  "fit": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    145,
+    147
+  ],
+  "OpenRoadLayoutViewerWidget": [
+    "silis/core/backendflow/openroad_viewer/openroad_viewer_widget.py",
+    24,
+    147
   ],
   "DEFParser.__init__": [
     "silis/core/backendflow/siliconpeeker/peeker.py",
@@ -7936,8 +8441,8 @@
   ],
   "drawForeground": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1069,
-    1073
+    1070,
+    1074
   ],
   "SiliconPeeker.wheelEvent": [
     "silis/core/backendflow/siliconpeeker/peeker.py",
@@ -8216,8 +8721,8 @@
   ],
   "itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1194,
-    1248
+    1195,
+    1249
   ],
   "PinItem._snap_to_edge": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8266,8 +8771,8 @@
   ],
   "mousePressEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    744,
-    792
+    745,
+    793
   ],
   "PinTableWidget": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8296,8 +8801,8 @@
   ],
   "mouseMoveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    794,
-    866
+    795,
+    867
   ],
   "IOPlacerCanvasView.mouseReleaseEvent": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8306,8 +8811,8 @@
   ],
   "mouseReleaseEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1250,
-    1254
+    1251,
+    1255
   ],
   "IOPlacerCanvasView.keyPressEvent": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8376,8 +8881,8 @@
   ],
   "undo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5055,
-    5058
+    5116,
+    5119
   ],
   "IOPlacerDialog.redo": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8386,8 +8891,8 @@
   ],
   "redo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5060,
-    5064
+    5121,
+    5125
   ],
   "IOPlacerDialog._apply_history_snapshot": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8406,8 +8911,8 @@
   ],
   "save_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5276,
-    5358
+    5337,
+    5419
   ],
   "IOPlacerDialog.load_saved_state": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8426,8 +8931,8 @@
   ],
   "load_pin_order_cfg": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3035,
-    3043
+    3060,
+    3068
   ],
   "IOPlacerDialog.export_pin_order_cfg": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8446,8 +8951,8 @@
   ],
   "auto_space_active_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3930,
-    3933
+    3955,
+    3958
   ],
   "IOPlacerDialog.select_active_edge": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8456,8 +8961,8 @@
   ],
   "select_active_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3783,
-    3789
+    3808,
+    3814
   ],
   "IOPlacerDialog._highlight_active_edge_on_canvas": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8466,8 +8971,8 @@
   ],
   "_highlight_active_edge_on_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3791,
-    3800
+    3816,
+    3825
   ],
   "IOPlacerDialog._order_preserving_space_edge": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8476,8 +8981,8 @@
   ],
   "_order_preserving_space_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3839,
-    3928
+    3864,
+    3953
   ],
   "IOPlacerDialog._get_project_root": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8561,8 +9066,8 @@
   ],
   "_populate_tree": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    191,
-    228
+    203,
+    240
   ],
   "IOPlacerDialog._populate_unplaced": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8711,8 +9216,8 @@
   ],
   "_place_pin_item": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3168,
-    3177
+    3193,
+    3202
   ],
   "IOPlacerDialog.start_draw_box_mode": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8801,8 +9306,8 @@
   ],
   "_legalize_edge_pos": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3822,
-    3837
+    3847,
+    3862
   ],
   "IOPlacerDialog._check_pad_capacity": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8821,8 +9326,8 @@
   ],
   "on_pad_strategy_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3382,
-    3386
+    3407,
+    3411
   ],
   "IOPlacerDialog.on_mode_toggled": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8831,8 +9336,8 @@
   ],
   "on_mode_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3521,
-    3605
+    3546,
+    3630
   ],
   "IOPlacerDialog.expand_die_for_padring": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8841,8 +9346,8 @@
   ],
   "expand_die_for_padring": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3607,
-    3645
+    3632,
+    3670
   ],
   "IOPlacerDialog.on_spacing_changed": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8861,8 +9366,8 @@
   ],
   "on_pin_selected_in_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3812,
-    3820
+    3837,
+    3845
   ],
   "IOPlacerDialog.on_canvas_selection_changed": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8916,8 +9421,8 @@
   ],
   "update_live_tcl": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6624,
-    6627
+    6685,
+    6688
   ],
   "IOPlacerDialog.on_export_hard_macro": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8951,8 +9456,8 @@
   ],
   "reject": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1920,
-    1921
+    1921,
+    1922
   ],
   "IOPlacerDialog": [
     "silis/core/backendflow/floorplanner/ioplacer.py",
@@ -8996,183 +9501,183 @@
   ],
   "PowerDomain.to_dict": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    62,
-    78
+    68,
+    87
   ],
   "PowerDomain.from_dict": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    81,
-    98
+    90,
+    110
   ],
   "from_dict": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    81,
-    98
+    90,
+    110
   ],
   "BoundaryClampTableDialog.__init__": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    107,
-    182
+    119,
+    194
   ],
   "BoundaryClampTableDialog._auto_infer_value": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    184,
-    189
+    196,
+    201
   ],
   "_auto_infer_value": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    184,
-    189
+    196,
+    201
   ],
   "BoundaryClampTableDialog._populate_tree": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    191,
-    228
+    203,
+    240
   ],
   "BoundaryClampTableDialog.eventFilter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    230,
-    249
+    242,
+    261
   ],
   "BoundaryClampTableDialog._set_item_clamp": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    251,
-    262
+    263,
+    274
   ],
   "_set_item_clamp": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    251,
-    262
+    263,
+    274
   ],
   "BoundaryClampTableDialog._apply_filter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    264,
-    269
+    276,
+    281
   ],
   "_apply_filter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    264,
-    269
+    276,
+    281
   ],
   "BoundaryClampTableDialog._auto_infer_all": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    271,
-    275
+    283,
+    287
   ],
   "_auto_infer_all": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    271,
-    275
+    283,
+    287
   ],
   "BoundaryClampTableDialog._save_and_accept": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    277,
-    288
+    289,
+    300
   ],
   "_save_and_accept": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    277,
-    288
+    289,
+    300
   ],
   "BoundaryClampTableDialog": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    101,
-    288
+    113,
+    300
   ],
   "PowerDomainManager.__init__": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    298,
-    318
+    310,
+    330
   ],
   "PowerDomainManager.load_or_create_upf": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    320,
-    420
+    332,
+    432
   ],
   "load_or_create_upf": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    320,
-    420
+    332,
+    432
   ],
   "PowerDomainManager.export_upf_tcl": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    422,
-    423
+    434,
+    435
   ],
   "export_upf_tcl": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    422,
-    423
+    434,
+    435
   ],
   "PowerDomainManager.add_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    425,
-    433
+    437,
+    445
   ],
   "add_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    425,
-    433
+    437,
+    445
   ],
   "PowerDomainManager.remove_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    435,
-    438
+    447,
+    450
   ],
   "remove_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    435,
-    438
+    447,
+    450
   ],
   "PowerDomainManager.get_domain": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    440,
-    441
+    452,
+    453
   ],
   "PowerDomainManager.auto_size_level_shifter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    443,
-    451
+    455,
+    463
   ],
   "auto_size_level_shifter": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    443,
-    451
+    455,
+    463
   ],
   "PowerDomainManager.discover_hierarchical_instances": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    453,
-    499
+    465,
+    511
   ],
   "discover_hierarchical_instances": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    453,
-    499
+    465,
+    511
   ],
   "PowerDomainManager.discover_instance_ports": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    501,
-    579
+    513,
+    591
   ],
   "discover_instance_ports": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    501,
-    579
+    513,
+    591
   ],
   "PowerDomainManager.generate_upf_text": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    581,
-    636
+    593,
+    648
   ],
   "generate_upf_text": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    581,
-    636
+    593,
+    648
   ],
   "PowerDomainManager": [
     "silis/core/backendflow/floorplanner/power_domain_manager.py",
-    291,
-    636
+    303,
+    648
   ],
   "HierarchicalAutoRegionPlacer.__init__": [
     "silis/core/backendflow/floorplanner/region_autoplacer.py",
@@ -9316,48 +9821,48 @@
   ],
   "InteractiveGraphicsView.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    23,
-    28
+    24,
+    29
   ],
   "InteractiveGraphicsView.wheelEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    30,
-    34
+    31,
+    35
   ],
   "InteractiveGraphicsView": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    22,
-    34
+    23,
+    35
   ],
   "HoverTextItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    38,
-    44
+    39,
+    45
   ],
   "HoverTextItem.hoverEnterEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    46,
-    50
+    47,
+    51
   ],
   "hoverEnterEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    46,
-    50
+    47,
+    51
   ],
   "HoverTextItem.hoverLeaveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    52,
-    56
+    53,
+    57
   ],
   "hoverLeaveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    52,
-    56
+    53,
+    57
   ],
   "HoverTextItem.paint": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    58,
-    63
+    59,
+    64
   ],
   "paint": [
     "silis/core/backendflow/gdsviewer/gds3d.py",
@@ -9366,1663 +9871,1673 @@
   ],
   "HoverTextItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    37,
-    63
+    38,
+    64
   ],
   "ResizeHandle.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    67,
-    79
+    68,
+    80
   ],
   "ResizeHandle.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    81,
-    85
+    82,
+    86
   ],
   "ResizeHandle.mousePressEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    87,
-    93
+    88,
+    94
   ],
   "ResizeHandle.mouseReleaseEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    95,
-    105
+    96,
+    106
   ],
   "ResizeHandle": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    66,
-    105
+    67,
+    106
   ],
   "ResizableRectItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    108,
-    116
+    109,
+    117
   ],
   "ResizableRectItem.update_handle_positions": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    118,
-    129
+    119,
+    130
   ],
   "update_handle_positions": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    118,
-    129
+    119,
+    130
   ],
   "ResizableRectItem.handle_moved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    131,
-    148
+    132,
+    149
   ],
   "handle_moved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    131,
-    148
+    132,
+    149
   ],
   "ResizableRectItem.setRect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    150,
-    152
+    151,
+    153
   ],
   "setRect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    648,
-    656
+    649,
+    657
   ],
   "ResizableRectItem.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    154,
-    159
+    155,
+    160
   ],
   "ResizableRectItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    107,
-    159
+    108,
+    160
   ],
   "BlockageItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    162,
-    192
+    163,
+    193
   ],
   "BlockageItem.update_text": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    194,
-    201
+    195,
+    202
   ],
   "update_text": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    641,
-    646
+    642,
+    647
   ],
   "BlockageItem.setRect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    203,
-    210
+    204,
+    211
   ],
   "BlockageItem.update_halo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    212,
-    217
+    213,
+    218
   ],
   "update_halo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1125,
-    1130
+    1126,
+    1131
   ],
   "BlockageItem.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    219,
-    228
+    220,
+    229
   ],
   "BlockageItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    161,
-    228
+    162,
+    229
   ],
   "RegionItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    231,
-    258
+    232,
+    259
   ],
   "RegionItem._update_tooltip": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    260,
-    294
+    261,
+    295
   ],
   "_update_tooltip": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    549,
-    578
+    550,
+    579
   ],
   "RegionItem.contextMenuEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    296,
-    367
+    297,
+    368
   ],
   "RegionItem.set_tapcell_type": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    369,
-    377
+    370,
+    378
   ],
   "set_tapcell_type": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    616,
-    624
+    617,
+    625
   ],
   "RegionItem._update_colors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    379,
-    395
+    380,
+    396
   ],
   "_update_colors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    635,
-    639
+    636,
+    640
   ],
   "RegionItem.set_locked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    397,
-    401
+    398,
+    402
   ],
   "set_locked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    397,
-    401
+    398,
+    402
   ],
   "RegionItem.set_starved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    403,
-    406
+    404,
+    407
   ],
   "set_starved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    403,
-    406
+    404,
+    407
   ],
   "RegionItem.update_text": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    408,
-    417
+    409,
+    418
   ],
   "RegionItem.setRect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    419,
-    426
+    420,
+    427
   ],
   "RegionItem.update_halo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    428,
-    433
+    429,
+    434
   ],
   "RegionItem.get_parent_containment_rect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    435,
-    462
+    436,
+    463
   ],
   "get_parent_containment_rect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    435,
-    462
+    436,
+    463
   ],
   "RegionItem.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    464,
-    498
+    465,
+    499
   ],
   "RegionItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    230,
-    498
+    231,
+    499
   ],
   "VoltageIslandItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    508,
-    535
+    509,
+    536
   ],
   "VoltageIslandItem.update_halo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    537,
-    541
+    538,
+    542
   ],
   "VoltageIslandItem.halo_scene_bounding_rect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    543,
-    547
+    544,
+    548
   ],
   "halo_scene_bounding_rect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    543,
-    547
+    544,
+    548
   ],
   "VoltageIslandItem._update_tooltip": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    549,
-    578
+    550,
+    579
   ],
   "VoltageIslandItem.contextMenuEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    580,
-    614
+    581,
+    615
   ],
   "VoltageIslandItem.set_tapcell_type": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    616,
-    624
+    617,
+    625
   ],
   "VoltageIslandItem.get_voltage_color": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    626,
-    633
+    627,
+    634
   ],
   "get_voltage_color": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    626,
-    633
+    627,
+    634
   ],
   "VoltageIslandItem._update_colors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    635,
-    639
+    636,
+    640
   ],
   "VoltageIslandItem.update_text": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    641,
-    646
+    642,
+    647
   ],
   "VoltageIslandItem.setRect": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    648,
-    656
+    649,
+    657
   ],
   "VoltageIslandItem.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    658,
-    680
+    659,
+    681
   ],
   "VoltageIslandItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    502,
-    680
+    503,
+    681
   ],
   "FloorplanView.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    686,
-    707
+    687,
+    708
   ],
   "FloorplanView.start_drawing": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    709,
-    716
+    710,
+    717
   ],
   "start_drawing": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    709,
-    716
+    710,
+    717
   ],
   "FloorplanView.start_drawing_region": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    718,
-    734
+    719,
+    735
   ],
   "start_drawing_region": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    718,
-    734
+    719,
+    735
   ],
   "FloorplanView.start_drawing_power_domain": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    736,
-    742
+    737,
+    743
   ],
   "start_drawing_power_domain": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    736,
-    742
+    737,
+    743
   ],
   "FloorplanView.mousePressEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    744,
-    792
+    745,
+    793
   ],
   "FloorplanView.mouseMoveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    794,
-    866
+    795,
+    867
   ],
   "FloorplanView.mouseReleaseEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    868,
-    927
+    869,
+    928
   ],
   "FloorplanView.keyPressEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    929,
-    1047
+    930,
+    1048
   ],
   "FloorplanView.dragEnterEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1049,
-    1051
+    1050,
+    1052
   ],
   "FloorplanView.dragMoveEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1053,
-    1055
+    1054,
+    1056
   ],
   "FloorplanView.dropEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1057,
-    1067
+    1058,
+    1068
   ],
   "FloorplanView.drawForeground": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1069,
-    1073
+    1070,
+    1074
   ],
   "FloorplanView": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    683,
-    1073
+    684,
+    1074
   ],
   "MacroItem.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1077,
-    1123
+    1078,
+    1124
   ],
   "MacroItem.update_halo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1125,
-    1130
+    1126,
+    1131
   ],
   "MacroItem.set_orientation": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1132,
-    1186
+    1133,
+    1187
   ],
   "MacroItem.set_inst_name": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1188,
-    1192
+    1189,
+    1193
   ],
   "set_inst_name": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1188,
-    1192
+    1189,
+    1193
   ],
   "MacroItem.itemChange": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1194,
-    1248
+    1195,
+    1249
   ],
   "MacroItem.mouseReleaseEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1250,
-    1254
+    1251,
+    1255
   ],
   "MacroItem": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1076,
-    1254
+    1077,
+    1255
   ],
   "DieCoreSetupDialog.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1263,
-    1269
+    1264,
+    1270
   ],
   "DieCoreSetupDialog._build_ui": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1271,
-    1334
+    1272,
+    1335
   ],
   "DieCoreSetupDialog.update_util_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1336,
-    1365
+    1337,
+    1366
   ],
   "update_util_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1336,
-    1365
+    1337,
+    1366
   ],
   "DieCoreSetupDialog.on_fit_density_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1367,
-    1401
+    1368,
+    1402
   ],
   "on_fit_density_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1367,
-    1401
+    1368,
+    1402
   ],
   "DieCoreSetupDialog.on_apply": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1403,
-    1422
+    1404,
+    1423
   ],
   "on_apply": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1403,
-    1422
+    1404,
+    1423
   ],
   "DieCoreSetupDialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1258,
-    1422
+    1259,
+    1423
   ],
   "is_io_pad_cell": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1426,
-    1441
+    1427,
+    1442
   ],
   "InteractiveFloorplannerWidget._get_project_context": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1450,
-    1480
+    1451,
+    1481
   ],
   "_get_project_context": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1450,
-    1480
+    1451,
+    1481
   ],
   "InteractiveFloorplannerWidget.__init__": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1482,
-    1562
+    1483,
+    1563
   ],
   "InteractiveFloorplannerWidget._init_top_menu_bar": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1564,
-    1751
+    1565,
+    1752
   ],
   "_init_top_menu_bar": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1564,
-    1751
+    1565,
+    1752
   ],
   "InteractiveFloorplannerWidget._init_layout_and_splitters": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1753,
-    1890
+    1754,
+    1891
   ],
   "_init_layout_and_splitters": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1753,
-    1890
+    1754,
+    1891
   ],
   "InteractiveFloorplannerWidget._setup_keyboard_shortcuts": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1892,
-    1911
+    1893,
+    1912
   ],
   "_setup_keyboard_shortcuts": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1892,
-    1911
+    1893,
+    1912
   ],
   "InteractiveFloorplannerWidget.keyPressEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1913,
-    1918
+    1914,
+    1919
   ],
   "InteractiveFloorplannerWidget.reject": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1920,
-    1921
+    1921,
+    1922
   ],
   "InteractiveFloorplannerWidget.closeEvent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1923,
-    1939
+    1924,
+    1940
   ],
   "InteractiveFloorplannerWidget.toggle_hud_visibility": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1941,
-    1945
+    1942,
+    1946
   ],
   "toggle_hud_visibility": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1941,
-    1945
+    1942,
+    1946
   ],
   "InteractiveFloorplannerWidget._trigger_autosave": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1947,
-    1949
+    1948,
+    1950
   ],
   "_trigger_autosave": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1947,
-    1949
+    1948,
+    1950
   ],
   "InteractiveFloorplannerWidget._do_transactional_autosave": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1951,
-    1962
+    1952,
+    1963
   ],
   "_do_transactional_autosave": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1951,
-    1962
+    1952,
+    1963
   ],
   "InteractiveFloorplannerWidget._serialize_session_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1964,
-    2032
+    1965,
+    2033
   ],
   "_serialize_session_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1964,
-    2032
+    1965,
+    2033
   ],
   "InteractiveFloorplannerWidget.save_session": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2034,
-    2036
+    2035,
+    2037
   ],
   "save_session": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2034,
-    2036
+    2035,
+    2037
   ],
   "InteractiveFloorplannerWidget.save_snapshot_as": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2038,
-    2044
+    2039,
+    2045
   ],
   "save_snapshot_as": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2038,
-    2044
+    2039,
+    2045
   ],
   "InteractiveFloorplannerWidget.load_session": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2046,
-    2060
+    2047,
+    2082
   ],
   "load_session": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2046,
-    2060
+    2047,
+    2082
   ],
   "InteractiveFloorplannerWidget.revert_to_saved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2062,
-    2069
+    2084,
+    2091
   ],
   "revert_to_saved": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2062,
-    2069
+    2084,
+    2091
   ],
   "InteractiveFloorplannerWidget.verify_netlist_integrity": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2071,
-    2088
+    2093,
+    2111
   ],
   "verify_netlist_integrity": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2071,
-    2088
+    2093,
+    2111
   ],
   "InteractiveFloorplannerWidget.on_reset_from_netlist": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2090,
-    2098
+    2113,
+    2121
   ],
   "on_reset_from_netlist": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2090,
-    2098
+    2113,
+    2121
   ],
   "InteractiveFloorplannerWidget.select_all_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2100,
-    2103
+    2123,
+    2126
   ],
   "select_all_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2100,
-    2103
+    2123,
+    2126
   ],
   "InteractiveFloorplannerWidget.clear_selection": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2105,
-    2107
+    2128,
+    2130
   ],
   "clear_selection": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2105,
-    2107
+    2128,
+    2130
   ],
   "InteractiveFloorplannerWidget.delete_selected_entities": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2109,
-    2128
+    2132,
+    2151
   ],
   "delete_selected_entities": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2109,
-    2128
+    2132,
+    2151
   ],
   "InteractiveFloorplannerWidget.fit_core": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2130,
-    2132
+    2153,
+    2155
   ],
   "fit_core": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2130,
-    2132
+    2153,
+    2155
   ],
   "InteractiveFloorplannerWidget.toggle_halos_visibility": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2134,
-    2137
+    2157,
+    2160
   ],
   "toggle_halos_visibility": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2134,
-    2137
+    2157,
+    2160
   ],
   "InteractiveFloorplannerWidget.scan_narrow_corridors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2139,
-    2153
+    2162,
+    2176
   ],
   "scan_narrow_corridors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2139,
-    2153
+    2162,
+    2176
   ],
   "InteractiveFloorplannerWidget.open_die_core_setup_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2156,
-    2158
+    2179,
+    2181
   ],
   "open_die_core_setup_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2156,
-    2158
+    2179,
+    2181
   ],
   "InteractiveFloorplannerWidget._load_netlist_and_pdk_context": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2160,
-    2179
+    2183,
+    2202
   ],
   "_load_netlist_and_pdk_context": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2160,
-    2179
+    2183,
+    2202
   ],
   "InteractiveFloorplannerWidget._build_floorplan_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2181,
-    2497
+    2204,
+    2520
   ],
   "_build_floorplan_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2181,
-    2497
+    2204,
+    2520
   ],
   "InteractiveFloorplannerWidget._build_power_pdn_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2499,
-    2646
+    2522,
+    2671
   ],
   "_build_power_pdn_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2499,
-    2646
+    2522,
+    2671
   ],
   "InteractiveFloorplannerWidget._build_power_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2648,
-    2649
+    2673,
+    2674
   ],
   "_build_power_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2648,
-    2649
+    2673,
+    2674
   ],
   "InteractiveFloorplannerWidget._build_pdn_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2651,
-    2652
+    2676,
+    2677
   ],
   "_build_pdn_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2651,
-    2652
+    2676,
+    2677
   ],
   "InteractiveFloorplannerWidget._on_pdn_ring_controls_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2654,
-    2656
+    2679,
+    2681
   ],
   "_on_pdn_ring_controls_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2654,
-    2656
+    2679,
+    2681
   ],
   "InteractiveFloorplannerWidget._on_pdn_trunk_controls_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2658,
-    2660
+    2683,
+    2685
   ],
   "_on_pdn_trunk_controls_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2658,
-    2660
+    2683,
+    2685
   ],
   "InteractiveFloorplannerWidget._populate_pmu_instances": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2662,
-    2690
+    2687,
+    2715
   ],
   "_populate_pmu_instances": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2662,
-    2690
+    2687,
+    2715
   ],
   "InteractiveFloorplannerWidget.on_pmu_instance_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2692,
-    2708
+    2717,
+    2733
   ],
   "on_pmu_instance_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2692,
-    2708
+    2717,
+    2733
   ],
   "InteractiveFloorplannerWidget._refresh_pmu_ports_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2710,
-    2733
+    2735,
+    2758
   ],
   "_refresh_pmu_ports_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2710,
-    2733
+    2735,
+    2758
   ],
   "InteractiveFloorplannerWidget.open_pmu_hookup_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2735,
-    2816
+    2760,
+    2841
   ],
   "open_pmu_hookup_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2735,
-    2816
+    2760,
+    2841
   ],
   "InteractiveFloorplannerWidget._refresh_power_domains_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2818,
-    2834
+    2843,
+    2859
   ],
   "_refresh_power_domains_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2818,
-    2834
+    2843,
+    2859
   ],
   "InteractiveFloorplannerWidget._build_io_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2836,
-    2951
+    2861,
+    2976
   ],
   "_build_io_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2836,
-    2951
+    2861,
+    2976
   ],
   "InteractiveFloorplannerWidget._build_tcl_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2953,
-    2964
+    2978,
+    2989
   ],
   "_build_tcl_tab": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2953,
-    2964
+    2978,
+    2989
   ],
   "InteractiveFloorplannerWidget.open_boundary_clamp_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2966,
-    2973
+    2991,
+    2998
   ],
   "open_boundary_clamp_dialog": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2966,
-    2973
+    2991,
+    2998
   ],
   "InteractiveFloorplannerWidget.calculate_power_switch_matrix": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2975,
-    2979
+    3000,
+    3004
   ],
   "calculate_power_switch_matrix": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2975,
-    2979
+    3000,
+    3004
   ],
   "InteractiveFloorplannerWidget.synthesize_upf_flow": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2981,
-    2984
+    3006,
+    3009
   ],
   "synthesize_upf_flow": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2981,
-    2984
+    3006,
+    3009
   ],
   "InteractiveFloorplannerWidget.edit_upf_file": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2986,
-    2990
+    3011,
+    3015
   ],
   "edit_upf_file": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2986,
-    2990
+    3011,
+    3015
   ],
   "InteractiveFloorplannerWidget.reparse_upf": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2992,
-    2994
+    3017,
+    3019
   ],
   "reparse_upf": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2992,
-    2994
+    3017,
+    3019
   ],
   "InteractiveFloorplannerWidget.add_new_power_domain": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2996,
-    3001
+    3021,
+    3026
   ],
   "add_new_power_domain": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2996,
-    3001
+    3021,
+    3026
   ],
   "InteractiveFloorplannerWidget.toggle_pad_ring_mode": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3003,
-    3005
+    3028,
+    3030
   ],
   "toggle_pad_ring_mode": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3003,
-    3005
+    3028,
+    3030
   ],
   "InteractiveFloorplannerWidget._load_pin_order_cfg_silent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3007,
-    3033
+    3032,
+    3058
   ],
   "_load_pin_order_cfg_silent": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3007,
-    3033
+    3032,
+    3058
   ],
   "InteractiveFloorplannerWidget.load_pin_order_cfg": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3035,
-    3043
+    3060,
+    3068
   ],
   "InteractiveFloorplannerWidget.save_pin_order_cfg": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3045,
-    3059
+    3070,
+    3084
   ],
   "save_pin_order_cfg": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3045,
-    3059
+    3070,
+    3084
   ],
   "InteractiveFloorplannerWidget.auto_align_pads_to_regions": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3061,
-    3166
+    3086,
+    3191
   ],
   "auto_align_pads_to_regions": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3061,
-    3166
+    3086,
+    3191
   ],
   "InteractiveFloorplannerWidget._place_pin_item": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3168,
-    3177
+    3193,
+    3202
   ],
   "InteractiveFloorplannerWidget.auto_distribute_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3179,
-    3380
+    3204,
+    3405
   ],
   "auto_distribute_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3179,
-    3380
+    3204,
+    3405
   ],
   "InteractiveFloorplannerWidget.on_pad_strategy_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3382,
-    3386
+    3407,
+    3411
   ],
   "InteractiveFloorplannerWidget.compute_minimum_die_for_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3388,
-    3490
+    3413,
+    3515
   ],
   "InteractiveFloorplannerWidget.optimize_die_to_constraints": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3492,
-    3519
+    3517,
+    3544
   ],
   "optimize_die_to_constraints": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3492,
-    3519
+    3517,
+    3544
   ],
   "InteractiveFloorplannerWidget.on_mode_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3521,
-    3605
+    3546,
+    3630
   ],
   "InteractiveFloorplannerWidget.expand_die_for_padring": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3607,
-    3645
+    3632,
+    3670
   ],
   "InteractiveFloorplannerWidget.toggle_flightlines": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3647,
-    3652
+    3672,
+    3677
   ],
   "toggle_flightlines": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3647,
-    3652
+    3672,
+    3677
   ],
   "InteractiveFloorplannerWidget._parse_netlist_pin_connectivity": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3654,
-    3686
+    3679,
+    3711
   ],
   "_parse_netlist_pin_connectivity": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3654,
-    3686
+    3679,
+    3711
   ],
   "InteractiveFloorplannerWidget._draw_interconnect_flylines": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3688,
-    3781
+    3713,
+    3806
   ],
   "_draw_interconnect_flylines": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3688,
-    3781
+    3713,
+    3806
   ],
   "InteractiveFloorplannerWidget.select_active_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3783,
-    3789
+    3808,
+    3814
   ],
   "InteractiveFloorplannerWidget._highlight_active_edge_on_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3791,
-    3800
+    3816,
+    3825
   ],
   "InteractiveFloorplannerWidget._on_table_pads_selection_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3802,
-    3810
+    3827,
+    3835
   ],
   "_on_table_pads_selection_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3802,
-    3810
+    3827,
+    3835
   ],
   "InteractiveFloorplannerWidget.on_pin_selected_in_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3812,
-    3820
+    3837,
+    3845
   ],
   "InteractiveFloorplannerWidget._legalize_edge_pos": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3822,
-    3837
+    3847,
+    3862
   ],
   "InteractiveFloorplannerWidget._order_preserving_space_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3839,
-    3928
+    3864,
+    3953
   ],
   "InteractiveFloorplannerWidget.auto_space_active_edge": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3930,
-    3933
+    3955,
+    3958
   ],
   "InteractiveFloorplannerWidget.insert_supply_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3935,
-    3961
+    3960,
+    3986
   ],
   "insert_supply_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3935,
-    3961
+    3960,
+    3986
   ],
   "InteractiveFloorplannerWidget._sync_upf_power_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3963,
-    3986
+    3988,
+    4011
   ],
   "_sync_upf_power_pads": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3963,
-    3986
+    3988,
+    4011
   ],
   "InteractiveFloorplannerWidget._refresh_domain_supplies_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3988,
-    4050
+    4013,
+    4111
   ],
   "_refresh_domain_supplies_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3988,
-    4050
+    4013,
+    4111
   ],
   "InteractiveFloorplannerWidget._refresh_domain_tapcells_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4052,
-    4084
+    4113,
+    4145
   ],
   "_refresh_domain_tapcells_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4052,
-    4084
+    4113,
+    4145
   ],
   "InteractiveFloorplannerWidget._refresh_pads_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4086,
-    4115
+    4147,
+    4176
   ],
   "_refresh_pads_table": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4086,
-    4115
+    4147,
+    4176
   ],
   "InteractiveFloorplannerWidget.generate_core_power_ring": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4117,
-    4118
+    4178,
+    4179
   ],
   "generate_core_power_ring": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4117,
-    4118
+    4178,
+    4179
   ],
   "InteractiveFloorplannerWidget.route_pad_trunk_bridges": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4120,
-    4121
+    4181,
+    4182
   ],
   "route_pad_trunk_bridges": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4120,
-    4121
+    4181,
+    4182
   ],
   "InteractiveFloorplannerWidget.configure_dual_followpins": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4123,
-    4124
+    4184,
+    4185
   ],
   "configure_dual_followpins": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4123,
-    4124
+    4184,
+    4185
   ],
   "InteractiveFloorplannerWidget.run_psm_analysis": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4126,
-    4130
+    4187,
+    4191
   ],
   "run_psm_analysis": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4126,
-    4130
+    4187,
+    4191
   ],
   "InteractiveFloorplannerWidget.check_connectivity_matrix": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4132,
-    4133
+    4193,
+    4194
   ],
   "check_connectivity_matrix": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4132,
-    4133
+    4193,
+    4194
   ],
   "InteractiveFloorplannerWidget.detect_overlaps_and_corridors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4135,
-    4136
+    4196,
+    4197
   ],
   "detect_overlaps_and_corridors": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4135,
-    4136
+    4196,
+    4197
   ],
   "InteractiveFloorplannerWidget.export_quality_report": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4138,
-    4143
+    4199,
+    4204
   ],
   "export_quality_report": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4138,
-    4143
+    4199,
+    4204
   ],
   "InteractiveFloorplannerWidget.on_halo_equal_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4145,
-    4154
+    4206,
+    4215
   ],
   "on_halo_equal_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4145,
-    4154
+    4206,
+    4215
   ],
   "InteractiveFloorplannerWidget.on_halo_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4156,
-    4176
+    4217,
+    4237
   ],
   "on_halo_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4156,
-    4176
+    4217,
+    4237
   ],
   "InteractiveFloorplannerWidget.start_drawing_blockage": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4178,
-    4179
+    4239,
+    4240
   ],
   "start_drawing_blockage": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4178,
-    4179
+    4239,
+    4240
   ],
   "InteractiveFloorplannerWidget.start_drag": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4181,
-    4194
+    4242,
+    4255
   ],
   "start_drag": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4181,
-    4194
+    4242,
+    4255
   ],
   "InteractiveFloorplannerWidget.populate_macro_list": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4196,
-    4425
+    4257,
+    4486
   ],
   "populate_macro_list": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4196,
-    4425
+    4257,
+    4486
   ],
   "InteractiveFloorplannerWidget.update_utilization": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4427,
-    4482
+    4488,
+    4543
   ],
   "update_utilization": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4427,
-    4482
+    4488,
+    4543
   ],
   "InteractiveFloorplannerWidget.power_domains": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4492,
-    4493
+    4553,
+    4554
   ],
   "power_domains": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4492,
-    4493
+    4553,
+    4554
   ],
   "InteractiveFloorplannerWidget.populate_power_domains_ui": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4495,
-    4512
+    4556,
+    4573
   ],
   "populate_power_domains_ui": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4495,
-    4512
+    4556,
+    4573
   ],
   "InteractiveFloorplannerWidget.on_place_power_domain_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4514,
-    4559
+    4575,
+    4620
   ],
   "on_place_power_domain_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4514,
-    4559
+    4575,
+    4620
   ],
   "InteractiveFloorplannerWidget.on_auto_place_power_domain_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4561,
-    4601
+    4622,
+    4662
   ],
   "on_auto_place_power_domain_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4561,
-    4601
+    4622,
+    4662
   ],
   "InteractiveFloorplannerWidget.init_floorplan": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4603,
-    4610
+    4664,
+    4671
   ],
   "init_floorplan": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4603,
-    4610
+    4664,
+    4671
   ],
   "InteractiveFloorplannerWidget._do_init_floorplan": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4612,
-    5010
+    4673,
+    5071
   ],
   "_do_init_floorplan": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4612,
-    5010
+    4673,
+    5071
   ],
   "InteractiveFloorplannerWidget._set_floorplan_controls_enabled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5012,
-    5043
+    5073,
+    5104
   ],
   "_set_floorplan_controls_enabled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5012,
-    5043
+    5073,
+    5104
   ],
   "InteractiveFloorplannerWidget.fit_die": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5045,
-    5053
+    5106,
+    5114
   ],
   "fit_die": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5045,
-    5053
+    5106,
+    5114
   ],
   "InteractiveFloorplannerWidget.undo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5055,
-    5058
+    5116,
+    5119
   ],
   "InteractiveFloorplannerWidget.redo": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5060,
-    5064
+    5121,
+    5125
   ],
   "InteractiveFloorplannerWidget.load_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5066,
-    5274
+    5127,
+    5335
   ],
   "load_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5066,
-    5274
+    5127,
+    5335
   ],
   "InteractiveFloorplannerWidget.save_state": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5276,
-    5358
+    5337,
+    5419
   ],
   "InteractiveFloorplannerWidget.auto_throw_macros_to_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5360,
-    5457
+    5421,
+    5518
   ],
   "auto_throw_macros_to_canvas": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5360,
-    5457
+    5421,
+    5518
   ],
   "InteractiveFloorplannerWidget.on_macro_dropped": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5459,
-    5496
+    5520,
+    5557
   ],
   "on_macro_dropped": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5459,
-    5496
+    5520,
+    5557
   ],
   "InteractiveFloorplannerWidget.on_autoplace_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5498,
-    5503
+    5559,
+    5564
   ],
   "on_autoplace_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5498,
-    5503
+    5559,
+    5564
   ],
   "InteractiveFloorplannerWidget.on_autoplace_method_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5505,
-    5509
+    5566,
+    5570
   ],
   "on_autoplace_method_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5505,
-    5509
+    5566,
+    5570
   ],
   "InteractiveFloorplannerWidget.apply_autoplace_method": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5511,
-    5653
+    5572,
+    5714
   ],
   "apply_autoplace_method": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5511,
-    5653
+    5572,
+    5714
   ],
   "InteractiveFloorplannerWidget.on_inst_name_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5655,
-    5660
+    5716,
+    5721
   ],
   "on_inst_name_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5655,
-    5660
+    5716,
+    5721
   ],
   "InteractiveFloorplannerWidget.on_border_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5662,
-    5674
+    5723,
+    5735
   ],
   "on_border_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5662,
-    5674
+    5723,
+    5735
   ],
   "InteractiveFloorplannerWidget.on_die_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5676,
-    5690
+    5737,
+    5751
   ],
   "on_die_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5676,
-    5690
+    5737,
+    5751
   ],
   "InteractiveFloorplannerWidget.on_core_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5692,
-    5709
+    5753,
+    5770
   ],
   "on_core_input_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5692,
-    5709
+    5753,
+    5770
   ],
   "InteractiveFloorplannerWidget.on_orientation_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5711,
-    5715
+    5772,
+    5776
   ],
   "on_orientation_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5711,
-    5715
+    5772,
+    5776
   ],
   "InteractiveFloorplannerWidget.on_sel_density_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5717,
-    5731
+    5778,
+    5792
   ],
   "on_sel_density_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5717,
-    5731
+    5778,
+    5792
   ],
   "InteractiveFloorplannerWidget.on_region_lock_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5733,
-    5740
+    5794,
+    5801
   ],
   "on_region_lock_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5733,
-    5740
+    5794,
+    5801
   ],
   "InteractiveFloorplannerWidget.on_convert_region_type_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5742,
-    5758
+    5803,
+    5819
   ],
   "on_convert_region_type_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5742,
-    5758
+    5803,
+    5819
   ],
   "InteractiveFloorplannerWidget.on_common_halo_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5760,
-    5768
+    5821,
+    5829
   ],
   "on_common_halo_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5760,
-    5768
+    5821,
+    5829
   ],
   "InteractiveFloorplannerWidget.on_restore_regions_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5770,
-    5805
+    5831,
+    5866
   ],
   "on_restore_regions_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5770,
-    5805
+    5831,
+    5866
   ],
   "InteractiveFloorplannerWidget.on_autoplace_regions_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5807,
-    6117
+    5868,
+    6178
   ],
   "on_autoplace_regions_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5807,
-    6117
+    5868,
+    6178
   ],
   "InteractiveFloorplannerWidget.trigger_live_autoplace": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6119,
-    6356
+    6180,
+    6417
   ],
   "trigger_live_autoplace": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6119,
-    6356
+    6180,
+    6417
   ],
   "InteractiveFloorplannerWidget.accept_autoplace_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6358,
-    6362
+    6419,
+    6423
   ],
   "accept_autoplace_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6358,
-    6362
+    6419,
+    6423
   ],
   "InteractiveFloorplannerWidget.reroll_autoplace_seed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6364,
-    6368
+    6425,
+    6429
   ],
   "reroll_autoplace_seed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6364,
-    6368
+    6425,
+    6429
   ],
   "InteractiveFloorplannerWidget.cancel_autoplace_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6370,
-    6373
+    6431,
+    6434
   ],
   "cancel_autoplace_preview": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6370,
-    6373
+    6431,
+    6434
   ],
   "InteractiveFloorplannerWidget._extract_standard_cell_area": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6375,
-    6415
+    6436,
+    6476
   ],
   "_extract_standard_cell_area": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6375,
-    6415
+    6436,
+    6476
   ],
   "InteractiveFloorplannerWidget.on_fit_core_to_density_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6417,
-    6460
+    6478,
+    6521
   ],
   "on_fit_core_to_density_clicked": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6417,
-    6460
+    6478,
+    6521
   ],
   "InteractiveFloorplannerWidget.auto_expand_core": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6462,
-    6487
+    6523,
+    6548
   ],
   "auto_expand_core": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6462,
-    6487
+    6523,
+    6548
   ],
   "InteractiveFloorplannerWidget.on_spinbox_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6490,
-    6494
+    6551,
+    6555
   ],
   "on_spinbox_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6490,
-    6494
+    6551,
+    6555
   ],
   "InteractiveFloorplannerWidget.on_selection_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6496,
-    6622
+    6557,
+    6683
   ],
   "on_selection_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6496,
-    6622
+    6557,
+    6683
   ],
   "InteractiveFloorplannerWidget.update_live_tcl": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6624,
-    6627
+    6685,
+    6688
   ],
   "InteractiveFloorplannerWidget.generate_floorplan_tcl": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6629,
-    7511
+    6690,
+    7572
   ],
   "generate_floorplan_tcl": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6629,
-    7511
+    6690,
+    7572
   ],
   "InteractiveFloorplannerWidget": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    1444,
-    7511
+    1445,
+    7572
   ],
   "compute_peripheral_macro_placement": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    7514,
-    7681
+    7575,
+    7742
   ],
   "generate_floorplan_tcl_from_data": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    7684,
-    7821
+    7745,
+    7868
   ],
   "_collides": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    7546,
-    7550
+    7607,
+    7611
   ],
   "_on_force_toggled": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2413,
-    2415
+    2436,
+    2438
   ],
   "_update_fence_mode_label": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2435,
-    2436
+    2458,
+    2459
   ],
   "_apply": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    2794,
-    2812
+    2819,
+    2837
   ],
   "_tick_spinner": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    5962,
-    5965
+    6023,
+    6026
   ],
   "_pin_sort_key": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    3278,
-    3289
+    3303,
+    3314
   ],
   "_on_supply_type_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4025,
-    4046
+    4050,
+    4071
+  ],
+  "_on_site_changed": [
+    "silis/core/backendflow/floorplanner/floorplanner.py",
+    4086,
+    4094
+  ],
+  "_on_phys_switch_toggled": [
+    "silis/core/backendflow/floorplanner/floorplanner.py",
+    4105,
+    4108
   ],
   "_on_domain_tap_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4074,
-    4081
+    4135,
+    4142
   ],
   "_on_pad_dom_changed": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    4109,
-    4112
+    4170,
+    4173
   ],
   "_safe_get_dragged": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6898,
-    6903
+    6959,
+    6964
   ],
   "_safe_get_pos": [
     "silis/core/backendflow/floorplanner/floorplanner.py",
-    6905,
-    6910
+    6966,
+    6971
   ],
   "power_domain.eda_voltage_color": [
     "silis/core/backendflow/power/upf_engine.py",
@@ -11206,458 +11721,488 @@
   ],
   "FlowWorker.__init__": [
     "silis/core/backendflow/flow/backendflow.py",
-    26,
-    30
+    30,
+    34
   ],
   "FlowWorker.run": [
     "silis/core/backendflow/flow/backendflow.py",
-    32,
-    38
+    36,
+    42
   ],
   "FlowWorker": [
     "silis/core/backendflow/flow/backendflow.py",
-    23,
-    38
+    27,
+    42
   ],
   "OpenROADPort.__init__": [
     "silis/core/backendflow/flow/backendflow.py",
-    41,
-    84
+    45,
+    88
   ],
   "OpenROADPort.launch_viewer": [
     "silis/core/backendflow/flow/backendflow.py",
-    86,
-    98
+    90,
+    102
   ],
   "launch_viewer": [
     "silis/core/backendflow/flow/backendflow.py",
-    86,
-    98
+    90,
+    102
   ],
   "OpenROADPort.handle_stdout": [
     "silis/core/backendflow/flow/backendflow.py",
-    100,
-    117
+    104,
+    121
   ],
   "handle_stdout": [
     "silis/core/backendflow/flow/backendflow.py",
-    100,
-    117
+    104,
+    121
   ],
   "OpenROADPort.kill_viewer": [
     "silis/core/backendflow/flow/backendflow.py",
-    119,
-    135
+    123,
+    139
   ],
   "kill_viewer": [
     "silis/core/backendflow/flow/backendflow.py",
-    119,
-    135
+    123,
+    139
   ],
   "OpenROADPort.closeEvent": [
     "silis/core/backendflow/flow/backendflow.py",
-    137,
-    139
+    141,
+    143
   ],
   "OpenROADPort": [
     "silis/core/backendflow/flow/backendflow.py",
-    40,
-    139
+    44,
+    143
   ],
   "SignoffReportViewer.__init__": [
     "silis/core/backendflow/flow/backendflow.py",
-    144,
-    217
+    148,
+    221
   ],
   "SignoffReportViewer": [
     "silis/core/backendflow/flow/backendflow.py",
-    142,
-    217
+    146,
+    221
   ],
   "BackendWidget.__init__": [
     "silis/core/backendflow/flow/backendflow.py",
-    223,
-    475
+    227,
+    561
   ],
   "BackendWidget.load_custom_odb": [
     "silis/core/backendflow/flow/backendflow.py",
-    478,
-    488
+    564,
+    574
   ],
   "load_custom_odb": [
     "silis/core/backendflow/flow/backendflow.py",
-    478,
-    488
+    564,
+    574
   ],
   "BackendWidget.load_custom_def": [
     "silis/core/backendflow/flow/backendflow.py",
-    490,
-    509
+    576,
+    595
   ],
   "load_custom_def": [
     "silis/core/backendflow/flow/backendflow.py",
-    490,
-    509
+    576,
+    595
   ],
   "BackendWidget.run_psm_integrity_check": [
     "silis/core/backendflow/flow/backendflow.py",
-    511,
-    525
+    597,
+    611
   ],
   "run_psm_integrity_check": [
     "silis/core/backendflow/flow/backendflow.py",
-    511,
-    525
+    597,
+    611
   ],
   "BackendWidget.run_bondpad_studio": [
     "silis/core/backendflow/flow/backendflow.py",
-    527,
-    537
+    613,
+    623
   ],
   "run_bondpad_studio": [
     "silis/core/backendflow/flow/backendflow.py",
-    527,
-    537
+    613,
+    623
   ],
   "BackendWidget.apply_clock_ndr": [
     "silis/core/backendflow/flow/backendflow.py",
-    539,
-    547
+    625,
+    633
   ],
   "BackendWidget.repair_clock_buffers": [
     "silis/core/backendflow/flow/backendflow.py",
-    549,
-    556
+    635,
+    642
   ],
   "BackendWidget.repair_antenna_violations": [
     "silis/core/backendflow/flow/backendflow.py",
-    558,
-    566
+    644,
+    652
   ],
   "repair_antenna_violations": [
     "silis/core/backendflow/flow/backendflow.py",
-    558,
-    566
+    644,
+    652
   ],
   "BackendWidget.launch_gds3d_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    568,
-    581
+    654,
+    667
   ],
   "launch_gds3d_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    568,
-    581
+    654,
+    667
   ],
   "BackendWidget.run_signoff_pipeline": [
     "silis/core/backendflow/flow/backendflow.py",
-    583,
-    610
+    669,
+    696
   ],
   "run_signoff_pipeline": [
     "silis/core/backendflow/flow/backendflow.py",
-    583,
-    610
+    669,
+    696
   ],
   "BackendWidget._on_signoff_pipeline_failed": [
     "silis/core/backendflow/flow/backendflow.py",
-    612,
-    623
+    698,
+    709
   ],
   "_on_signoff_pipeline_failed": [
     "silis/core/backendflow/flow/backendflow.py",
-    612,
-    623
+    698,
+    709
   ],
   "BackendWidget._on_signoff_pipeline_succeeded": [
     "silis/core/backendflow/flow/backendflow.py",
-    625,
-    645
+    711,
+    731
   ],
   "_on_signoff_pipeline_succeeded": [
     "silis/core/backendflow/flow/backendflow.py",
-    625,
-    645
+    711,
+    731
   ],
   "BackendWidget._on_signoff_pipeline_finished": [
     "silis/core/backendflow/flow/backendflow.py",
-    647,
-    650
+    733,
+    736
   ],
   "_on_signoff_pipeline_finished": [
     "silis/core/backendflow/flow/backendflow.py",
-    647,
-    650
+    733,
+    736
   ],
   "BackendWidget._get_io_lefs": [
     "silis/core/backendflow/flow/backendflow.py",
-    652,
-    680
+    738,
+    766
   ],
   "BackendWidget._get_io_gds": [
     "silis/core/backendflow/flow/backendflow.py",
-    682,
-    708
+    768,
+    794
   ],
   "_get_io_gds": [
     "silis/core/backendflow/flow/backendflow.py",
-    682,
-    708
+    768,
+    794
   ],
   "BackendWidget._get_macro_files": [
     "silis/core/backendflow/flow/backendflow.py",
-    710,
-    766
+    796,
+    852
   ],
   "_get_macro_files": [
     "silis/core/backendflow/flow/backendflow.py",
-    710,
-    766
+    796,
+    852
   ],
   "BackendWidget.update_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    768,
-    770
+    854,
+    856
   ],
   "update_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    768,
-    770
+    854,
+    856
   ],
   "BackendWidget.start_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    772,
-    775
+    858,
+    861
   ],
   "start_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    772,
-    775
+    858,
+    861
   ],
   "BackendWidget.stop_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    777,
-    781
+    863,
+    867
   ],
   "stop_spinner": [
     "silis/core/backendflow/flow/backendflow.py",
-    777,
-    781
+    863,
+    867
   ],
   "BackendWidget.launch_magic_gui": [
     "silis/core/backendflow/flow/backendflow.py",
-    784,
-    809
+    870,
+    895
   ],
   "launch_magic_gui": [
     "silis/core/backendflow/flow/backendflow.py",
-    784,
-    809
+    870,
+    895
   ],
   "BackendWidget.ask_command": [
     "silis/core/backendflow/flow/backendflow.py",
-    817,
-    847
+    903,
+    933
   ],
   "ask_command": [
     "silis/core/backendflow/flow/backendflow.py",
-    817,
-    847
+    903,
+    933
   ],
   "BackendWidget.kill_active_backend_process": [
     "silis/core/backendflow/flow/backendflow.py",
-    849,
-    857
+    935,
+    943
   ],
   "kill_active_backend_process": [
     "silis/core/backendflow/flow/backendflow.py",
-    849,
-    857
+    935,
+    943
   ],
   "BackendWidget.reset_backend": [
     "silis/core/backendflow/flow/backendflow.py",
-    859,
-    868
+    945,
+    954
   ],
   "reset_backend": [
     "silis/core/backendflow/flow/backendflow.py",
-    859,
-    868
+    945,
+    954
   ],
   "BackendWidget.on_tab_changed": [
     "silis/core/backendflow/flow/backendflow.py",
-    870,
-    877
+    956,
+    962
   ],
   "on_tab_changed": [
     "silis/core/backendflow/flow/backendflow.py",
-    870,
-    877
+    956,
+    962
   ],
   "BackendWidget.run_flow_step": [
     "silis/core/backendflow/flow/backendflow.py",
-    879,
-    1704
+    964,
+    1789
   ],
   "run_flow_step": [
     "silis/core/backendflow/flow/backendflow.py",
-    879,
-    1704
+    964,
+    1789
   ],
   "BackendWidget.display_pat_report": [
     "silis/core/backendflow/flow/backendflow.py",
-    1707,
-    1720
+    1792,
+    1805
   ],
   "display_pat_report": [
     "silis/core/backendflow/flow/backendflow.py",
-    1707,
-    1720
+    1792,
+    1805
   ],
   "BackendWidget.trigger_magic_drc": [
     "silis/core/backendflow/flow/backendflow.py",
-    1723,
-    1750
+    1808,
+    1835
   ],
   "trigger_magic_drc": [
     "silis/core/backendflow/flow/backendflow.py",
-    1723,
-    1750
+    1808,
+    1835
   ],
   "BackendWidget.trigger_magic_merge": [
     "silis/core/backendflow/flow/backendflow.py",
-    1752,
-    1807
+    1837,
+    1892
   ],
   "trigger_magic_merge": [
     "silis/core/backendflow/flow/backendflow.py",
-    1752,
-    1807
+    1837,
+    1892
   ],
   "BackendWidget.open_pdk_selector": [
     "silis/core/backendflow/flow/backendflow.py",
-    1809,
-    1820
+    1894,
+    1905
   ],
   "BackendWidget.append_output": [
     "silis/core/backendflow/flow/backendflow.py",
-    1822,
-    1825
+    1907,
+    1910
   ],
   "BackendWidget.read_stdout": [
     "silis/core/backendflow/flow/backendflow.py",
-    1827,
-    1835
+    1912,
+    1920
   ],
   "read_stdout": [
     "silis/core/backendflow/flow/backendflow.py",
-    1827,
-    1835
+    1912,
+    1920
   ],
   "BackendWidget.send_command": [
     "silis/core/backendflow/flow/backendflow.py",
-    1837,
-    1837
+    1922,
+    1922
   ],
   "send_command": [
     "silis/core/backendflow/flow/backendflow.py",
-    1837,
-    1837
+    1922,
+    1922
   ],
   "BackendWidget.send_command_internal": [
     "silis/core/backendflow/flow/backendflow.py",
-    1839,
-    1863
+    1924,
+    1948
   ],
   "send_command_internal": [
     "silis/core/backendflow/flow/backendflow.py",
-    1839,
-    1863
+    1924,
+    1948
   ],
   "BackendWidget.replay_session_with_script": [
     "silis/core/backendflow/flow/backendflow.py",
-    1865,
-    1873
+    1950,
+    1958
   ],
   "replay_session_with_script": [
     "silis/core/backendflow/flow/backendflow.py",
-    1865,
-    1873
+    1950,
+    1958
   ],
   "BackendWidget.update_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    1875,
-    1882
+    1960,
+    1967
   ],
   "update_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    1875,
-    1882
+    1960,
+    1967
+  ],
+  "BackendWidget.set_all_layers": [
+    "silis/core/backendflow/flow/backendflow.py",
+    1969,
+    1978
+  ],
+  "set_all_layers": [
+    "silis/core/backendflow/flow/backendflow.py",
+    1969,
+    1978
+  ],
+  "BackendWidget.update_layer_view": [
+    "silis/core/backendflow/flow/backendflow.py",
+    1980,
+    1998
+  ],
+  "update_layer_view": [
+    "silis/core/backendflow/flow/backendflow.py",
+    1980,
+    1998
   ],
   "BackendWidget.load_routed_design": [
     "silis/core/backendflow/flow/backendflow.py",
-    1884,
-    1894
+    2000,
+    2010
   ],
   "load_routed_design": [
     "silis/core/backendflow/flow/backendflow.py",
-    1884,
-    1894
+    2000,
+    2010
   ],
   "BackendWidget.launch_native_gui": [
     "silis/core/backendflow/flow/backendflow.py",
-    1896,
-    1932
+    2012,
+    2048
   ],
   "launch_native_gui": [
     "silis/core/backendflow/flow/backendflow.py",
-    1896,
-    1932
+    2012,
+    2048
   ],
   "BackendWidget.force_refresh_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    1934,
-    1940
+    2050,
+    2060
   ],
   "force_refresh_view": [
     "silis/core/backendflow/flow/backendflow.py",
-    1934,
-    1940
+    2050,
+    2060
   ],
   "BackendWidget.load_checkpoint": [
     "silis/core/backendflow/flow/backendflow.py",
-    1942,
-    1971
+    2062,
+    2091
   ],
   "BackendWidget.save_checkpoint": [
     "silis/core/backendflow/flow/backendflow.py",
-    1973,
-    1978
+    2093,
+    2098
+  ],
+  "BackendWidget.set_viewer_mode": [
+    "silis/core/backendflow/flow/backendflow.py",
+    2102,
+    2123
   ],
   "BackendWidget": [
     "silis/core/backendflow/flow/backendflow.py",
-    220,
-    1978
+    224,
+    2123
+  ],
+  "make_swatch_icon": [
+    "silis/core/backendflow/flow/backendflow.py",
+    298,
+    305
   ],
   "load_template": [
     "silis/core/backendflow/flow/backendflow.py",
-    1564,
-    1573
+    1649,
+    1658
   ],
   "run_drc": [
     "silis/core/backendflow/flow/backendflow.py",
-    1731,
-    1745
+    1816,
+    1830
   ],
   "run_magic": [
     "silis/core/backendflow/flow/backendflow.py",
-    1790,
-    1802
+    1875,
+    1887
   ],
   "run_pat": [
     "silis/core/backendflow/flow/backendflow.py",
-    1056,
-    1218
+    1141,
+    1303
   ],
   "FastViewerWidget.__init__": [
     "silis/core/backendflow/fast_viewer/silis_custom_embed.py",
@@ -12209,40 +12754,70 @@
     35,
     35
   ],
-  "tcl::_silis_snap": [
+  "tcl::_silis_get_mfg_grid": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
     6,
     6
+  ],
+  "_silis_get_mfg_grid": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    6,
+    6
+  ],
+  "tcl::_silis_get_site_row_height": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    16,
+    16
+  ],
+  "_silis_get_site_row_height": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    16,
+    16
+  ],
+  "tcl::_silis_snap": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    33,
+    33
   ],
   "_silis_snap": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    6,
-    6
+    33,
+    33
+  ],
+  "tcl::_silis_snap_row_y": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    39,
+    39
+  ],
+  "_silis_snap_row_y": [
+    "silis/core/backendflow/floorplanner/silis_fp.tcl",
+    39,
+    39
   ],
   "tcl::create_fence": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    15,
-    15
+    52,
+    52
   ],
   "create_fence": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    15,
-    15
+    52,
+    52
   ],
   "tcl::create_region": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    56,
-    56
+    93,
+    93
   ],
   "create_region": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    56,
-    56
+    93,
+    93
   ],
   "tcl::place_macro": [
     "silis/core/backendflow/floorplanner/silis_fp.tcl",
-    223,
-    223
+    261,
+    261
   ],
   "tcl::NULL": [
     "silis/core/backendflow/shims/openroad_upf_shim.tcl",
@@ -12426,12 +13001,12 @@
   ],
   "tcl::set_isolation": [
     "silis/core/backendflow/shims/openroad_upf_shim.tcl",
-    161,
-    161
+    164,
+    164
   ],
   "set_isolation": [
     "silis/core/backendflow/shims/openroad_upf_shim.tcl",
-    161,
-    161
+    164,
+    164
   ]
 }

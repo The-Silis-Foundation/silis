@@ -1,7 +1,9 @@
 #include <pybind11/pybind11.h>
 #include "ClockTreeViewer.h"
 #include <QApplication>
+#include <QPointer>
 #include <QTimer>
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -10,52 +12,53 @@ class ClockTreeViewerCore {
 public:
     ClockTreeViewerCore() {
         if (!QApplication::instance()) {
-            int argc = 0;
-            char** argv = nullptr;
-            app = new QApplication(argc, argv);
-            owns_app = true;
+            throw std::runtime_error(
+                "ClockTreeViewerCore requires an active QApplication instance. "
+                "Initialize QApplication or run within a Qt application before instantiating ClockTreeViewerCore."
+            );
         }
         viewer = new ClockTreeViewer();
     }
     
     ~ClockTreeViewerCore() {
         if (viewer && !viewer->parent()) {
-            delete viewer;
-        }
-        viewer = nullptr;
-        if (owns_app && app) {
-            delete app;
-            app = nullptr;
+            delete viewer.data();
         }
     }
     
     void load_tree_data(const std::string& json_str) {
+        if (!viewer) return;
         viewer->load_tree_data(json_str);
     }
     
     void clear() {
+        if (!viewer) return;
         viewer->clear();
     }
     
     void show() {
+        if (!viewer) return;
         viewer->show();
     }
     
     void zoom_in() {
+        if (!viewer) return;
         viewer->zoom_in();
     }
 
     void zoom_out() {
+        if (!viewer) return;
         viewer->zoom_out();
     }
 
     void fit_view() {
+        if (!viewer) return;
         viewer->fit_view();
     }
 
     // Returns pointer as uintptr_t for PyQt6 sip wrapping
     uintptr_t get_ptr() {
-        return reinterpret_cast<uintptr_t>(viewer);
+        return reinterpret_cast<uintptr_t>(viewer.data());
     }
     
     // Qt Event loop processing from Python
@@ -66,9 +69,7 @@ public:
     }
 
 private:
-    ClockTreeViewer* viewer;
-    QApplication* app = nullptr;
-    bool owns_app = false;
+    QPointer<ClockTreeViewer> viewer;
 };
 
 PYBIND11_MODULE(clocktree_engine, m) {

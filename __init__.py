@@ -70,6 +70,7 @@ from sdk import (
     suggest_box,
     auto_place_regions,
     view_layout,
+    view_layers,
     view_gds3d,
     view_waveforms,
     view_schematic,

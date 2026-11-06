@@ -134,7 +134,11 @@ for f in extra_lefs:
 
 tech = db.getTech()
 chip = odb.read_def(tech, "{def_path}")
+if not chip:
+    sys.exit(0)
 block = chip.getBlock()
+if not block:
+    sys.exit(0)
 dbu = float(tech.getDbUnitsPerMicron())
 
 die_box = block.getDieArea()
@@ -147,6 +151,8 @@ insts = []
 total_std_area = 0.0
 for inst in block.getInsts():
     master = inst.getMaster()
+    if not master:
+        continue
     m_name = master.getName()
     is_macro = master.isBlock() or master.isPad()
     mw = master.getWidth() / dbu
@@ -176,10 +182,20 @@ for bt in block.getBTerms():
         for b_box in bp.getBoxes():
             bx = b_box.xMin() / dbu
             by = b_box.yMin() / dbu
-            b_layer = b_box.getTechLayer().getName()
+            tl = b_box.getTechLayer()
+            b_layer = tl.getName() if tl else "vias"
             break
         if b_layer: break
     pins.append({{"name": b_name, "dir": b_dir, "layer": b_layer, "x": bx, "y": by}})
+
+rows = block.getRows() if hasattr(block, "getRows") else []
+site_height = 0.0
+site_width = 0.0
+if rows and len(rows) > 0:
+    first_site = rows[0].getSite() if hasattr(rows[0], "getSite") else None
+    if first_site:
+        site_height = float(first_site.getHeight()) / dbu if hasattr(first_site, "getHeight") else 0.0
+        site_width = float(first_site.getWidth()) / dbu if hasattr(first_site, "getWidth") else 0.0
 
 res = {{
     "die_area": die,
@@ -189,8 +205,8 @@ res = {{
     "pins": pins,
     "nets_count": len(block.getNets()),
     "mfg_grid": float(tech.getManufacturingGrid()) / dbu if hasattr(tech, "getManufacturingGrid") and tech.getManufacturingGrid() > 0 else (5.0 / dbu),
-    "site_height": float(block.getRows()[0].getSite().getHeight()) / dbu if len(block.getRows()) > 0 and block.getRows()[0].getSite() else 0.0,
-    "site_width": float(block.getRows()[0].getSite().getWidth()) / dbu if len(block.getRows()) > 0 and block.getRows()[0].getSite() else 0.0,
+    "site_height": site_height,
+    "site_width": site_width,
 }}
 
 print("___SILIS_OPENDB_JSON_START___")
@@ -332,7 +348,11 @@ for sdir in [os.path.join(proj_dir, "source"), os.path.join(proj_dir, "rtl"), os
 
 tech = db.getTech()
 chip = odb.read_def(tech, "{def_path}")
+if not chip:
+    sys.exit(0)
 block = chip.getBlock()
+if not block:
+    sys.exit(0)
 dbu = float(tech.getDbUnitsPerMicron())
 
 die_box = block.getDieArea()
@@ -346,6 +366,8 @@ is_filler_list = []
 
 for inst in block.getInsts():
     m = inst.getMaster()
+    if not m:
+        continue
     is_macro = m.isBlock() or m.isPad()
     bbox = inst.getBBox()
     bx = bbox.xMin()
