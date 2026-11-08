@@ -13,14 +13,14 @@ $$\text{User Interaction / Qt Event} \longrightarrow \text{Silis SDK Object Meth
 
 ---
 
-## 2. Main Workspace Layout
+## 2. Main Workspace Layout & Flow Modalities
 
 The Silis physical design studio organizes ASIC implementation into three primary coordinated panes:
 
-![Silis Backend Flow Workspace Overview](images/gui_backend_flow_overview.png)
+![Silis IDE Dark Workspace Overview](images/screenshots/frontend.jpeg)
 
-1. **Left Control Dock (Flow & Floorplan Engine)**:
-   - Direct interactive controls for die and core dimensions, margins, macro placement strategies, UPF power domain boundaries, and downstream engine invocation.
+1. **Left Navigation & Flow Control Dock**:
+   - Project tree hierarchy, RTL elaboration sources, and design flow stages (Synthesis, Floorplan, Placement, CTS, Routing, Signoff).
 2. **Central Physical Viewport (Dual Inspection Canvas)**:
    - Real-time OpenGL-accelerated physical layout inspection (`FastSiliconPeeker`) and OpenROAD visual parity rendering (`LayerViewerPanel`).
 3. **Right Hierarchy & Terminal Dock**:
@@ -28,9 +28,11 @@ The Silis physical design studio organizes ASIC implementation into three primar
 
 ---
 
-## 3. Floorplanning & Die-Core Architecture
+## 3. Floorplanning & Declarative Floorplan Synthesis (FPS)
 
-Floorplanning establishes the physical silicon boundaries, core area, standard cell row sites, and I/O peripheral pads.
+Floorplanning establishes physical silicon boundaries, core area, standard cell row sites, keepouts, and peripheral pads.
+
+![Declarative Floorplan Synthesis (FPS)](images/screenshots/FPS.jpeg)
 
 ### 3.1 Die and Core Sizing
 - **Die Area**: Defines the outer perimeter of the semiconductor silicon substrate $(x_1, y_1, x_2, y_2)$ in microns ($\mu\text{m}$).
@@ -47,13 +49,18 @@ Every coordinate adjusted in the GUI is automatically quantized to the manufactu
   $$(x \pmod{g}) = 0, \quad (y \pmod{g}) = 0$$
 - Macro $y$-origins automatically snap to unit site row heights ($y = k \times 2.72\ \mu\text{m}$).
 
+### 3.3 Automated Macro & Regional Placement
+Silis incorporates boundary-aware peripheral auto-placement algorithms to align macros and memory blocks with legal halo clearances:
+
+![Automated Macro & Regional Placement](images/screenshots/autoplacedexample.jpeg)
+
 ---
 
 ## 4. Interactive Physical Inspection (SiliconPeeker)
 
 `FastSiliconPeeker` provides hardware-accelerated, real-time DEF layout visualization with high frame rates, responsive panning, and sub-pixel culling.
 
-![SiliconPeeker Physical Layout Inspection](images/gui_peeker_with_design.png)
+![DEF Layout Inspection in SiliconPeeker](images/screenshots/defviewer.jpeg)
 
 ### 4.1 Mouse & Keyboard Navigation
 | Input Action | Operation | Physical Function |
@@ -74,28 +81,36 @@ Silis maintains semantic color distinctions to prevent visual confusion between 
 
 ---
 
-## 5. Clock Tree & Timing Visualization
-
-Switching to the **Clock Tree** tab reveals the synthesized clock network topology and skew distribution.
-
-![Clock Tree Topology Inspection](images/gui_clocktree_view.png)
-
-### 5.1 Skew Analysis & Buffer Corridors
-- Displays clock root pins, buffer insertion sites, and register sink distribution.
-- Verifies that clock buffers are strictly excluded from macro keepout halos and power domain isolation boundaries.
-- Inspects arrival times and skew variance across synchronized memory blocks.
-
----
-
-## 6. OpenROAD Visual Parity & Layer Viewer
+## 5. Native OpenROAD Visual Parity & Layer Viewer
 
 For signoff validation matching OpenROAD's native graphics engine, Silis embeds the `LayerViewerPanel` backed by compiled C++ rendering bindings.
 
-![Native C++ OpenROAD Layer Viewer Panel](images/gui_native_layerviewer.png)
+![Native OpenROAD Parity Layer Viewer (test_FPS_SoC Project)](images/screenshots/native_viewer_dark_test_FPS_SoC.png)
 
-### 6.1 Layer Visibility & Color Palette
+### 5.1 Layer Visibility & Color Palette
 - **Layer Stacks**: Independent toggles for individual routing layers (`met1` through `met5`), vias (`via1` through `via4`), and blockage layers.
-- **Congestion Heatmap**: Visualizes routing track demand versus available channel capacity, highlighting regions prone to antenna violations or detailed routing DRC explosions.
+- **Pin & Terminal Visibility**: Inspect macro terminal pins, power distribution trunks, and boundary I/O connections with full C++ hardware acceleration.
+
+---
+
+## 6. Physical Heatmap Analytics & Congestion
+
+Silis features multi-spectral analytics engines to evaluate physical design viability before downstream routing and signoff:
+
+### 6.1 Placement Cell Density Heatmap
+Visualizes cell utilization distribution across the core cavity to prevent localized routing congestion hotspots:
+
+![Placement Cell Density Heatmap](images/screenshots/placementdensityheatmap.jpeg)
+
+### 6.2 Routing Track Congestion Analysis
+Evaluates horizontal and vertical routing track demand against channel capacity:
+
+![Global Route Congestion Analysis](images/screenshots/routecongestion.jpeg)
+
+### 6.3 Multi-Domain Power Density Distribution
+Displays power consumption gradients and highlights regions requiring reinforced PDN trunks:
+
+![Power Density Distribution Heatmap](images/screenshots/powerdensity.jpeg)
 
 ---
 

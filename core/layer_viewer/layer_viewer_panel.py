@@ -85,6 +85,7 @@ io_csite = "{io_csite}"
 
 tech = ord.Tech()
 design = ord.Design(tech)
+db = design.getDb()
 
 loaded = False
 if os.path.isfile(odb_path) and os.path.getsize(odb_path) > 0:
