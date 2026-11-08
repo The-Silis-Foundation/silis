@@ -15,6 +15,8 @@
 <h4>
   <a href="#overview">Overview</a>
   ·
+  <a href="#frontend-studio-cockpit--debugging-synergy">Frontend Studio</a>
+  ·
   <a href="#end-to-end-rtl-to-gdsii-pipeline">RTL-to-GDSII Pipeline</a>
   ·
   <a href="#siliconcompiler-vendoring--co-processor-bridge">SiliconCompiler Bridge</a>
@@ -56,9 +58,39 @@
 Silicon design has historically suffered from acute fragmentation: engineers jump between disconnected command-line compilers, disparate configuration schemas, and isolated layout viewers. Silis eliminates this divide by orchestrating industry-standard open-source EDA engines—including **SiliconCompiler**, **OpenROAD**, **Yosys**, **Magic VLSI**, **Netgen LVS**, **SymbiYosys**, **GHDL**, and **Verilator**—into a single, mathematically verified physical design platform.
 
 Silis delivers this complete flow across three synchronized operational modalities:
-1. **Interactive Visual CAD (SilisIDE)**: A pure native Qt6 desktop studio featuring hardware-accelerated OpenGL DEF inspection (`SiliconPeeker`), OpenROAD visual parity (`LayerViewerPanel`), gate-level schematic drawers, Intel ROHD-powered waveform viewers (`SignalPeeker`), and real-time congestion analytics.
-2. **The Silis Python SDK (`silis.*`)**: A strongly typed, object-oriented physical design API (`SilisProject`, `Pipeline`, `Floorplan`, `PowerNetwork`, `TimingGraph`, `Layout`, `SDCBuilder`) providing complete programmatic flow automation with 100% GUI parity.
+1. **Interactive Visual CAD (SilisIDE)**: A pure native Qt6 desktop studio featuring hardware-accelerated OpenGL DEF inspection (`SiliconPeeker`), OpenROAD visual parity (`LayerViewerPanel`), gate-level schematic drawers, Intel ROHD-powered waveform viewers (`SignalPeeker`), Monaco code editors with live simulation value cards, and real-time congestion analytics.
+2. **The Silis Python SDK (`silis.*`)**: A strongly typed, object-oriented physical design API (`SilisProject`, `Pipeline`, `Floorplan`, `PowerNetwork`, `TimingGraph`, `Layout`, `SDCBuilder`) providing complete programmatic flow automation with 100% GUI parity under The Parity Law.
 3. **Automated CLI Tooling (`silis-flow`, `silis-project`)**: Non-interactive command-line utilities and batch execution runners (`HeadlessASICRunner`) designed for compute clusters and continuous integration pipelines.
+
+---
+
+## Frontend Studio Cockpit & Debugging Synergy
+
+The Silis Frontend Studio (`Compile/Sim` tab) provides a synchronized tri-pane debugging cockpit that interconnects the source code, gate-level schematic structure, and timeline waveforms:
+
+### 1. Monaco Code Editor & Live Signal Hover Cards
+- **Embedded Monaco Editor**: Full Microsoft Monaco engine integration featuring syntax highlighting for SystemVerilog, Verilog, VHDL, and C/C++, with code folding, minimap navigation, and HDL snippet completion (`always_ff`, `always_comb`, `instantiation`, `fsm_3state`).
+- **Live Simulation Value Cards**: Hovering over any signal or bus token in the RTL editor immediately renders an inspection card displaying its **real-time simulation value** at the exact timestamp selected by the waveform cursor.
+- **Radix Switching & Bus Decoding**: Automatic formatting into binary or hexadecimal representation (e.g. `0x1A (8'b00011010)`) with automatic handling of high-impedance (`z`) and unknown (`x`) logic states.
+- **Compiler Linter Diagnostics**: Instant visual gutter markers and squiggly underlines mapping Yosys and Verilator compilation warnings and syntax errors directly to source lines and columns.
+
+### 2. Side-by-Side Structural Schematic Viewer (`SchematicTab`)
+- **Native C++ Schematic Engine**: Backed by `schematic_engine.SchematicViewerCore`, parsing synthesized netlists and rendering interactive logic gates and hierarchy blocks via DigitalJS and ELK graph layout.
+- **Bidirectional Cross-Probing**:
+  - Clicking any module, net, or cell in the schematic viewer automatically opens and highlights its definition in the Monaco RTL editor.
+  - Positioning the cursor over a wire or identifier in Monaco broadcasts a cross-probing event (`SILIS_CROSS_PROBE:<token>`) that highlights the corresponding net and connected gate pins in the schematic.
+- **Hierarchical Descent & Module Traversal**: Double-clicking any hierarchical block descends into its sub-circuit implementation, with full navigation stack history (Back, Forward, Home).
+
+### 3. Intel ROHD Waveform Drawer (`SignalPeeker`) & Waveform Synergy
+- **Integrated Waveform Drawer**: Hardware-accelerated waveform viewer running directly in the bottom drawer, with support for multi-gigabyte VCD and FST simulation traces.
+- **One-Click Waveform Add**:
+  - Right-click any signal in the Monaco editor and select **Add to Waveform Viewer**.
+  - Right-click any net in the schematic viewer or double-click in the Design Hierarchy Explorer to instantly pin it into the active waveform display.
+- **Timeline Flag Marker to Source Jump**: Clicking any assertion violation or flag marker along the simulation timeline automatically jumps the editor to the exact line of RTL code and updates the schematic wire states to reflect that precise picosecond.
+
+### 4. Design Hierarchy & Instance QuickPick Explorer
+- **Design Explorer Panel**: Hierarchical tree inspecting top-level ports, instantiated modules, clock domains, and sub-blocks.
+- **Find Instance Dialog (`Ctrl+Shift+P` / QuickPick)**: Instant fuzzy-search dialog across all design module instances with single-click navigation to HDL source declarations.
 
 ---
 
@@ -100,7 +132,7 @@ Silis unifies every phase of silicon implementation into a coherent, determinist
 +-----------------------------------------------------------------------------------+
 |                              SIGNOFF & MASK STREAM                                |
 |    OpenSTA Timing  |  Magic / KLayout DRC  |  Netgen LVS  |  Final GDSII Stream   |
-+-----------------------------------------------------------------------------------+
++-----------------------------------------+-----------------------------------------+
 ```
 
 ---
@@ -136,8 +168,6 @@ Silis natively ingests, translates, and verifies heterogeneous digital hardware 
 - **Cycle-Accurate Simulation**:
   - Multithreaded compilation and execution via bundled **Verilator** with native timing, coverage analysis, and direct UVM 1.2 package linking (`uvm_pkg.sv`, `uvm_dpi.cc`).
   - Fallback functional simulation via Icarus Verilog (`iverilog` / `vvp`).
-- **Interactive Waveform Peeker (`SignalPeeker`)**:
-  - Hardware-accelerated waveform inspection powered by Intel's ROHD Wave Viewer running over a native `QWebEngineView`, featuring hierarchical signal navigation, transition jumping, bus radix formatting, and time markers.
 - **Formal Verification (`pipe.formal()`)**:
   - Integrated bounded model checking (BMC) and k-induction proofs wrapping **SymbiYosys (SBY)** with configurable solver backends (`smtbmc`, `yices`, `z3`, `boolector`).
 
