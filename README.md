@@ -21,6 +21,8 @@
   ·
   <a href="#-documentation-manual">Documentation</a>
   ·
+  <a href="#-pre-release-packages">Pre-Release Downloads</a>
+  ·
   <a href="#-build-guide">Build Guide</a>
 </h4>
 
@@ -28,7 +30,7 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
   <img alt="Language" src="https://img.shields.io/badge/Language-Python%203.12%20%7C%20C%2B%2B17-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
-  <img alt="Signoff Status" src="https://img.shields.io/badge/Signoff-Clean%20(DRT--0199)-success.svg?style=for-the-badge">
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.0--pre-orange.svg?style=for-the-badge">
 </p>
 
 </div>
@@ -37,24 +39,38 @@
 
 ## ⚡ Executive Summary
 
-**Silis (Silicon Scaffold)** is a modern, high-throughput digital ASIC design platform bridging the gap between hardware description languages and signoff-quality physical silicon. 
+**Silis (Silicon Scaffold)** is a modern, high-throughput digital ASIC physical design platform and multi-domain power studio bridging the gap between hardware description languages and signoff-quality physical silicon.
 
-Silis orchestrates industry-standard open-source EDA engines—including **Yosys**, **OpenROAD**, **Magic**, **Netgen**, and **SiliconCompiler**—into a unified workflow accessible through:
-1. **Interactive Visual CAD (SilisIDE)**: A reactive desktop IDE with Monaco code editing, C++ accelerated DEF/GDS3D layout viewers, and real-time floorplanning.
-2. **The Silis Python SDK (`silis.*`)**: A fluent, headless API enabling complete tapeout scripts, automated design space exploration, and continuous integration.
+Silis orchestrates industry-standard open-source EDA engines—including **OpenROAD**, **Yosys**, **Magic**, **Netgen**, and **SiliconCompiler**—into a unified workflow accessible through:
+1. **Interactive Visual CAD (SilisIDE)**: A pure native Qt6 desktop IDE featuring hardware-accelerated DEF inspection (`SiliconPeeker`), OpenROAD visual parity (`LayerViewer`), interactive macro floorplanning, and multi-voltage UPF synthesis.
+2. **The Silis Python SDK (`silis.*`)**: A strongly typed, object-oriented API enabling complete tapeout scripts, automated design space exploration, and continuous integration.
 3. **Automated CLI Tooling (`silis-flow`, `silis-project`)**: Non-interactive command-line runners for server farms and headless CI/CD.
+
+---
+
+## 📦 Pre-Release Packages (v0.1.0-pre)
+
+Standalone packages are available directly from the [GitHub Releases](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.0-pre):
+
+- **Standalone Linux Executable**: [`Silis-x86_64.AppImage`](https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.0-pre/Silis-x86_64.AppImage) (Self-contained binary bundling Python 3.12, Qt6 runtime, and Sky130 technology support).
+- **Delta Update Manifest**: [`Silis-x86_64.AppImage.zsync`](https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.0-pre/Silis-x86_64.AppImage.zsync) (Bandwidth-efficient incremental in-app updating).
+
+```bash
+# Make executable and launch immediately on Linux:
+chmod +x Silis-x86_64.AppImage
+./Silis-x86_64.AppImage
+```
 
 ---
 
 ## 🌟 Key Capabilities
 
-- **Unified Flow Modalities**: Total feature parity across the Qt6 Graphical IDE, headless Python SDK, and terminal CLI.
-- **SiliconCompiler Compatibility (`silis.sc`)**: Vendored, zero-configuration SC interoperability. Perform mid-flow handoffs (`silis.from_sc` / `silis.to_sc`) with automated PDK bridging.
-- **Automated Macro Placement**: Built-in support for **Peripheral** (fast geometric boundary solver), **Hierarchical** (OpenROAD RTL-MP sequence pairs), and **Analytical** (TritonMacroPlace electrostatic force-field) placer modes.
-- **Fluent In-Memory SDC Constraints**: Define clocks, I/O delays, and false paths in Python (`pipe.sdc.clock("clk", 10.0)...`) without fragile constraint files.
-- **Polyglot RTL Lowering**: Multi-language frontend lowering VHDL-2008 (`ghdl`), SystemVerilog (`sv2v`), and C/C++ HLS (`bambu`) into standard synthesizable Verilog.
-- **Automated Formal Verification**: Embedded property verification wrapping SymbiYosys (`pipe.formal()`).
-- **High-Performance C++ Engines**: Native Pybind11 modules powering high-frame-rate DEF layout inspection (`SiliconPeeker`), STA clock-tree topology visualization, and interactive terminals.
+- **Zero GUI-SDK Deviance**: 100% architectural parity. Every visual canvas gesture invokes the exact same underlying SDK class method that headless scripts run.
+- **Manufacturing Grid & DRC Legalization**: Automatic coordinate quantization ($g = 0.005\ \mu\text{m}$ for Sky130) and unit site row snapping ($y = k \cdot 2.72\ \mu\text{m}$).
+- **Multi-Voltage Power Intent (IEEE 1801 UPF 3.0)**: Strict numeric domain voltage extraction, automated isolation clamping, and cross-domain level shifter insertion.
+- **Power Distribution Networks (PDN)**: Dual-layer orthogonal power mesh generation with static IR drop compliance ($\le 5\%\ V_{\text{nominal}}$).
+- **Automated Macro Placement**: Boundary-aware peripheral placers, OpenROAD RTL-MP sequence pairs, and electrostatic force-field placers.
+- **High-Performance C++ Inspection**: Native Pybind11 OpenGL viewers providing smooth pan/zoom, sub-pixel culling, and instant instance navigation.
 
 ---
 
@@ -68,7 +84,7 @@ import silis
 # 1. Initialize Pipeline with target PDK
 pipe = silis.Pipeline("sram_soc_system", pdk="sky130")
 
-# 2. In-Memory Timing Constraints
+# 2. In-Memory Timing Constraints (IEEE 1497 SDC)
 pipe.sdc.clock("clk", period=10.0, uncertainty=0.2) \
         .inputs(delay=2.0, port="rst_n") \
         .outputs(delay=1.5, port="data*")
@@ -103,15 +119,13 @@ silis.view_layout("results/temp.def", title="SRAM SoC Signoff Layout")
 
 The indexed engineering manual is located in [`silis/docs/`](docs/INDEX.md):
 
-| Chapter | Topic | Link |
+| Document | Topic | Description |
 | :--- | :--- | :--- |
-| **Chapter 1** | Platform Architecture & Principles | [01_architecture_overview.md](docs/book/01_architecture_overview.md) |
-| **Chapter 2** | Python SDK Reference Guide | [02_python_sdk_reference.md](docs/book/02_python_sdk_reference.md) |
-| **Chapter 3** | Command-Line Interface (CLI) Manual | [03_cli_reference.md](docs/book/03_cli_reference.md) |
-| **Chapter 4** | SiliconCompiler Compatibility & Handoffs | [04_siliconcompiler_compatibility.md](docs/book/04_siliconcompiler_compatibility.md) |
-| **Chapter 5** | Advanced Floorplanning, Macros & Regions | [05_advanced_floorplanning.md](docs/book/05_advanced_floorplanning.md) |
-| **Chapter 6** | Polyglot RTL Lowering & Formal Verification | [06_polyglot_and_formal.md](docs/book/06_polyglot_and_formal.md) |
-| **Chapter 7** | End-to-End Reference Examples | [07_reference_examples.md](docs/book/07_reference_examples.md) |
+| **GUI User Manual** | [GUI_USER_MANUAL.md](docs/GUI_USER_MANUAL.md) | Comprehensive interactive IDE walkthrough with annotated screenshots |
+| **Architecture Decision Records** | [ADR_0001](docs/architecture/ADR_0001_ZERO_GUI_SDK_DEVIANCE.md) | ADR-0001: Zero GUI-SDK Deviance and Strict Downstream Integrity |
+| **Python SDK Reference** | [SILIS_PYTHON_SDK_MANUAL.md](docs/SILIS_PYTHON_SDK_MANUAL.md) | Complete SDK method reference, classes, and exceptions |
+| **OpenROAD Flow Reference** | [OPENROAD_FLOW_REFERENCE.md](docs/OPENROAD_FLOW_REFERENCE.md) | Downstream OpenROAD command mapping and execution rules |
+| **Floorplanning Master** | [05_advanced_floorplanning.md](docs/book/05_advanced_floorplanning.md) | Advanced slicing trees, halos, and channel corridors |
 
 ---
 
@@ -121,7 +135,7 @@ The indexed engineering manual is located in [`silis/docs/`](docs/INDEX.md):
 - Linux (x86_64, Ubuntu 22.04+ or Debian 12 recommended)
 - `python3` (>= 3.10), `python3-pip`, `cmake` (>= 3.16), `ninja` or `make`
 - Qt6 Development Packages (`qt6-base-dev`, `qt6-webengine-dev`)
-- EDA Toolchains in `$PATH`: `yosys`, `openroad`, `magic`, `netgen`, `iverilog`
+- EDA Toolchains in `$PATH`: `yosys`, `openroad`, `magic`, `netgen`
 
 ### Building Native C++ Modules
 ```bash
@@ -140,8 +154,8 @@ python3 silis/silis.py
 # Launch Headless CLI Flow
 python3 silis/cli_flow.py --project silis/projects/sram_soc_system --step all
 
-# Run Python SDK Verification Suite
-python3 silis/tests/verify_everything.py
+# Run Headless UI State & Physical Verification Suite
+QT_QPA_PLATFORM=offscreen SILIS_HEADLESS_TEST=1 python3 silis/tests/test_ui_state_verifier.py
 ```
 
 ---
