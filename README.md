@@ -47,7 +47,7 @@
 
 ## Overview
 
-**Silis (Silicon Scaffold)** is an autonomous, end-to-end digital ASIC design studio that takes digital hardware designs all the way from high-level hardware description language (RTL) sources to tapeout-ready physical GDSII mask layouts and signoff verification.
+**Silis (Silicon Scaffold)** is a complete, end-to-end digital ASIC design studio that takes digital hardware designs all the way from high-level hardware description language (RTL) sources to tapeout-ready physical GDSII mask layouts and signoff verification.
 
 Rather than fragmenting chip development across disconnected command-line tools and point-solution visual viewers, Silis unifies the entire silicon synthesis, physical design, and verification lifecycle under a single cohesive framework:
 
