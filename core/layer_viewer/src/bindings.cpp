@@ -28,7 +28,14 @@ PYBIND11_MODULE(silis_layer_viewer, m) {
         .def("set_all_layers_visible", &SilisNativeLayerViewer::set_all_layers_visible, py::arg("visible"))
         .def("load_instances", &SilisNativeLayerViewer::load_instances,
              py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"),
-             py::arg("names"), py::arg("masters"), py::arg("is_macro"))
+             py::arg("names"), py::arg("masters"), py::arg("is_macro"),
+             py::arg("categories") = std::vector<int>())
+        .def("set_power_cells_visible", &SilisNativeLayerViewer::set_power_cells_visible, py::arg("visible"))
+        .def("is_power_cells_visible", &SilisNativeLayerViewer::is_power_cells_visible)
+        .def("set_std_cells_visible", &SilisNativeLayerViewer::set_std_cells_visible, py::arg("visible"))
+        .def("is_std_cells_visible", &SilisNativeLayerViewer::is_std_cells_visible)
+        .def("set_macros_visible", &SilisNativeLayerViewer::set_macros_visible, py::arg("visible"))
+        .def("is_macros_visible", &SilisNativeLayerViewer::is_macros_visible)
         .def("select_instance", &SilisNativeLayerViewer::select_instance, py::arg("name"))
         .def("select_instances", &SilisNativeLayerViewer::select_instances, py::arg("names"))
         .def("select_power_net", &SilisNativeLayerViewer::select_power_net, py::arg("net_name"))

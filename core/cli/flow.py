@@ -371,10 +371,19 @@ if {[info commands gds] eq ""} {
         return metrics['status'] != "FAILED" and os.path.exists(v_net)
 
     def _get_io_lefs(self):
-        """Discovers sky130 IO and corner/filler pad LEFs to support clean pad placement."""
+        """Discovers IO and corner/filler pad LEFs to support clean pad placement."""
         io_lefs = []
-        # Search prioritized candidates; stop as soon as we find a valid IO LEF pair
-        # to avoid reading duplicate libraries (e.g. sky130A and sky130B simultaneously)
+        pdk_name = self.ide.active_pdk.get('name', '').lower() if hasattr(self, 'ide') and getattr(self.ide, 'active_pdk', None) else ''
+        if not ("sky130" in pdk_name):
+            # For non-sky130 PDKs, query SSAForge extra_lefs or project extra_lefs
+            from silis.core.pdkmanagers.pdk.manager import SSAForge
+            pdk_paths = SSAForge.get_pdk_paths(pdk_name)
+            for lef in pdk_paths.get("extra_lefs", []):
+                if os.path.isfile(lef) and lef not in io_lefs:
+                    io_lefs.append(lef)
+            return io_lefs
+
+        # Search prioritized candidates for sky130
         priority_roots = []
         lib_path = self.ide.active_pdk.get('lib', '') if hasattr(self, 'ide') and getattr(self.ide, 'active_pdk', None) else ''
         if 'libs.ref' in lib_path:
@@ -468,7 +477,7 @@ if {[info commands gds] eq ""} {
             upf_resume_cmd = ""
             if os.path.isfile(upf_file):
                 upf_resume_cmd = f"""if {{[file exists "{shim_path}"]}} {{ source "{shim_path}" }}
-if {{[file exists "{upf_file}"]}} {{ catch {{ read_upf -file "{upf_file}" }} }}
+if {{[file exists "{upf_file}"]}} {{ read_upf -file "{upf_file}" }}
 """
             tcl = f"""set_thread_count [exec nproc]
 read_lef "{self.ide.active_pdk['tlef']}"
@@ -520,7 +529,7 @@ if {{![file exists "$upf_file"]}} {{ set upf_file "{os.path.join(root, 'design.u
 set shim_file "{os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backendflow', 'shims', 'openroad_upf_shim.tcl')).replace('\\', '/')}"
 if {{[file exists "$shim_file"] && [file exists "$upf_file"]}} {{
     source "$shim_file"
-    catch {{ read_upf -file "$upf_file" }}
+    read_upf -file "$upf_file"
 }}
 
 set block [::ord::get_db_block]

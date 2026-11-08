@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import glob
+from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox,
     QVBoxLayout, QHBoxLayout, QSplitter, QTreeWidget, QTreeWidgetItem,
@@ -16,12 +17,17 @@ class SSAForge:
     """
     Silis Standard Aliases (SSA) - The Forge
     Decouples the IDE from specific PDK naming conventions.
+    Supports drop-in configurations from ~/.silis/ssa/<family>/config.json and ./.silis_ssa.json.
     """
     DEFAULT_PDK = "sky130_fd_sc_hd"
+    _CONFIGS = {}
+    _INITIALIZED = False
+
     ALIASES = {
         "sky130_fd_sc_hd": {
             "desc": "SkyWater 130nm High Density",
             "site": "unithd",
+            "site_double": "unithddbl",
             "tap_cell": "sky130_fd_sc_hd__tapvpwrvgnd_1",
             "tap_dist": 14,
             "cts_root": "sky130_fd_sc_hd__clkbuf_16",
@@ -63,6 +69,69 @@ class SSAForge:
         }
     }
 
+    @classmethod
+    def _ensure_initialized(cls):
+        """Loads user and project drop-in SSA configurations."""
+        if cls._INITIALIZED:
+            return
+        cls._INITIALIZED = True
+        cls.load_dropin_configs()
+
+    @classmethod
+    def load_dropin_configs(cls):
+        """Discovers and parses ~/.silis/ssa/<family>/config.json and ./.silis_ssa.json."""
+        import glob
+        base_dir = os.path.expanduser("~/.silis/ssa")
+        if os.path.isdir(base_dir):
+            for entry in os.listdir(base_dir):
+                cfg_path = os.path.join(base_dir, entry, "config.json")
+                if os.path.isfile(cfg_path):
+                    cls._load_single_config(cfg_path)
+
+        # Local project drop-in override
+        proj_cfg = os.path.abspath(".silis_ssa.json")
+        if os.path.isfile(proj_cfg):
+            cls._load_single_config(proj_cfg)
+
+    @classmethod
+    def _load_single_config(cls, cfg_path: str):
+        try:
+            with open(cfg_path, "r") as f:
+                data = json.load(f)
+            pdk_name = data.get("pdk", "").strip().lower()
+            if not pdk_name:
+                pdk_name = os.path.basename(os.path.dirname(cfg_path)).lower()
+            
+            cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
+            data["_cfg_dir"] = cfg_dir
+            cls._CONFIGS[pdk_name] = data
+            for alias in data.get("aliases_pdk", []):
+                cls._CONFIGS[alias.lower()] = data
+
+            # Sync canonical scalar properties into legacy ALIASES
+            cells = data.get("cells", {})
+            interconnect = data.get("interconnect", {})
+            site_info = data.get("site", {})
+            legacy_entry = {
+                "desc": data.get("display_name", pdk_name),
+                "site": site_info.get("name", "unithd"),
+                "site_double": site_info.get("double_height_site", "unithddbl"),
+                "tap_cell": cells.get("tapcells", {}).get("default", "sky130_fd_sc_hd__tapvpwrvgnd_1"),
+                "tap_dist": site_info.get("tap_dist", 14),
+                "cts_root": cells.get("clock_tree", {}).get("root", "sky130_fd_sc_hd__clkbuf_16"),
+                "cts_leaf": cells.get("clock_tree", {}).get("leaf", "sky130_fd_sc_hd__clkbuf_4"),
+                "tie_hi": cells.get("ties", {}).get("tie_hi", "sky130_fd_sc_hd__conb_1"),
+                "tie_lo": cells.get("ties", {}).get("tie_lo", "sky130_fd_sc_hd__conb_1"),
+                "min_layer": interconnect.get("min_layer", "met1"),
+                "max_layer": interconnect.get("max_layer", "met5"),
+                "driver": cells.get("clock_tree", {}).get("leaf", "sky130_fd_sc_hd__buf_1"),
+            }
+            cls.ALIASES[pdk_name] = legacy_entry
+            for alias in data.get("aliases_pdk", []):
+                cls.ALIASES[alias.lower()] = legacy_entry
+        except Exception as e:
+            print(f"[SSA WARNING] Failed to load SSA drop-in config {cfg_path}: {e}")
+
     @staticmethod
     def load_aliases(json_filename="pdk_aliases.json"):
         """Loads aliases from disk. Checks CWD first, then the script's own directory."""
@@ -85,32 +154,140 @@ class SSAForge:
         if not loaded:
             print(f"[SSA] No external JSON found. Using built-in defaults.")
 
-    @staticmethod
-    def resolve_pdk_key(pdk_name, lib_path=None):
+    @classmethod
+    def resolve_pdk_key(cls, pdk_name, lib_path=None):
         """Matches a name or file path to a known PDK key."""
-        pdk_name = str(pdk_name).lower() if pdk_name else ""
-        lib_path = str(lib_path).lower() if lib_path else ""
-        for key in SSAForge.ALIASES:
+        cls._ensure_initialized()
+        pdk_name = str(pdk_name).strip().lower() if pdk_name else ""
+        lib_path = str(lib_path).strip().lower() if lib_path else ""
+
+        # 1. Exact match in registered configs
+        if pdk_name in cls._CONFIGS:
+            return pdk_name
+        for k, cfg in cls._CONFIGS.items():
+            if k == pdk_name or k in pdk_name or (lib_path and k in os.path.basename(lib_path)):
+                return k
+
+        # 2. Match in ALIASES
+        for key in cls.ALIASES:
             key_lower = key.lower()
             if key_lower == pdk_name: return key
             if key_lower in pdk_name: return key
             if lib_path and key_lower in os.path.basename(lib_path):
                 return key
+
         if "gf180" in pdk_name or "gf180" in lib_path:
             if "7t" in pdk_name or "7t" in lib_path:
                 return "gf180mcu_fd_sc_mcu7t5v0"
             return "gf180mcu_fd_sc_mcu9t5v0"
         if "sky130" in pdk_name or "sky130" in lib_path:
             return "sky130_fd_sc_hd"
-        return SSAForge.DEFAULT_PDK
+        return cls.DEFAULT_PDK
 
-    @staticmethod
-    def get(pdk_name, key, lib_path=None):
-        family = SSAForge.resolve_pdk_key(pdk_name, lib_path)
-        val = SSAForge.ALIASES.get(family, {}).get(key, "")
-        if not val and family != SSAForge.DEFAULT_PDK:
-            val = SSAForge.ALIASES.get(SSAForge.DEFAULT_PDK, {}).get(key, "")
-        return val
+    @classmethod
+    def resolve(cls, category: str, alias_or_physical: str, pdk: Optional[str] = None) -> str:
+        """
+        Maps an alias (e.g. 'tap1', 'sw1') to its physical cell master.
+        If alias_or_physical is already a physical cell or not mapped, returns alias_or_physical as-is (pass-through).
+        """
+        cls._ensure_initialized()
+        if not alias_or_physical:
+            return ""
+        pdk_key = cls.resolve_pdk_key(pdk)
+        cfg = cls._CONFIGS.get(pdk_key, {})
+        cells = cfg.get("cells", {})
+        cat_map = cells.get(category, {})
+
+        # Check in specified category
+        if alias_or_physical in cat_map:
+            return cat_map[alias_or_physical]
+
+        # Check default in category
+        if alias_or_physical == "default" and "default" in cat_map:
+            return cat_map["default"]
+
+        # Search across all categories in cells
+        for cat_name, c_dict in cells.items():
+            if isinstance(c_dict, dict) and alias_or_physical in c_dict:
+                return c_dict[alias_or_physical]
+
+        # Pass-through identity: treat as raw physical cell
+        return str(alias_or_physical)
+
+    @classmethod
+    def get(cls, pdk_name, key, lib_path=None, default=""):
+        """Retrieves a scalar configuration property for the given PDK."""
+        cls._ensure_initialized()
+        family = cls.resolve_pdk_key(pdk_name, lib_path)
+        val = cls.ALIASES.get(family, {}).get(key, "")
+        if not val and family in cls._CONFIGS:
+            cfg = cls._CONFIGS[family]
+            if key in cfg: val = cfg[key]
+            elif "site" in cfg and key in cfg["site"]: val = cfg["site"][key]
+            elif "interconnect" in cfg and key in cfg["interconnect"]: val = cfg["interconnect"][key]
+        if not val and family != cls.DEFAULT_PDK:
+            val = cls.ALIASES.get(cls.DEFAULT_PDK, {}).get(key, "")
+        return val if val != "" else default
+
+    @classmethod
+    def get_alias_category(cls, pdk_name: Optional[str], category: str) -> dict:
+        """Returns all alias mappings for a given category (e.g. 'tapcells', 'io')."""
+        cls._ensure_initialized()
+        family = cls.resolve_pdk_key(pdk_name)
+        cfg = cls._CONFIGS.get(family, {})
+        return dict(cfg.get("cells", {}).get(category, {}))
+
+    @classmethod
+    def get_pdk_paths(cls, pdk_name: Optional[str] = None, pdk_base: Optional[str] = None) -> dict:
+        """
+        Returns resolved absolute file paths for tech_lef, std_cell_lef, liberty, and extra_lefs.
+        Expands environment variables, user tilde, and glob patterns deterministically.
+        """
+        cls._ensure_initialized()
+        import glob
+        family = cls.resolve_pdk_key(pdk_name)
+        cfg = cls._CONFIGS.get(family, {})
+        paths_cfg = cfg.get("paths", {})
+        
+        # Base directory resolution
+        cfg_root = paths_cfg.get("pdk_root", "")
+        if cfg_root:
+            cfg_root = os.path.expanduser(os.path.expandvars(cfg_root))
+        if not cfg_root or not os.path.isdir(cfg_root):
+            if pdk_base and os.path.isdir(pdk_base):
+                cfg_root = pdk_base
+            else:
+                # Fallback to ~/.silis/pdks/<family>
+                cand = os.path.expanduser(f"~/.silis/pdks/{family}")
+                if os.path.isdir(cand): cfg_root = cand
+                else: cfg_root = os.path.expanduser("~/.silis/pdks")
+
+        def _resolve_path(rel_or_abs):
+            if not rel_or_abs: return ""
+            p = os.path.expanduser(os.path.expandvars(rel_or_abs))
+            if os.path.isabs(p): return p
+            return os.path.normpath(os.path.join(cfg_root, p))
+
+        tech_lef = _resolve_path(paths_cfg.get("tech_lef", ""))
+        std_cell_lef = _resolve_path(paths_cfg.get("std_cell_lef", ""))
+        liberty = _resolve_path(paths_cfg.get("liberty", ""))
+
+        extra_lefs = []
+        for pat in paths_cfg.get("extra_lefs", []):
+            full_pat = _resolve_path(pat)
+            if any(ch in full_pat for ch in ["*", "?", "["]):
+                matched = sorted(glob.glob(full_pat))
+                extra_lefs.extend([m for m in matched if os.path.isfile(m)])
+            elif os.path.isfile(full_pat):
+                extra_lefs.append(full_pat)
+
+        return {
+            "pdk_root": cfg_root,
+            "tech_lef": tech_lef if os.path.isfile(tech_lef) else "",
+            "std_cell_lef": std_cell_lef if os.path.isfile(std_cell_lef) else "",
+            "liberty": liberty if os.path.isfile(liberty) else "",
+            "extra_lefs": extra_lefs,
+        }
 
     @staticmethod
     def get_tap_cmd(pdk_name, lib_path=None):
@@ -125,6 +302,7 @@ class SSAForge:
         leaf = SSAForge.get(pdk_name, "cts_leaf", lib_path)
         if not root: return "clock_tree_synthesis; detailed_placement"
         return f"clock_tree_synthesis -root_buf {root} -buf_list {leaf}; detailed_placement"
+
 
 
 class PDKManager:
@@ -143,6 +321,44 @@ class PDKManager:
         if not loaded or not self.configs:
             self.load_cache()
             self.crawl_volare()
+        self.load_ssa_configs()
+
+    def load_ssa_configs(self):
+        """Discovers and registers SSA configurations (e.g. ~/.silis/ssa/*/config.json)."""
+        ssa_dirs = [
+            os.path.expanduser("~/.silis/ssa"),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "third-party", "pdks", "ssa"))
+        ]
+        for sdir in ssa_dirs:
+            if not os.path.isdir(sdir):
+                continue
+            for item in os.listdir(sdir):
+                cfg_path = os.path.join(sdir, item, "config.json")
+                if os.path.isfile(cfg_path):
+                    try:
+                        with open(cfg_path, 'r') as f:
+                            data = json.load(f)
+                        pdk_key = data.get("pdk") or item
+                        pdk_paths = SSAForge.get_pdk_paths(pdk_key)
+                        tlef = pdk_paths.get("tech_lef", "")
+                        lef = pdk_paths.get("std_cell_lef", "")
+                        lib = pdk_paths.get("liberty", "")
+                        entry = {
+                            "name": pdk_key,
+                            "display_name": data.get("display_name", pdk_key),
+                            "family": pdk_key,
+                            "tlef": tlef,
+                            "lef": lef,
+                            "lib": lib,
+                            "gds": "",
+                            "tech": "",
+                            "corners": {"tt": lib} if lib else {},
+                            "rc_corners": {"nom": "default"}
+                        }
+                        if not any(c.get("name", "").lower() == pdk_key.lower() for c in self.configs):
+                            self.configs.append(entry)
+                    except Exception:
+                        pass
 
     def get_tap_cmd(self, pdk_name, lib_path=None):
         return SSAForge.get_tap_cmd(pdk_name, lib_path)

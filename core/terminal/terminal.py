@@ -82,9 +82,6 @@ class VSCodeTerminalWidget(QWidget):
             self.core.apply_theme(json.dumps(theme))
             self.core.set_font(font_family, font_size)
 
-    def _strip_ansi(self, text):
-        return self.ANSI_ESCAPE.sub('', text)
-
     def append_output(self, text, color="#cccccc"):
         """Forward output to the native terminal widget"""
         if self.core:

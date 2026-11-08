@@ -85,28 +85,28 @@ class SignalPeeker(QWidget):
         self.btn_zoom_out.clicked.connect(self.zoom_out)
         strip_lay.addWidget(self.btn_zoom_out)
 
-        self.btn_fit = QPushButton("↔", self.strip)
+        self.btn_fit = QPushButton("Fit", self.strip)
         self.btn_fit.setToolTip("Zoom to fit all transitions")
         self.btn_fit.setStyleSheet(btn_style)
         self.btn_fit.clicked.connect(self._trigger_zoom_fit)
         strip_lay.addWidget(self.btn_fit)
 
         # 3. Save Signal List
-        self.btn_save_signals = QPushButton("💾", self.strip)
+        self.btn_save_signals = QPushButton("Save", self.strip)
         self.btn_save_signals.setToolTip("Save Signal List (.json)")
         self.btn_save_signals.setStyleSheet(btn_style)
         self.btn_save_signals.clicked.connect(self._trigger_save_signals)
         strip_lay.addWidget(self.btn_save_signals)
 
         # 4. Load Signal List
-        self.btn_load_signals = QPushButton("📂", self.strip)
+        self.btn_load_signals = QPushButton("Load", self.strip)
         self.btn_load_signals.setToolTip("Load Signal List (.json)")
         self.btn_load_signals.setStyleSheet(btn_style)
         self.btn_load_signals.clicked.connect(self._trigger_load_signals)
         strip_lay.addWidget(self.btn_load_signals)
 
         # 5. Export PNG Snapshot
-        self.btn_export_png = QPushButton("📷", self.strip)
+        self.btn_export_png = QPushButton("Export", self.strip)
         self.btn_export_png.setToolTip("Export Waveform Snapshot (PNG)")
         self.btn_export_png.setStyleSheet(btn_style)
         self.btn_export_png.clicked.connect(self._trigger_export_png)

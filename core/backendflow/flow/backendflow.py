@@ -70,7 +70,7 @@ class OpenROADPort(QWidget):
         self.canvas_layout = QVBoxLayout(self.canvas)
         self.layout.addWidget(self.canvas, stretch=1)
         
-        self.btn_launch = QPushButton("🚀 Launch Embedded C++ Viewer")
+        self.btn_launch = QPushButton("Launch Embedded C++ Viewer")
         self.btn_launch.setFixedSize(280, 50)
         self.btn_launch.setStyleSheet("font-size: 14px; font-weight: bold; background: #2da44e; color: white; border-radius: 6px;")
         self.btn_launch.clicked.connect(self.launch_viewer)
@@ -132,7 +132,7 @@ class OpenROADPort(QWidget):
         
         self.btn_close.hide()
         self.btn_launch.show()
-        self.btn_launch.setText("🚀 Launch Embedded C++ Viewer")
+        self.btn_launch.setText("Launch Embedded C++ Viewer")
         self.btn_launch.setEnabled(True)
         self.info_label.show()
         self.info_label.setText("Viewer closed. Ready to launch again.")
@@ -466,16 +466,16 @@ class BackendWidget(QWidget):
             tb_lay.setContentsMargins(10, 2, 10, 2)
             tb_lay.setSpacing(8)
 
-            lbl_ct_hdr = QLabel("<b>🕒 CLOCK TOPOLOGY VIEWER</b>")
+            lbl_ct_hdr = QLabel("<b>CLOCK TOPOLOGY VIEWER</b>")
             lbl_ct_hdr.setStyleSheet("color: #58a6ff; font-size: 11px;")
             tb_lay.addWidget(lbl_ct_hdr)
 
-            btn_ct_in = QPushButton("🔍+ Zoom In")
+            btn_ct_in = QPushButton("Zoom In")
             btn_ct_in.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
             btn_ct_in.clicked.connect(self.clock_engine.zoom_in)
             tb_lay.addWidget(btn_ct_in)
 
-            btn_ct_out = QPushButton("🔍- Zoom Out")
+            btn_ct_out = QPushButton("Zoom Out")
             btn_ct_out.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
             btn_ct_out.clicked.connect(self.clock_engine.zoom_out)
             tb_lay.addWidget(btn_ct_out)
@@ -1463,7 +1463,8 @@ ________________________________________________________________________________
         if step_name == "Init":
             db_path = os.path.join(results_dir, "checkpoint.odb")
             def_path = os.path.join(results_dir, "temp.def")
-            if not bypass_prompt:
+            is_headless = getattr(self.ide, 'headless', False) or bypass_prompt or (os.environ.get("SILIS_HEADLESS_TEST", "") in ("1", "true", "TRUE"))
+            if not is_headless:
                 self.resume_def = None
                 if os.path.exists(db_path):
                     reply = QMessageBox.question(self, "Resume?", "Found saved checkpoint.odb. Load it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -1822,8 +1823,8 @@ foreach net [$blk getNets] {
                     line = line.strip()
                     if "SILIS_DRC_VIOLATIONS" in line:
                         m = re.search(r'(\d+)\s*\}?$', line); count = m.group(1) if m else "Unknown"
-                        if count == "0": self.ide.queue.put(("[BACKEND]", "🟢 DRC CLEAN (0 Violations)"))
-                        else: self.ide.queue.put(("[BACKEND]", f"🔴 DRC FAILED: {count} Violations Found"))
+                        if count == "0": self.ide.queue.put(("[BACKEND]", "[OK] DRC CLEAN (0 Violations)"))
+                        else: self.ide.queue.put(("[BACKEND]", f"[FAIL] DRC FAILED: {count} Violations Found"))
                     elif "Error:" in line or "error" in line.lower(): self.ide.queue.put(("[BACKEND]", f"[DRC ERR] {line}"))
                 proc.wait()
                 self.ide.queue.put(("[BACKEND]", "DRC Run Complete."))

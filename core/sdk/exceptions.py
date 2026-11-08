@@ -61,6 +61,16 @@ class RoutingOverflowError(SilisEDAError):
     pass
 
 
+class OverlappingHaloError(SilisEDAError):
+    """Raised when macro keepouts or routing corridors violate channel spacing."""
+    pass
+
+
+class IllegalVoltageError(SilisEDAError):
+    """Raised when power domain voltage violates technology library limits."""
+    pass
+
+
 class PipelineStateError(SilisEDAError):
     """Raised when pipeline step pre-conditions or atomic post-conditions are violated."""
     pass

@@ -258,7 +258,7 @@ class CompileTab(QWidget):
         # Tab 2: Build / Flow Log
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("font-family:Consolas, 'Courier New', monospace; font-size:11px; background-color:#1e1e1e; color:#d4d4d4; border:none; padding:6px;")
+        self.log_view.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.bottom_tabs.addTab(self.log_view, "Log")
         
         # Tab 3: ROHD Waveform Viewer
@@ -266,8 +266,9 @@ class CompileTab(QWidget):
         self.wave_view = SignalPeeker(self.ide)
         self.bottom_tabs.addTab(self.wave_view, "Waveform")
         
-        # Custom Bottom Tab Corner Widget: Maximize/Restore Toggle Button (⛶)
-        self.btn_fullscreen_wave = QPushButton("⛶")
+        # Custom Bottom Tab Corner Widget: Maximize/Restore Toggle Button
+        self.btn_fullscreen_wave = QPushButton()
+        self.btn_fullscreen_wave.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton))
         self.btn_fullscreen_wave.setFixedSize(26, 22)
         self.btn_fullscreen_wave.setToolTip("Maximize / Restore Bottom Panel")
         self.btn_fullscreen_wave.clicked.connect(self._toggle_maximize_bottom_panel)
@@ -296,7 +297,7 @@ class CompileTab(QWidget):
             self.top_work_split.hide()
             self.right_split.setSizes([0, 10000])
             self._bottom_panel_maximized = True
-            self.btn_fullscreen_wave.setText("❐")
+            self.btn_fullscreen_wave.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarNormalButton))
             self.btn_fullscreen_wave.setToolTip("Restore Bottom Panel")
         else:
             # Restore previous split sizes
@@ -306,7 +307,7 @@ class CompileTab(QWidget):
             else:
                 self.right_split.setSizes([6000, 4000])
             self._bottom_panel_maximized = False
-            self.btn_fullscreen_wave.setText("⛶")
+            self.btn_fullscreen_wave.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton))
             self.btn_fullscreen_wave.setToolTip("Maximize Bottom Panel")
 
 class CustomPaletteDialog(QDialog):
@@ -591,7 +592,7 @@ class SilisIDE(QMainWindow):
         if hasattr(self, 'backend_widget') and self.backend_widget:
             self.backend_widget.active_pdk = pdk_config
         if hasattr(self, 'btn_pdk_status') and self.btn_pdk_status:
-            self.btn_pdk_status.setText(f"⚙ PDK: {pname}")
+            self.btn_pdk_status.setText(f"PDK: {pname}")
         if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'lbl_pdk'):
             self.tab_synth.lbl_pdk.setText(f"<b>Active PDK:</b> {pname}")
 
@@ -722,6 +723,13 @@ class SilisIDE(QMainWindow):
         # Global Input Filter
         QApplication.instance().installEventFilter(self)
         
+        # Apply theme palette from user settings
+        thm_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
+        self.set_theme(thm_name)
+        
+        # Restore layout geometry and splitter states if available
+        self.restore_layout_state()
+        
         # Shortcut: Ctrl+I to Find Instance
         shortcut_find_inst = QShortcut(QKeySequence("Ctrl+I"), self)
         shortcut_find_inst.activated.connect(self._trigger_find_instance)
@@ -799,24 +807,6 @@ class SilisIDE(QMainWindow):
         # Auto-coordinate with CLI deliverables on disk (GUI mode only)
         if not self.headless:
             QTimer.singleShot(200, self._coordinate_cli_state)
-
-    def _on_frontend_tab_changed(self, index):
-        """
-        Coordinates the shared WebEngineView when switching between frontend tabs.
-        Compile tab uses Monaco (if backend=monaco), Schematic tab uses DigitalJS,
-        and Waveform tab can use Intel ROHD.
-        """
-        try:
-            # If leaving Waveform tab and ROHD was open, keep state clean
-            # If entering Schematic tab, ensure DigitalJS is initialized
-            if index == 1: # WAVEFORM
-                if hasattr(self, 'tab_waves') and hasattr(self.tab_waves, 'ensure_viewer'):
-                    self.tab_waves.ensure_viewer()
-            elif index == 2: # SCHEMATIC
-                if hasattr(self, 'tab_schem') and hasattr(self.tab_schem, 'ensure_engine'):
-                    self.tab_schem.ensure_engine()
-        except Exception as e:
-            print(f"[SILIS] Tab switch warning: {e}")
 
     def _coordinate_cli_state(self):
         if self.headless:
@@ -1029,7 +1019,8 @@ class SilisIDE(QMainWindow):
                         os.kill(int(child_pid), 9)
                     except: pass
         except: pass
-            
+        
+        self.save_layout_state()
         event.accept()
 
     def reset_sk(self):
@@ -1136,7 +1127,6 @@ class SilisIDE(QMainWindow):
             self.tab_synth.log_main.clear()
         if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'card_status'):
             self.tab_synth.card_status.setText("RUNNING...")
-            self.tab_synth.card_status.setStyleSheet("background:#eaeef2; color:#57606a; font-weight:bold; padding:15px; border-radius:6px; border: 1px solid #d0d7de;")
 
         v_net = os.path.join(root, "netlist", f"{base}_netlist.v")
         
@@ -1258,12 +1248,10 @@ class SilisIDE(QMainWindow):
 
             # DFT Scan Insertion Configuration (Group Box)
             grp_dft = QGroupBox("Design For Test (DFT) & Scan Insertion Options")
-            grp_dft.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 10px; }")
             dft_l = QHBoxLayout(grp_dft)
             dft_l.setContentsMargins(8, 4, 8, 4); dft_l.setSpacing(10)
 
             chk_dft_en = QCheckBox("Enable Scan Insertion")
-            chk_dft_en.setStyleSheet("color: #2da44e; font-weight: bold;")
             init_dft = getattr(self, 'enable_dft', False) or (hasattr(self, 'tab_synth') and getattr(self.tab_synth, 'chk_dft', None) and self.tab_synth.chk_dft.isChecked())
             chk_dft_en.setChecked(bool(init_dft))
 
@@ -2148,6 +2136,7 @@ exit
 
         # 2. Main Tool Bar
         tb = QToolBar("Main Tool Bar")
+        tb.setObjectName("main_tool_bar")
         self.addToolBar(tb)
         tb.setMovable(False)
 
@@ -2166,7 +2155,6 @@ exit
         tb.addSeparator()
         self.btn_pdk_status = QPushButton("PDK: Sky130A")
         self.btn_pdk_status.setToolTip("Open PDK Manager & MCMM Selector")
-        self.btn_pdk_status.setStyleSheet("QPushButton { font-weight: bold; padding: 3px 8px; border: 1px solid #444; border-radius: 3px; } QPushButton:hover { border-color: #58a6ff; }")
         self.btn_pdk_status.clicked.connect(self.open_pdk_selector)
         tb.addWidget(self.btn_pdk_status)
 
@@ -2307,41 +2295,6 @@ exit
         from pdkmanagers.macro.openram_studio import OpenRAMStudioDialog
         dlg = OpenRAMStudioDialog(self, self.project_config)
         dlg.exec()
-
-    def open_intake_wizard(self):
-        from intake.intake_dialog import IntakeWizardDialog
-        dlg = IntakeWizardDialog(self, self.project_config)
-        dlg.intake_completed.connect(self._apply_intake_result)
-        dlg.exec()
-
-    def _apply_intake_result(self, result: dict):
-        if not self.project_config:
-            self.project_config = {}
-
-        self.project_config["top_module"] = result.get("top_module", "")
-        self.project_config["rtl_files"] = result.get("rtl_files", [])
-        self.project_config["vhdl_work"] = result.get("vhdl_work", "work")
-        self.project_config["vhdl_std"] = result.get("vhdl_std", "08")
-
-        # Save project config to silis.silisproj if cwd is set
-        if hasattr(self, 'cwd') and os.path.isdir(self.cwd):
-            proj_file = os.path.join(self.cwd, "silis.silisproj")
-            try:
-                with open(proj_file, "w") as f:
-                    json.dump(self.project_config, f, indent=2)
-            except Exception as e:
-                print(f"[INTAKE] Note saving project config: {e}")
-
-        # Open the generated Verilog file in the editor
-        rtl_files = result.get("rtl_files", [])
-        if rtl_files and os.path.isfile(rtl_files[0]):
-            self.open_file_in_editor(rtl_files[0])
-
-        # Switch to log tab in bottom drawer
-        if hasattr(self, 'tab_compile') and hasattr(self.tab_compile, 'bottom_tabs'):
-            self.tab_compile.bottom_tabs.setCurrentIndex(1)
-
-        self.log_system(f"Ingested & Lowered Top Module: {result.get('top_module', '')}")
 
     def open_settings(self):
         dlg = SettingsDialog(self)
@@ -2726,6 +2679,61 @@ exit
                 f += ".silisproj"
             self.save_project_state(path=f)
 
+    def save_layout_state(self):
+        """Saves window geometry and splitter layout state to USER_SETTINGS."""
+        try:
+            geom = self.saveGeometry().toBase64().data().decode("utf-8")
+            state = self.saveState().toBase64().data().decode("utf-8")
+            splitters = {}
+            if hasattr(self, 'tab_compile'):
+                tc = self.tab_compile
+                if hasattr(tc, 'split'):
+                    splitters['main_split'] = tc.split.sizes()
+                if hasattr(tc, 'right_split'):
+                    splitters['right_split'] = tc.right_split.sizes()
+                if hasattr(tc, 'top_work_split'):
+                    splitters['top_work_split'] = tc.top_work_split.sizes()
+
+            USER_SETTINGS["window_layout"] = {
+                "geometry": geom,
+                "state": state,
+                "splitters": splitters
+            }
+            save_user_settings(USER_SETTINGS)
+        except Exception:
+            pass
+
+    def restore_layout_state(self):
+        """Restores window geometry and splitter state with bounds validation."""
+        try:
+            wl = USER_SETTINGS.get("window_layout")
+            if not wl or not isinstance(wl, dict):
+                return
+            geom_b64 = wl.get("geometry")
+            if geom_b64:
+                self.restoreGeometry(QByteArray.fromBase64(geom_b64.encode("utf-8")))
+            state_b64 = wl.get("state")
+            if state_b64:
+                self.restoreState(QByteArray.fromBase64(state_b64.encode("utf-8")))
+
+            splitters = wl.get("splitters", {})
+            if hasattr(self, 'tab_compile') and isinstance(splitters, dict):
+                tc = self.tab_compile
+                if 'main_split' in splitters and hasattr(tc, 'split'):
+                    sizes = splitters['main_split']
+                    if sizes and sum(sizes) > 0 and len(sizes) == tc.split.count():
+                        tc.split.setSizes(sizes)
+                if 'right_split' in splitters and hasattr(tc, 'right_split'):
+                    sizes = splitters['right_split']
+                    if sizes and sum(sizes) > 0 and len(sizes) == tc.right_split.count():
+                        tc.right_split.setSizes(sizes)
+                if 'top_work_split' in splitters and hasattr(tc, 'top_work_split'):
+                    sizes = splitters['top_work_split']
+                    if sizes and sum(sizes) > 0 and len(sizes) == tc.top_work_split.count():
+                        tc.top_work_split.setSizes(sizes)
+        except Exception:
+            pass
+
 
     def set_viewer_mode(self, mode: str):
         """Switches between Instance-Wise (FastSiliconPeeker) and Layer-Wise (OpenROAD layout engine)."""
@@ -2812,10 +2820,33 @@ exit
         fam = EDITOR_CONFIG.get("font_family", "Consolas")
         size = EDITOR_CONFIG.get("font_size", 11)
         backend = EDITOR_CONFIG.get("editor_backend", "monaco")
+        theme_dict = THEMES.get(theme_name, {})
+
+        # Apply semantic Qt6 QPalette to application
+        app = QApplication.instance()
+        if app and theme_dict:
+            bg_col = QColor(theme_dict.get("bg", "#1e1e2e"))
+            fg_col = QColor(theme_dict.get("fg", "#cdd6f4"))
+            act_line = QColor(theme_dict.get("active_line", "#313244"))
+            sel_bg = QColor(theme_dict.get("selection_bg", "#45475a"))
+            
+            pal = app.palette()
+            pal.setColor(QPalette.ColorRole.Window, bg_col)
+            pal.setColor(QPalette.ColorRole.WindowText, fg_col)
+            pal.setColor(QPalette.ColorRole.Base, bg_col)
+            pal.setColor(QPalette.ColorRole.AlternateBase, act_line)
+            pal.setColor(QPalette.ColorRole.Text, fg_col)
+            pal.setColor(QPalette.ColorRole.Button, bg_col)
+            pal.setColor(QPalette.ColorRole.ButtonText, fg_col)
+            pal.setColor(QPalette.ColorRole.Highlight, sel_bg)
+            pal.setColor(QPalette.ColorRole.HighlightedText, fg_col)
+            pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(theme_dict.get("comment", "#6c7086")))
+            app.setPalette(pal)
+
         if hasattr(self.tab_compile, 'editor'):
             self.tab_compile.editor.update_appearance(fam, size, theme_name, editor_backend=backend)
         if hasattr(self.tab_compile, 'terminal'):
-            self.tab_compile.terminal.update_appearance(fam, size, THEMES.get(theme_name, {}))
+            self.tab_compile.terminal.update_appearance(fam, size, theme_dict)
         self.log_system(f"Color theme changed to {theme_name}")
 
     def open_custom_palette_dialog(self):
@@ -3034,8 +3065,6 @@ exit
         
     def check_dependencies(self):
         if not shutil.which("sta"): self.log_system("OpenSTA not found!", "ERR")
-    
-    def update_ui_labels(self): pass
 
 if __name__ == "__main__":
     import sys

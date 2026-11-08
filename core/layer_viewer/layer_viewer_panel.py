@@ -38,14 +38,38 @@ class LayerLoadWorker(QThread):
     """Asynchronous background worker executing OpenDB geometric extraction."""
     data_loaded = pyqtSignal(dict)
 
-    def __init__(self, def_path: str, odb_path: str, pdk_base: str, proj_dir: str, parent=None):
+    def __init__(self, def_path: str, odb_path: str, pdk_base: str, proj_dir: str, pdk_name: str = "", parent=None):
         super().__init__(parent)
         self.def_path = def_path
         self.odb_path = odb_path
         self.pdk_base = pdk_base
         self.proj_dir = proj_dir
+        self.pdk_name = pdk_name
 
     def run(self):
+        from silis.core.pdkmanagers.pdk.manager import SSAForge
+        pdk_paths = SSAForge.get_pdk_paths(self.pdk_name, self.pdk_base)
+        tlef_path = pdk_paths.get("tech_lef", "")
+        sc_lef_path = pdk_paths.get("std_cell_lef", "")
+        extra_lefs = list(pdk_paths.get("extra_lefs", []))
+        io_site = SSAForge.get(self.pdk_name, "io_site") or "IO_SITE"
+        io_csite = SSAForge.get(self.pdk_name, "io_corner_site") or "IO_CSITE"
+
+        # Automatically discover SkyWater 130 IO and Corner pad LEFs if SkyWater PDK
+        if "sky130" in (self.pdk_name or "").lower() or "sky130" in (tlef_path or "").lower():
+            pdk_r = pdk_paths.get("pdk_root", self.pdk_base)
+            for cand_lef in [
+                os.path.join(pdk_r, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
+                os.path.join(pdk_r, "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
+                os.path.join(pdk_r, "libs.tech", "openlane", "custom_cells", "lef", "sky130_ef_io_core.lef"),
+                os.path.join(pdk_r, "libs.tech", "openlane", "custom_cells", "lef", "sky130_fd_io_core.lef"),
+            ]:
+                if os.path.isfile(cand_lef) and cand_lef not in extra_lefs:
+                    extra_lefs.append(cand_lef)
+
+        import json
+        extra_lefs_json = json.dumps(extra_lefs)
+
         py_script = f"""
 import os, sys, json, glob
 import openroad as ord
@@ -53,6 +77,11 @@ import odb
 
 def_path = "{self.def_path}"
 odb_path = "{self.odb_path}"
+tlef_path = "{tlef_path}"
+sc_lef_path = "{sc_lef_path}"
+extra_lefs = {extra_lefs_json}
+io_site = "{io_site}"
+io_csite = "{io_csite}"
 
 tech = ord.Tech()
 design = ord.Design(tech)
@@ -67,36 +96,31 @@ if os.path.isfile(odb_path) and os.path.getsize(odb_path) > 0:
 
 if not loaded:
     db = design.getDb()
-    pdk_base = "{self.pdk_base}"
-    tlef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
-    sc_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef")
-    try:
-        odb.read_lef(db, tlef)
-        lib = odb.read_lef(db, sc_lef)
+    if os.path.isfile(tlef_path):
+        try: odb.read_lef(db, tlef_path)
+        except Exception: pass
+    if os.path.isfile(sc_lef_path):
         try:
-            s1 = odb.dbSite_create(lib, "IO_SITE")
-            s1.setWidth(1000); s1.setHeight(200000)
-            s2 = odb.dbSite_create(lib, "IO_CSITE")
-            s2.setWidth(200000); s2.setHeight(204000)
-        except Exception: pass
-    except Exception: pass
-
-    io_dir = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef")
-    for f in ["sky130_ef_io.lef", "sky130_fd_io.lef"]:
-        p = os.path.join(io_dir, f)
-        if os.path.isfile(p):
-            try: odb.read_lef(db, p)
+            lib = odb.read_lef(db, sc_lef_path)
+            try:
+                s1 = odb.dbSite.create(lib, io_site)
+                s1.setWidth(1000); s1.setHeight(200000)
+                s2 = odb.dbSite.create(lib, io_csite)
+                s2.setWidth(200000); s2.setHeight(204000)
             except Exception: pass
-
-    for lef in glob.glob(os.path.join(pdk_base, "**", "sky130_sram_macros", "lef", "*.lef"), recursive=True):
-        try: odb.read_lef(db, lef)
         except Exception: pass
+
+    for lef in extra_lefs:
+        if os.path.isfile(lef):
+            try: odb.read_lef(db, lef)
+            except Exception: pass
 
     proj_dir = "{self.proj_dir}"
     for sdir in [os.path.join(proj_dir, "source"), os.path.join(proj_dir, "rtl"), os.path.join(proj_dir, "constr"), proj_dir]:
         for f in glob.glob(f"{{sdir}}/*.lef"):
-            try: odb.read_lef(db, f)
-            except Exception: pass
+            if os.path.isfile(f):
+                try: odb.read_lef(db, f)
+                except Exception: pass
 
     chip = odb.read_def(db.getTech(), def_path)
 
@@ -106,7 +130,9 @@ dbu = float(design.getDb().getTech().getDbUnitsPerMicron())
 die_box = block.getDieArea()
 die = [die_box.xMin(), die_box.yMin(), die_box.xMax(), die_box.yMax()]
 
-layers_geom = {{"li1": [], "met1": [], "met2": [], "met3": [], "met4": [], "met5": [], "vias": []}}
+layers_geom = {{"vias": []}}
+for tlayer in design.getDb().getTech().getLayers():
+    layers_geom[tlayer.getName()] = []
 
 def transform_rect(xform, x1, y1, x2, y2):
     p1 = odb.Point(x1, y1)
@@ -134,69 +160,164 @@ for net in block.getNets():
     for sw in net.getSWires():
         for box in sw.getWires():
             tlayer = box.getTechLayer()
-            lname = tlayer.getName() if tlayer else "vias"
-            bx = box.xMin()
-            by = box.yMin()
-            bw = box.xMax() - box.xMin()
-            bh = box.yMax() - box.yMin()
-            if lname in layers_geom:
+            if tlayer:
+                lname = tlayer.getName()
+                bx = box.xMin()
+                by = box.yMin()
+                bw = box.xMax() - box.xMin()
+                bh = box.yMax() - box.yMin()
+                if lname not in layers_geom:
+                    layers_geom[lname] = []
                 layers_geom[lname].append([bx, by, bw, bh])
-            if is_pwr:
-                rail_x.append(bx)
-                rail_y.append(by)
-                rail_w.append(bw)
-                rail_h.append(bh)
-                rail_nets.append(nname)
-                rail_layers.append(lname)
+                if is_pwr:
+                    rail_x.append(bx)
+                    rail_y.append(by)
+                    rail_w.append(bw)
+                    rail_h.append(bh)
+                    rail_nets.append(nname)
+                    rail_layers.append(lname)
+            else:
+                # Decompose Multi-Cut / Technology / Block Via Stacks into constituent layers
+                bv = box.getBlockVia()
+                tv = box.getTechVia()
+                via = bv if bv else tv
+                if via:
+                    vx_mid = (box.xMin() + box.xMax()) / 2.0
+                    vy_mid = (box.yMin() + box.yMax()) / 2.0
+                    for v_box in via.getBoxes():
+                        v_tech_layer = v_box.getTechLayer()
+                        v_lname = v_tech_layer.getName() if v_tech_layer else "vias"
+                        vx1 = vx_mid + v_box.xMin()
+                        vy1 = vy_mid + v_box.yMin()
+                        vw = v_box.xMax() - v_box.xMin()
+                        vh = v_box.yMax() - v_box.yMin()
+                        if v_lname not in layers_geom:
+                            layers_geom[v_lname] = []
+                        layers_geom[v_lname].append([vx1, vy1, vw, vh])
+                        if is_pwr:
+                            rail_x.append(vx1)
+                            rail_y.append(vy1)
+                            rail_w.append(vw)
+                            rail_h.append(vh)
+                            rail_nets.append(nname)
+                            rail_layers.append(v_lname)
 
-# 2. Instance Internals: Macros, Pads, and Standard Cells (Obstructions & Port Pins)
-master_cache = {{}}
+# 2. Extract Block Boundary Terminals (I/O Pins)
+for bt in block.getBTerms():
+    for bp in bt.getBPins():
+        for b_box in bp.getBoxes():
+            tlayer = b_box.getTechLayer()
+            lname = tlayer.getName() if tlayer else "Metal2"
+            bx = b_box.xMin()
+            by = b_box.yMin()
+            bw = b_box.xMax() - bx
+            bh = b_box.yMax() - by
+            if lname not in layers_geom:
+                layers_geom[lname] = []
+            layers_geom[lname].append([bx, by, bw, bh])
+
+# 2. Instance Internals: Macros, IO Pads, and Full Standard Cell Internal Pins
+master_pin_cache = {{}}
+for _l in db.getLibs():
+    for _m in _l.getMasters():
+        _pins = []
+        for _mterm in _m.getMTerms():
+            for _mpin in _mterm.getMPins():
+                for _gbox in _mpin.getGeometry():
+                    _layer_obj = _gbox.getTechLayer()
+                    _lname = _layer_obj.getName() if _layer_obj else "li1"
+                    _pins.append((_lname, _gbox.xMin(), _gbox.yMin(), _gbox.xMax(), _gbox.yMax()))
+        master_pin_cache[_m.getName()] = _pins
+
+# High-speed vectorized affine coordinate projection (N, FS, FN, S)
 for inst in block.getInsts():
     m = inst.getMaster()
     mname = m.getName()
-    if mname not in master_cache:
-        shapes = []
-        for obs in m.getObstructions():
-            tlayer = obs.getTechLayer()
-            lname = tlayer.getName() if tlayer else "vias"
-            if lname in layers_geom:
-                shapes.append((lname, obs.xMin(), obs.yMin(), obs.xMax(), obs.yMax()))
-        for mterm in m.getMTerms():
-            for mpin in mterm.getMPins():
-                for gbox in mpin.getGeometry():
-                    tlayer = gbox.getTechLayer()
-                    lname = tlayer.getName() if tlayer else "vias"
-                    if lname in layers_geom:
-                        shapes.append((lname, gbox.xMin(), gbox.yMin(), gbox.xMax(), gbox.yMax()))
-        master_cache[mname] = shapes
+    if mname not in master_pin_cache:
+        continue
+    pins = master_pin_cache[mname]
+    if not pins:
+        continue
+    ox, oy = inst.getOrigin()
+    orient = inst.getOrient()
 
+    if orient == "R0":
+        for lname, px1, py1, px2, py2 in pins:
+            if lname not in layers_geom:
+                layers_geom[lname] = []
+            layers_geom[lname].append([ox + px1, oy + py1, px2 - px1, py2 - py1])
+    elif orient == "FS":
+        mh = m.getHeight()
+        for lname, px1, py1, px2, py2 in pins:
+            if lname not in layers_geom:
+                layers_geom[lname] = []
+            layers_geom[lname].append([ox + px1, oy + (mh - py2), px2 - px1, py2 - py1])
+    else:
+        xform = inst.getTransform()
+        for lname, px1, py1, px2, py2 in pins:
+            tx, ty, tw, th = transform_rect(xform, px1, py1, px2, py2)
+            if lname not in layers_geom:
+                layers_geom[lname] = []
+            layers_geom[lname].append([tx, ty, tw, th])
+
+# Macro-level obstructions
+for inst in block.getInsts():
+    m = inst.getMaster()
+    if not (m.isBlock() or m.isPad()):
+        continue
     xform = inst.getTransform()
-    for lname, ox1, oy1, ox2, oy2 in master_cache[mname]:
-        tx, ty, tw, th = transform_rect(xform, ox1, oy1, ox2, oy2)
+    for obs in m.getObstructions():
+        tlayer = obs.getTechLayer()
+        lname = tlayer.getName() if tlayer else "vias"
+        tx, ty, tw, th = transform_rect(xform, obs.xMin(), obs.yMin(), obs.xMax(), obs.yMax())
+        if lname not in layers_geom:
+            layers_geom[lname] = []
         layers_geom[lname].append([tx, ty, tw, th])
 
 # 3. Extract Placed Components
 inst_x, inst_y, inst_w, inst_h = [], [], [], []
 inst_names, inst_masters, is_macro = [], [], []
+inst_categories = []
 inst_lookup = {{}}
 
 for inst in block.getInsts():
     m = inst.getMaster()
     macro_flag = bool(m.isBlock() or m.isPad())
+    mname = m.getName()
+    mname_lower = mname.lower()
+    mtype = str(m.getType())
+    
+    # Classify power category cells (tap, welltap, decap, power_switch, level_shifter)
+    is_power = bool(
+        "tap" in mname_lower or
+        "filltie" in mname_lower or
+        "power_switch" in mname_lower or
+        "pwron" in mname_lower or
+        "decap" in mname_lower or
+        "isowell" in mname_lower or
+        "lsbuf" in mname_lower or
+        "isobuf" in mname_lower or
+        mtype in ["CORE_WELLTAP", "CORE_SPACER", "ENDCAP"]
+    )
+
+    cat = 2 if is_power else (1 if macro_flag else 0)
+
     bbox = inst.getBBox()
     bx = bbox.xMin(); by = bbox.yMin()
     bw = bbox.xMax() - bx; bh = bbox.yMax() - by
     iname = inst.getName()
     inst_x.append(bx); inst_y.append(by); inst_w.append(bw); inst_h.append(bh)
-    inst_names.append(iname); inst_masters.append(m.getName()); is_macro.append(macro_flag)
+    inst_names.append(iname); inst_masters.append(mname); is_macro.append(macro_flag)
+    inst_categories.append(cat)
 
     terms = []
     for it in inst.getITerms():
         net = it.getNet()
         terms.append({{"pin": it.getMTerm().getName(), "net": net.getName() if net else "UNCONNECTED"}})
     inst_lookup[iname] = {{
-        "master": m.getName(),
-        "type": m.getType(),
+        "master": mname,
+        "type": mtype,
+        "category": "POWER" if is_power else ("MACRO" if macro_flag else "STDCELL"),
         "x": bx, "y": by, "w": bw, "h": bh,
         "orient": inst.getOrient(),
         "terms": terms
@@ -249,6 +370,7 @@ out = {{
     "rail_nets": rail_nets, "rail_layers": rail_layers,
     "inst_x": inst_x, "inst_y": inst_y, "inst_w": inst_w, "inst_h": inst_h,
     "inst_names": inst_names, "inst_masters": inst_masters, "is_macro": is_macro,
+    "inst_categories": inst_categories,
     "inst_lookup": inst_lookup,
     "net_lookup": net_lookup
 }}
@@ -360,7 +482,17 @@ class LayerViewerPanel(QWidget):
         if self.ide and hasattr(self.ide, 'statusBar'):
             self.ide.statusBar().showMessage("Extracting OpenROAD layer geometry in background...")
 
-        self._load_worker = LayerLoadWorker(def_path, odb_path, pdk_base, proj_dir, self)
+        proj_pdk = ""
+        try:
+            from silis.core.sdk.project import Project, find_project_file
+            p_file = find_project_file(proj_dir)
+            if p_file:
+                p_obj = Project.load(p_file)
+                proj_pdk = p_obj.config.get("pdk", "")
+        except Exception:
+            pass
+
+        self._load_worker = LayerLoadWorker(def_path, odb_path, pdk_base, proj_dir, pdk_name=proj_pdk, parent=self)
         self._load_worker.data_loaded.connect(self._on_worker_data_loaded)
         self._load_worker.start()
 
@@ -410,7 +542,8 @@ class LayerViewerPanel(QWidget):
         inames = data.get("inst_names", [])
         imasters = data.get("inst_masters", [])
         imacro = data.get("is_macro", [])
-        self.core.load_instances(ix, iy, iw, ih, inames, imasters, imacro)
+        icats = data.get("inst_categories", [])
+        self.core.load_instances(ix, iy, iw, ih, inames, imasters, imacro, icats)
 
         self.inst_lookup = data.get("inst_lookup", {})
         self.net_lookup = data.get("net_lookup", {})

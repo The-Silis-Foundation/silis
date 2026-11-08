@@ -1194,10 +1194,14 @@ class MacroItem(QGraphicsRectItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            # Snap to grid (3 decimal places)
+            # Snap to manufacturing grid (0.005 um) and site row height (2.72 um)
             new_pos = value
-            x = round(new_pos.x(), 3)
-            y = round(new_pos.y(), 3)
+            row_h = 2.72
+            if hasattr(self, 'widget_ref') and getattr(self.widget_ref, 'project', None):
+                pdk = str(getattr(self.widget_ref.project, 'pdk', '')).lower()
+                if 'sky130' in pdk: row_h = 2.72
+            x = round(round(new_pos.x() / 0.005) * 0.005, 3)
+            y = round(round(new_pos.y() / row_h) * row_h, 3)
             
             swapped = ["R90", "R270", "MX90", "MY90", "MXR90", "MYR90"]
             w = self.h if self.orientation in swapped else self.w
@@ -2176,7 +2180,34 @@ class InteractiveFloorplannerWidget(QDialog):
             QMessageBox.information(self, "Corridors Clean", f"All macro and region channels meet the minimum {corridor_limit} µm clearance!")
 
 
+    def _is_headless(self):
+        """Helper to determine whether the UI is running in automated/headless testing mode."""
+        if os.environ.get("SILIS_HEADLESS_TEST", "") in ("1", "single", "staggered", "true", "TRUE"):
+            return True
+        p = self.parent()
+        if p and hasattr(p, 'ide') and getattr(p.ide, 'headless', False):
+            return True
+        if hasattr(self, 'project_config') and self.project_config.get('headless', False):
+            return True
+        return False
+
+    @staticmethod
+    def _is_widget_alive(w):
+        if not w:
+            return False
+        try:
+            from PyQt6 import sip
+            return not sip.isdeleted(w)
+        except Exception:
+            try:
+                w.objectName()
+                return True
+            except RuntimeError:
+                return False
+
     def open_die_core_setup_dialog(self):
+        if self._is_headless():
+            return
         dlg = DieCoreSetupDialog(self, parent=self)
         dlg.exec()
 
@@ -2545,6 +2576,7 @@ class InteractiveFloorplannerWidget(QDialog):
         self.table_pmu_ports.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_pmu_ports.setMaximumHeight(160)
         fl_pmu.addRow("PMU Ports & Controls:", self.table_pmu_ports)
+        lay.addWidget(gb_pmu)
 
         gb_doms = QGroupBox("Voltage Islands & Domains")
         lay_doms = QVBoxLayout(gb_doms)
@@ -2670,12 +2702,6 @@ class InteractiveFloorplannerWidget(QDialog):
         self._refresh_domain_supplies_table()
         self._refresh_domain_tapcells_table()
 
-    def _build_power_tab(self):
-        pass
-
-    def _build_pdn_tab(self):
-        pass
-
     def _on_pdn_ring_controls_toggled(self, enabled):
         for w in [self.sp_ring_width, self.sp_ring_spacing, self.sp_ring_offset, self.cmb_ring_h_layer, self.cmb_ring_v_layer]:
             w.setEnabled(enabled)
@@ -2736,7 +2762,7 @@ class InteractiveFloorplannerWidget(QDialog):
         if not hasattr(self, "table_pmu_ports"):
             return
         self.table_pmu_ports.setRowCount(0)
-        selected_pmu = self.cmb_pmu_inst.currentData() if hasattr(self, "cmb_pmu_inst") else None
+        selected_pmu = self.cmb_pmu_inst.currentData() if self._is_widget_alive(getattr(self, "cmb_pmu_inst", None)) else None
         if not selected_pmu:
             # Show top-level exported control ports
             for pd in self.pdm.domains.values():
@@ -2758,7 +2784,7 @@ class InteractiveFloorplannerWidget(QDialog):
             self.table_pmu_ports.setItem(r, 2, QTableWidgetItem(p["net"] or "-"))
 
     def open_pmu_hookup_dialog(self):
-        selected_pmu = self.cmb_pmu_inst.currentData() if hasattr(self, "cmb_pmu_inst") else None
+        selected_pmu = self.cmb_pmu_inst.currentData() if self._is_widget_alive(getattr(self, "cmb_pmu_inst", None)) else None
         ports = self.pdm.discover_instance_ports(selected_pmu) if selected_pmu else []
         port_names = [p["name"] for p in ports]
 
@@ -2838,6 +2864,9 @@ class InteractiveFloorplannerWidget(QDialog):
 
         btn_apply.clicked.connect(_apply)
         btn_close.clicked.connect(dlg.reject)
+        if self._is_headless():
+            _apply()
+            return
         dlg.exec()
 
     def _refresh_power_domains_table(self):
@@ -2989,6 +3018,8 @@ class InteractiveFloorplannerWidget(QDialog):
         lay.addLayout(h_b)
 
     def open_boundary_clamp_dialog(self):
+        if self._is_headless():
+            return
         proj_root, base = self._get_project_context()
         netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
         if not os.path.isfile(netlist_path):
@@ -3585,7 +3616,7 @@ class InteractiveFloorplannerWidget(QDialog):
 
             # Headless test support
             test_mode = os.environ.get("SILIS_HEADLESS_TEST", "")
-            if test_mode in ("1", "single", "staggered"):
+            if test_mode in ("1", "single", "staggered") or self._is_headless():
                 self.expand_die_for_padring(opt_die_w, opt_die_h, margin=opt_margin)
                 return
 
@@ -5915,30 +5946,37 @@ class InteractiveFloorplannerWidget(QDialog):
                 c_p, c_c = conflicts[0]
                 short_p = c_p.split("/")[-1]
                 short_c = c_c.split("/")[-1]
-                msg = QMessageBox(self)
-                msg.setWindowTitle("Hierarchy Region Conflict")
-                msg.setIcon(QMessageBox.Icon.Question)
-                msg.setText(
-                    f"Hierarchy Conflict Detected:\n\n"
-                    f"Parent:  {short_p}\n"
-                    f"Child:   {short_c}\n\n"
-                    f"Both modules exceed the {min_pct:.0f}% area cutoff.\n"
-                    f"Would you like to place the parent module or the child module?"
-                )
-                btn_p = msg.addButton("Place Parent", QMessageBox.ButtonRole.AcceptRole)
-                btn_c = msg.addButton("Place Child", QMessageBox.ButtonRole.RejectRole)
-                msg.addButton("Place Both", QMessageBox.ButtonRole.ActionRole)
-                msg.exec()
-                if msg.clickedButton() == btn_p:
+                if self._is_headless():
+                    # In automated headless testing, deterministically choose parent module without blocking modal
                     skip_modules.add(c_c)
                     if c_c in existing_items and not existing_items[c_c].locked:
                         self.scene.removeItem(existing_items[c_c])
                         del existing_items[c_c]
-                elif msg.clickedButton() == btn_c:
-                    skip_modules.add(c_p)
-                    if c_p in existing_items and not existing_items[c_p].locked:
-                        self.scene.removeItem(existing_items[c_p])
-                        del existing_items[c_p]
+                else:
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Hierarchy Region Conflict")
+                    msg.setIcon(QMessageBox.Icon.Question)
+                    msg.setText(
+                        f"Hierarchy Conflict Detected:\n\n"
+                        f"Parent:  {short_p}\n"
+                        f"Child:   {short_c}\n\n"
+                        f"Both modules exceed the {min_pct:.0f}% area cutoff.\n"
+                        f"Would you like to place the parent module or the child module?"
+                    )
+                    btn_p = msg.addButton("Place Parent", QMessageBox.ButtonRole.AcceptRole)
+                    btn_c = msg.addButton("Place Child", QMessageBox.ButtonRole.RejectRole)
+                    msg.addButton("Place Both", QMessageBox.ButtonRole.ActionRole)
+                    msg.exec()
+                    if msg.clickedButton() == btn_p:
+                        skip_modules.add(c_c)
+                        if c_c in existing_items and not existing_items[c_c].locked:
+                            self.scene.removeItem(existing_items[c_c])
+                            del existing_items[c_c]
+                    elif msg.clickedButton() == btn_c:
+                        skip_modules.add(c_p)
+                        if c_p in existing_items and not existing_items[c_p].locked:
+                            self.scene.removeItem(existing_items[c_p])
+                            del existing_items[c_p]
 
             # Spawn regions or voltage islands for chosen unplaced modules
             # Also detect UPF power domains so modules assigned to gated domains become VoltageIslandItem
@@ -7718,7 +7756,7 @@ def compute_peripheral_macro_placement(macros, die_w=1400.0, die_h=1400.0, margi
         assigned_y = max(core_y1 + hb, min(core_y2 - eff_h - ht, assigned_y))
 
         assigned_x = round(round(assigned_x / 0.005) * 0.005, 3)
-        assigned_y = round(round(assigned_y / 0.005) * 0.005, 3)
+        assigned_y = round(round(assigned_y / 2.72) * 2.72, 3)
 
         placed_boxes.append((
             assigned_x - hl,

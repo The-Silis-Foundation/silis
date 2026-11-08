@@ -9,7 +9,7 @@ import math
 from typing import List, Tuple, Dict, Any, Optional
 from enum import Enum
 
-from .exceptions import DRCViolationError
+from .exceptions import DRCViolationError, OverlappingHaloError
 
 
 class Orientation(str, Enum):
@@ -87,8 +87,11 @@ class MacroInstance:
     ):
         self.name = name
         self.master = master
+        rh = 0.0
+        if parent_floorplan:
+            rh = getattr(parent_floorplan, "site_row_height", 0.0) or parent_floorplan._resolve_site_row_height()
         self.x = legalize_coord(x)
-        self.y = legalize_coord(y)
+        self.y = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y)
         self.width = legalize_coord(width)
         self.height = legalize_coord(height)
         self.orientation = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
@@ -159,7 +162,9 @@ class Floorplan:
         """Dynamically queries standard cell site row height from OpenDB or project PDK."""
         if self.project and hasattr(self.project, "db") and getattr(self.project.db, "site_height", 0.0) > 0:
             return self.project.db.site_height
-        return 0.0
+        if self.project and hasattr(self.project, "pdk") and "sky130" in str(self.project.pdk).lower():
+            return 2.72
+        return 2.72
 
     def _resolve_mfg_grid(self) -> float:
         """Dynamically queries manufacturing grid resolution from OpenDB or project PDK."""
@@ -236,12 +241,13 @@ class Floorplan:
     def get_macros(self) -> List[MacroInstance]:
         return list(self.macros.values())
 
-    def check_collisions(self) -> None:
+    def check_collisions(self, min_routing_tracks_um: float = 15.0) -> None:
         """
-        Sweep-and-prune macro-to-macro keepout collision verification.
-        Pre-sorts macros by x1 coordinate so pairs whose X-distance exceeds the
-        macro width + halo can be skipped early, reducing average collision
-        verification time from O(N^2) to O(N log N).
+        Sweep-and-prune macro-to-macro keepout collision and channel spacing verification.
+        Validates:
+          1. Physical non-overlap of macro bodies: BBox(A) intersect BBox(B) == empty
+          2. Halo keepout non-overlap: BBox(A + HaloA) intersect BBox(B + HaloB) == empty
+          3. Minimum routing channel width: W_channel >= 2 * Halo + W_routing_tracks
         """
         insts = list(self.macros.values())
         if len(insts) < 2:
@@ -265,24 +271,58 @@ class Floorplan:
                 # then all subsequent macros also have bx1 >= ax2 (due to sorting)
                 if bx1 >= ax2:
                     break
-                # Check Y collision
+                # Check Halo Collision
                 if not (ay2 <= by1 or ay1 >= by2):
-                    raise DRCViolationError(
-                        1,
-                        f"Macro collision detected between '{inst_a.name}' and '{inst_b.name}'"
+                    raise OverlappingHaloError(
+                        f"Macro halo collision detected between '{inst_a.name}' and '{inst_b.name}'."
                     )
 
-    def verify_legal_placement(self) -> bool:
+        # Pairwise channel corridor clearance check
+        for i in range(num_insts):
+            a = insts[i]
+            for j in range(i + 1, num_insts):
+                b = insts[j]
+                req_channel = a.halo.left + b.halo.right + min_routing_tracks_um
+                dist_x = max(0.0, max(a.x, b.x) - min(a.x + a.width, b.x + b.width))
+                dist_y = max(0.0, max(a.y, b.y) - min(a.y + a.height, b.y + b.height))
+                spacing = max(dist_x, dist_y)
+                if spacing < req_channel:
+                    raise OverlappingHaloError(
+                        f"Channel spacing deficit between '{a.name}' and '{b.name}': "
+                        f"spacing {spacing:.3f} um < required {req_channel:.3f} um (deficit: {req_channel - spacing:.3f} um)."
+                    )
+
+    def verify_legal_placement(self, min_routing_tracks_um: float = 15.0) -> bool:
         """
         Executes pre-flight DRC checks:
-        1. Macro-to-macro keepout collision verification (sweep-and-prune).
-        2. Core containment assertion.
+        1. Macro site row alignment: y % site_row_height == 0.
+        2. Macro manufacturing grid alignment: x % mfg_grid == 0.
+        3. Core containment assertion.
+        4. Macro-to-macro halo keepout and channel clearance verification.
         """
         insts = list(self.macros.values())
         cx1, cy1, cx2, cy2 = self.get_core_bbox()
+        rh = self.site_row_height or self._resolve_site_row_height()
 
-        # Check core containment
         for inst in insts:
+            # Check site row alignment
+            if rh > 0.0:
+                rem_y = round(inst.y % rh, 3)
+                if 0.005 < rem_y < (rh - 0.005):
+                    raise DRCViolationError(
+                        1,
+                        f"Macro {inst.name} y-origin {inst.y:.3f} um violates site row alignment (row height: {rh:.3f} um, residual: {rem_y:.3f} um)."
+                    )
+
+            # Check manufacturing grid alignment
+            rem_x = round(inst.x % self.manufacturing_grid, 5)
+            if 0.0001 < rem_x < (self.manufacturing_grid - 0.0001):
+                raise DRCViolationError(
+                    1,
+                    f"Macro {inst.name} x-origin {inst.x:.3f} um violates manufacturing grid {self.manufacturing_grid:.3f} um."
+                )
+
+            # Check core containment
             mx1, my1, mx2, my2 = inst.get_bbox()
             if mx1 < cx1 or my1 < cy1 or mx2 > cx2 or my2 > cy2:
                 raise DRCViolationError(
@@ -290,8 +330,8 @@ class Floorplan:
                     f"Macro {inst.name} ({inst.master}) at [{mx1}, {my1}, {mx2}, {my2}] exceeds core boundary [{cx1}, {cy1}, {cx2}, {cy2}]"
                 )
 
-        # Check collision invariant via sweep-and-prune
-        self.check_collisions()
+        # Check collision and channel invariant
+        self.check_collisions(min_routing_tracks_um=min_routing_tracks_um)
 
         return True
 

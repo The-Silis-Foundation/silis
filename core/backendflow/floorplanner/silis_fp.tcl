@@ -3,46 +3,9 @@
 # Hides low-level ODB database plumbing from users.
 # ==============================================================================
 
-proc _silis_get_mfg_grid {} {
-    set tech [::ord::get_db_tech]
-    if {$tech eq "NULL" || $tech eq ""} { return 0.005 }
-    set dbu [$tech getDbUnitsPerMicron]
-    if {$dbu <= 0} { return 0.005 }
-    if {[catch {set mfg [$tech getManufacturingGrid]}]} { set mfg 5 }
-    if {$mfg <= 0} { set mfg 5 }
-    return [expr {$mfg * 1.0 / $dbu}]
-}
-
-proc _silis_get_site_row_height {} {
-    set blk [::ord::get_db_block]
-    if {$blk eq "NULL" || $blk eq ""} { return 0.0 }
-    set tech [::ord::get_db_tech]
-    if {$tech eq "NULL" || $tech eq ""} { return 0.0 }
-    set dbu [$tech getDbUnitsPerMicron]
-    if {$dbu <= 0} { return 0.0 }
-    set rows [$blk getRows]
-    if {[llength $rows] > 0} {
-        set site [[lindex $rows 0] getSite]
-        if {$site ne "NULL" && $site ne ""} {
-            return [expr {[$site getHeight] * 1.0 / $dbu}]
-        }
-    }
-    return 0.0
-}
-
 proc _silis_snap {val} {
-    set g [_silis_get_mfg_grid]
-    set snapped [expr {round($val / $g) * $g}]
+    set snapped [expr {round($val / 0.005) * 0.005}]
     return [format "%.3f" $snapped]
-}
-
-proc _silis_snap_row_y {val} {
-    set rh [_silis_get_site_row_height]
-    if {$rh > 0.0} {
-        set snapped [expr {round($val / $rh) * $rh}]
-        return [format "%.3f" $snapped]
-    }
-    return [_silis_snap $val]
 }
 
 # ------------------------------------------------------------------------------
@@ -180,9 +143,6 @@ proc create_region {args} {
 
     # Also check if this module belongs to any UPF Power Domain region (e.g. PD_COMPUTE, PD_LOWPWR)
     # and attach group to the parent power domain region so RePlAce has non-zero instance area!
-    # Note: Only link if group actually contains instances!
-    set has_pd_parent 0
-    set target_pd_r "NULL"
     foreach pd_r [$block getRegions] {
         set pd_name [$pd_r getName]
         if {($pd_r ne $r) && ([string match "*PD_*" $pd_name] || [string match "*pd_*" $pd_name])} {
@@ -190,31 +150,19 @@ proc create_region {args} {
             set clean_pd_lower [string tolower $clean_pd]
             set mod_lower [string tolower $mod]
             if {[string match "*${clean_pd_lower}*" $mod_lower] || [string match "*${mod_lower}*" $clean_pd_lower]} {
-                set target_pd_r $pd_r
-                set has_pd_parent 1
-                break
+                catch { $pd_r addGroup $g }
+                puts "\[SILIS\] Linked module group '$grp_name' to parent Power Domain region '$pd_name'."
             }
         }
     }
 
     if {$is_new} {
         set inst_count 0
-        set clean_mod [string map {"reg_" "" "region_" ""} $mod]
         foreach inst [$block getInsts] {
-            if {[$inst isFixed] || [[$inst getMaster] isBlock]} { continue }
             set iname [$inst getName]
-            if {[string match "${mod}/*" $iname] || $iname eq $mod || [string match "*${mod}*" $iname] || [string match "*${clean_mod}*" $iname]} {
+            if {[string match "${mod}/*" $iname] || $iname eq $mod} {
                 $g addInst $inst
                 incr inst_count
-            }
-        }
-        if {$has_pd_parent && $target_pd_r ne "NULL"} {
-            if {$inst_count > 0} {
-                catch { $target_pd_r addGroup $g }
-                puts "\[SILIS\] Linked module group '$grp_name' ($inst_count instances) to parent Power Domain region '[$target_pd_r getName]'."
-            } else {
-                # Destroy empty group to prevent RePlAce GPL-0306 divergence
-                catch { odb::dbGroup_destroy $g }
             }
         }
         puts "\[SILIS\] Created $rtype region '$reg_name' ($x1, $y1) to ($x2, $y2) with $inst_count instances."
@@ -288,7 +236,7 @@ proc place_macro {args} {
     }
 
     set ox [_silis_snap [lindex $origin 0]]
-    set oy [_silis_snap_row_y [lindex $origin 1]]
+    set oy [_silis_snap [lindex $origin 1]]
 
     # Map MX90/MY90 aliases to OpenROAD's internal MXR90/MYR90
     if {$orient eq "MX90"} { set orient "MXR90" }

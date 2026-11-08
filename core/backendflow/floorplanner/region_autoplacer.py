@@ -561,13 +561,17 @@ class HierarchicalAutoRegionPlacer:
 
         # BEST-EFFORT FALLBACK: If region still doesn't fit standard cavities,
         # find the largest available cavity and place the best-fitting aspect ratio inside it.
-        # Strict DRC Guarantee: Candidate MUST NOT intersect any existing placed obstacles.
+        # Strict DRC Guarantee: Candidate MUST NOT intersect any existing placed obstacles,
+        # and candidate area MUST achieve at least 90% of target area to prevent OpenROAD GPL-0301 density blowup!
         if cavities:
             sorted_cavities = sorted(cavities, key=lambda c: c.width() * c.height(), reverse=True)
             for cav in sorted_cavities:
                 for w, h in candidates:
                     cw = min(w, cav.width())
                     ch = min(h, cav.height())
+                    # Only accept fallback if resulting cavity area can accommodate at least 85% of target area
+                    if target_area > 0 and (cw * ch) < (target_area * 0.85):
+                        continue
                     if cw >= SKY130_SITE_WIDTH * 4 and ch >= SKY130_ROW_HEIGHT * 2:
                         cand_x = min(max(anchor.x() - cw / 2.0, cav.left()), cav.right() - cw)
                         cand_y = min(max(anchor.y() - ch / 2.0, cav.top()), cav.bottom() - ch)

@@ -428,76 +428,73 @@ report = pipe.synth(
 )
 ```
 
-#### `pipe.init(tcl=None, density=None) -> bool`
-Initializes OpenROAD, links PDK LEF/LIB files, macro LEFs, and reads the synthesized gate-level netlist. Extracts `{top}_sizes.json` for the Enquiry Engine.
-If `density` is supplied (e.g. `density=0.60`), automatically initializes a core area matching the requested cell utilization.
-```python
-pipe.init()
-```
+### 4.3 Declarative Floorplan Synthesis (FPS) Orchestration
 
-#### `pipe.floorplan(...) -> bool`
-Defines die bounds, core margins, hard macro positions, orientations, halos, soft blockages, and hierarchical regions.
-
-##### Pre-Flight 2D Geometric Collision & Containment Verification:
-`pipe.floorplan()` includes native, comprehensive collision detection (`check_floorplan_collisions`). It analyzes:
-1. **Out-of-Die Bounds**: Entities escaping the die area.
-2. **Macro vs. Macro Collisions**: Overlaps between hard macros, including their physical keepout halos.
-3. **Fence vs. Fence Collisions**: Overlaps between mutually exclusive logic partitions.
-4. **Macro vs. Fence Collisions & Containment**:
-   - If a macro is declared inside a region (via `insts: [...]`), the verification engine confirms full geometric containment of the macro's body and halo within the region.
-   - If a macro is not a member of the region, the engine halts on physical penetration into the fence.
-5. **Macro vs. Blockage Collisions**: Overlaps between macros and hard placement blockages.
-
-- **`check_collisions`**: Boolean (default `True`). Enables pre-flight 2D physical overlap detection.
-- **`strict_collisions`**: Boolean (default `True`). Raises `FloorplanCollisionError` to protect downstream placement and detailed routing engines from crashing on illegal overlaps.
+> [!IMPORTANT]
+> **Authoritative API Standard**:
+> Silis has retired legacy piecemeal floorplan calls (`pipe.floorplan()`, `pipe.init()`, `pipe.iopins()`, `pipe.pdn()`, `pipe.tapcells()`).
+> All floorplanning, I/O pad rings, power switches, well-taps, voltage fences, and PDN grids must be declared using the **Unified Declarative FPS API (`pipe.spec_*().run_fps()`)**.
+> This prevents state desynchronization, enforces single-pass non-caught downstream execution, and maintains 100% GUI-SDK architectural parity.
 
 ```python
-pipe.floorplan(
-    die_area=(0.0, 0.0, 2400.0, 2400.0),
-    core_margin=250.0,
+pipe = Pipeline(proj)
+
+# 1. Spec Floorplan (Die, Core margins, Macros, Blockages, Voltage Domains)
+pipe.spec_floorplan(
+    die_area=[0.0, 0.0, 2200.0, 2200.0],
+    core_margin=[200.0, 200.0, 200.0, 200.0],
     macros=[
-        {"inst": "u_imem_bank0", "cell": "sky130_sram_1kbyte_1rw1r_32x256_8", "pos": [100.0, 1850.0], "orient": "R0", "halo": [12.0, 12.0, 12.0, 12.0]},
-        {"inst": "u_dmem_bank1", "cell": "sky130_sram_1kbyte_1rw1r_32x256_8", "pos": [1800.0, 1850.0], "orient": "MY", "halo": [12.0, 12.0, 12.0, 12.0]},
+        {"name": "u_sram_0", "master": "sky130_sram_2k", "x": 260.0, "y": 260.0, "orient": "R0"},
+        {"name": "u_sram_1", "master": "sky130_sram_2k", "x": 1400.0, "y": 260.0, "orient": "R0"},
     ],
-    regions=[
-        {"module": "u_integer_alu", "box": [100.0, 1350.0, 189.125, 1439.125], "is_fence": False},
-        {"module": "u_muldiv_bm",   "box": [100.0, 1050.0, 266.435, 1216.435], "is_fence": False},
-    ],
-    blockages=[
-        # Soft routing highways (allowing vertical routing via access)
-        {"box": [100.0, 1780.0, 2300.0, 1820.0], "soft": True},
-        {"box": [100.0, 950.0, 2300.0, 990.0],   "soft": True},
-    ],
-    check_collisions=True,
-    strict_collisions=True
+    power_domains=[pd_npu, pd_crypto],
+    macro_halo=(15.0, 15.0),
+    check_collisions=True
 )
+
+# 2. Spec I/O Pins & Pad Rings (Continuity Engine)
+pipe.spec_iopins(
+    hor_layers="met3",
+    ver_layers="met2",
+    corner_avoidance=120.0,
+    pad_ring=True,
+    stagger=True
+)
+
+# 3. Spec PDN (Power Distribution Network & Regional Rails)
+pipe.spec_pdn(
+    core_grid={"met4_pitch": 50.0, "met5_pitch": 50.0},
+    trunk_width=3.2,
+    enable_regional_rails=True
+)
+
+# 4. Spec Tapcells & Endcaps
+pipe.spec_tapcells(
+    distance=14.0,
+    tapcell_master="tap1"  # Resolved via SSAForge
+)
+
+# 5. Spec Header Power Switches (with Adaptive Centroid Placement)
+pipe.spec_power_switches(
+    cell_master="sw1",
+    columns=4,
+    pitch_um=40.0,
+    domains=["PD_NPU", "PD_CRYPTO"],
+    adaptive_placement=True
+)
+
+# 6. Spec IEEE 1801 Level Shifters
+pipe.spec_level_shifters(
+    cell_master="ls_lh",
+    rules=[
+        {"source": "PD_NPU", "sink": "PD_TOP", "direction": "out"},
+        {"source": "PD_CRYPTO", "sink": "PD_TOP", "direction": "out"}
+    ]
+)
+
+# Execute unified floorplan synthesis in one holistic pass (Zero catch blocks):
+assert pipe.run_fps()
 ```
-
-#### `pipe.tapcells(...) -> bool`
-Inserts well-tap and endcap boundary cells to satisfy PDK latch-up and N-well DRC spacing rules.
-```python
-pipe.tapcells(distance=14, endcap_cpp=1)
-```
-
-#### `pipe.pdn(tcl=None) -> bool`
-Synthesizes the VDD and VSS power distribution grid straps, standard cell rails, and UPF power switch connections.
-```python
-pipe.pdn()
-```
-
-#### `pipe.iopins(mode="block", pad_strategy="single", pad_ring_margin=250.0, upf_aware=True, ...) -> bool`
-Constrains and places peripheral IO pins or synthesizes full-chip pad rings.
-- **`mode`**:
-  - `"block"`: Standard OpenROAD pin placement (`place_pins`) along core boundaries.
-  - `"chip"`: Full-chip physical Sky130 I/O Pad Ring synthesis with corner abutment cells (`sky130_ef_io__corner_pad`), GPIO pad instances (`sky130_fd_io__top_gpiov2`), dedicated VDD/VSS supply pads, and abutment filler slices (`sky130_ef_io__com_bus_slice_*`).
-- **`pad_strategy`**: `"single"` (outer perimeter ring) or `"staggered"` (dual tier).
-- **`pad_ring_margin`**: Clearance in µm between pad cells and the internal core area (typically 250.0 µm).
-- **`upf_aware`**: If `True`, automatically provisions dedicated external supply and ground pads on the perimeter edge physically closest to each non-gated UPF power domain.
-
-```python
-# Full-chip I/O Pad Ring with Corner Abutment & UPF Proximity Supply Pads:
-pipe.iopins(
-    mode="chip",
     pad_strategy="single",
     pad_ring_margin=250.0,
     upf_aware=True
@@ -891,6 +888,126 @@ assert pipe.run_fps()
 When `adaptive_placement=True` is enabled, Silis inspects the gate-level logic centroid:
 $$X_{\text{CoG}} = \frac{1}{N}\sum_{i=1}^N x_i, \quad Y_{\text{CoG}} = \frac{1}{N}\sum_{i=1}^N y_i$$
 Header power switch columns (`POWER_SWITCH`) and boundary level shifters (`lpflow_lsbuf`) dynamically center directly over the dense standard cell clusters. This drastically reduces localized IR drop across intermediate routing layers (`met1` rails and `met4` straps) compared to static rectangular array stamping.
+
+### 10.3 Post-Step Physical Cross-Verification Protocol
+
+Every pipeline execution method in the Silis Python SDK embeds an automated, pre-flight and post-step cross-verification check (`Pipeline._cross_verify_step()`). Instead of waiting for downstream DRC explosions, Silis validates the generated DEF database against semiconductor invariants immediately:
+
+- **Base Geometry & Component Invariants**: Verifies `DIEAREA`, standard cell `COMPONENTS`, and routing `TRACKS` exist and evaluate strictly $> 0$.
+- **Power Distribution Verification (`pdn`, `fps`)**: Verifies that `SPECIALNETS` exists and contains both `VDD` and `VSS` supply nets with physical metal geometry (followpin `met1` rails and `met4`/`met5` straps).
+- **Placement Verification (`place`, `cts`, `route`)**: Asserts that all standard cells are legally legalized (`UNPLACED` instances == 0).
+
+### 10.4 Layout Database Stash & Undo Stack (`pipe.stash` & `pipe.undo`)
+
+To enable risk-free exploratory physical design steps (e.g., trying different placement densities or routing strategies), Silis provides layout snapshot stashing:
+
+```python
+# Stash with a custom commit/tag name:
+pipe.stash("before_experimental_route")
+
+pipe.route(congestion_iterations=100)
+
+# If detailed routing congested or failed DRC, rollback immediately:
+pipe.undo("before_experimental_route")
+
+# Or use it as an automatic LIFO stack:
+pipe.stash()
+pipe.place(density=0.85)
+pipe.undo() # restores the most recent stash
+```
+
+- `pipe.stash(name: Optional[str] = None) -> str`: Saves layout `.odb` and `.def` to disk and registers it in the stash stack.
+- `pipe.undo(name: Optional[str] = None) -> bool`: Restores the layout snapshot into OpenROAD. If `name` is given, it rolls back directly to that commit; otherwise, it pops and restores the latest snapshot.
+
+### 10.5 Agentic Closed-Loop Physical Design Introspection
+
+To empower Autonomous AI Agents (such as SynopsysGPT, AMD ROSS, and LLM coding assistants) to diagnose, optimize, and heal layouts programmatically without parsing raw CLI logs, the Silis SDK provides 5 structured introspection methods:
+
+| Method | Return Type | Description |
+|:---|:---|:---|
+| [`pipe.get_congestion_map(threshold=0.80)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `List[Dict[str, Any]]` | Returns GCell routing overflow boxes `[x1, y1, x2, y2]`, layers, and overflow counts from FastRoute. |
+| [`pipe.get_macro_affinity_graph()`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `Dict[str, Dict[str, int]]` | Returns a logic-to-macro interconnect matrix mapping shared net counts between macros and RTL submodules. |
+| [`pipe.get_critical_timing_paths(top_n=5)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `List[Dict[str, Any]]` | Queries OpenSTA for worst timing paths, returning exact `slack_ns`, `startpoint`, `endpoint`, and arrival delays. |
+| [`pipe.get_ir_drop_map(net="VDD")`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `Dict[str, Any]` | Executes PSM linear nodal analysis, returning worst $\Delta V$ drop in mV, percentage drop, and coordinates. |
+| [`pipe.get_drc_markers()`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `List[Dict[str, Any]]` | Queries OpenDB `dbMarkerCategory` and TritonRoute DRC for exact bounding boxes and colliding instance names. |
+
+#### Example Agentic Optimization Loop:
+```python
+with Pipeline(proj) as pipe:
+    # 1. Macro placement optimization via net affinity
+    affinity = pipe.get_macro_affinity_graph()
+    # e.g. {'u_sram_bank0': {'u_arbiter': 7}} -> place adjacent to u_arbiter
+    
+    pipe.stash("pre_place")
+    pipe.place(density=0.75)
+    
+    # 2. Check DRC & Timing without parsing console logs
+    drcs = pipe.get_drc_markers()
+    paths = pipe.get_critical_timing_paths(top_n=1)
+    
+    if drcs or (paths and paths[0]["violated"]):
+        # Roll back immediately and apply lower density or widened channels
+        pipe.undo("pre_place")
+        pipe.place(density=0.65)
+```
+
+If any stage fails its invariants, the pipeline halts immediately with a typed exception (`silis.core.sdk.exceptions.DRCViolationError` or `PowerGridSynthesisError`), preventing corrupted databases from propagating downstream.
+
+### 10.6 Spatial Reasoning & Packing Engine (`pipe.spatial`)
+
+For autonomous macro floorplanning and intelligent spatial geometry exploration, the Silis SDK embeds the `SpatialReasoningEngine`:
+
+| Method | Return Type | Description |
+|:---|:---|:---|
+| [`pipe.get_empty_cavities(min_w=40.0, min_h=40.0)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `List[Dict[str, Any]]` | Calculates maximal open 2D rectilinear rectangular cavities via interval subtraction. Returns `[{"box": [x1, y1, x2, y2], "width": w, "height": h, "area": a}, ...]`. |
+| [`pipe.get_macro_pin_terminals(inst_name)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `Dict[str, Any]` | Inspects pin terminals via OpenDB / LEF, calculates pin Center-of-Gravity (COG), and returns `dominant_face` (`NORTH`, `SOUTH`, `EAST`, `WEST`), `pin_count`, and `metal_layers`. |
+| [`pipe.get_channel_metrics(inst_a, inst_b)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `Dict[str, Any]` | Evaluates routing gap distance, routing tracks (`tracks_h`, `tracks_v`), standard cell row alignment (`row_aligned`), and legality (`gap >= 35.0 µm`). |
+| [`pipe.simulate_floorplan_patch(mutations)`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) | `Dict[str, Any]` | Simulates proposed macro location changes `[{"inst": str, "loc": [x, y], "orient": str}]` in memory in < 5ms with grid snapping (0.005 µm) and row snapping (2.72 µm). |
+
+#### Example Spatial Reasoning Loop:
+```python
+with Pipeline(proj) as pipe:
+    # 1. Discover largest open cavities inside core for macro placement
+    cavities = pipe.get_empty_cavities(min_w=100.0, min_h=100.0)
+    best_cavity = cavities[0] # {"box": [x1, y1, x2, y2], "width": w, "height": h, "area": a}
+
+    # 2. Inspect pin terminal distribution to orient macro toward core cavity
+    pins_info = pipe.get_macro_pin_terminals("u_sram_bank0")
+    # dominant_face == 'SOUTH' -> orient macro facing inward towards core standard cells
+
+    # 3. Simulate and pre-flight patch in memory (< 5ms) before disk/OpenROAD emission
+    patch_result = pipe.simulate_floorplan_patch([
+        {"inst": "u_sram_bank0", "loc": [100.123, 100.5], "orient": "R0"},
+        {"inst": "u_sram_bank1", "loc": [800.0, 100.64], "orient": "R0"},
+    ])
+
+    if patch_result["legal"]:
+        print("Floorplan patch is physically legal and snapped to manufacturing grid!")
+    else:
+        print("Patch violations detected:", patch_result["violations"])
+```
+
+### 10.7 Automated Macro Row Snapping & Legal Channel Spacing
+
+When positioning macros via `Floorplan.add_macro()` or `Pipeline.spec_floorplan()`, Silis enforces physical manufacturing rules:
+1. **Site Row Snapping**:
+   Macro Y-origins are automatically quantized to standard cell site rows ($y = k \cdot 2.72\,\mu\text{m}$ for Sky130 `unithd`):
+   $$y_{\text{legal}} = \text{round}\left(\text{round}\left(\frac{y}{2.72}\right) \times 2.72,\, 3\right)$$
+2. **Manufacturing Grid Snapping**:
+   Macro X-origins are quantized to the semiconductor manufacturing grid:
+   $$x_{\text{legal}} = \text{round}\left(\text{round}\left(\frac{x}{0.005}\right) \times 0.005,\, 3\right)$$
+3. **Channel Corridor Legalization**:
+   Adjacent macros must satisfy:
+   $$W_{\text{channel}} \ge 2 \times \text{Halo} + W_{\text{routing\_tracks}} \ge 35.0\,\mu\text{m}$$
+   Pairwise collisions or corridor deficits trigger typed domain errors (`OverlappingHaloError`).
+
+### 10.5 Peripheral I/O Pad Ring Synthesis (`mode="padring"`)
+
+For full-chip implementations, `pipe.spec_iopins(mode="padring")` provisions a complete, gapless peripheral pad ring around the die:
+- **Corner Pads**: 4 physical corner macro instances (`sky130_ef_io__corner_pad`) placed at die vertices with exact $90^\circ$ mirror orientations.
+- **Power & Ground Clamp Pads**: Balanced pairs of core (`sky130_ef_io__vccd_lvc_clamped_pad`, `vssd_lvc_clamped_pad`) and I/O (`sky130_ef_io__vddio_hvc_clamped_pad`, `vssio_hvc_clamped_pad`) clamp cells along all four die edges.
+- **Signal Pads**: `sky130_ef_io__gpiov2_pad_wrapped` cells with physical bond pad openings (`PIN PAD` on `met5`).
+- **Filler Abutment**: `sky130_ef_io__com_bus_slice_*` cells abutted between pads to form continuous ESD and peripheral power rings.
 
 ---
 

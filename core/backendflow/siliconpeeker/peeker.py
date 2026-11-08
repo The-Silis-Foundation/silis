@@ -220,8 +220,20 @@ class DEFParser:
                             self.comps_map[current_comp_name] = QRectF(bb_x, bb_y, bb_w, bb_h)
                             
                             model_lower = current_comp_model.lower()
-                            is_tap = "tap" in model_lower or "fill" in model_lower or "decap" in model_lower
-                            is_clock = "clk" in model_lower and not current_comp_name.startswith("_")
+                            # Classification order:
+                            # 1. Fillers & Decaps (Physical filling / decoupling capacitors - must not be classified as tap)
+                            is_fill_or_decap = ("fill" in model_lower or "decap" in model_lower)
+
+                            # 2. Tap cells / substrate taps / well taps / endcaps / power switches
+                            is_tap = not is_fill_or_decap and (
+                                "tap" in model_lower or "power_switch" in model_lower or
+                                "pwron" in model_lower or "isowell" in model_lower or
+                                "lsbuf" in model_lower or "isobuf" in model_lower or
+                                "welltap" in model_lower or "endcap" in model_lower
+                            )
+
+                            # 3. Clock distribution tree cells
+                            is_clock = not is_fill_or_decap and ("clk" in model_lower or "clock" in model_lower) and not current_comp_name.startswith("_")
 
                             # Check LEF class and model traits
                             lef_class = self.comp_classes.get(current_comp_model, "")
@@ -234,6 +246,10 @@ class DEFParser:
                             elif is_tap:
                                 self.comp_types[current_comp_name] = "TAP"
                                 self.tap_coords.extend([bb_x, bb_y, bb_w, bb_h])
+                            elif is_fill_or_decap:
+                                # Render filler & decap cells as standard substrate silicon so logic patterns remain visible
+                                self.comp_types[current_comp_name] = "FILL"
+                                self.std_coords_flat.extend([bb_x, bb_y, bb_w, bb_h])
                             elif is_clock:
                                 self.comp_types[current_comp_name] = "CLOCK"
                                 self.std_coords_flat.extend([bb_x, bb_y, bb_w, bb_h])
@@ -503,7 +519,7 @@ class SiliconPeeker(QGraphicsView):
                 
                 painter.setPen(QPen(Qt.GlobalColor.red, 2))
                 painter.drawLine(int(vx - bar_w - 20), int(vy - 30), int(vx - 20), int(vy - 30))
-                painter.drawText(int(vx - bar_w - 20), int(vy - 40), f"{d_val} µm")
+                painter.drawText(int(vx - bar_w - 20), int(vy - 40), f"{d_val} um")
 
             painter.restore()
         except Exception:
@@ -624,8 +640,8 @@ class SiliconPeeker(QGraphicsView):
                         if not is_macro and not self.show_insts: continue
 
                         if ctype == "TAP":
-                            item.setPen(QPen(Qt.PenStyle.NoPen)) 
-                            item.setBrush(QBrush(QColor("#000000"))) 
+                            item.setPen(QPen(QColor(245, 190, 30, 200), 0)) 
+                            item.setBrush(QBrush(QColor(210, 145, 20, 220))) 
                             item.setZValue(-4) 
                         elif ctype == "CLOCK":
                             item.setPen(QPen(QColor("#800000"), 0)) 
@@ -735,6 +751,13 @@ class DefLoadWorker(QThread):
                         self.std_h = std.get("h", [])
                         self.std_names = std.get("names", [])
                         self.is_filler = std.get("is_filler", [])
+
+                        tap = data.get("tap_cells", {})
+                        self.tap_x = tap.get("x", [])
+                        self.tap_y = tap.get("y", [])
+                        self.tap_w = tap.get("w", [])
+                        self.tap_h = tap.get("h", [])
+                        self.tap_names = tap.get("names", [])
                         
                         mac = data.get("macros", {})
                         self.mac_x = mac.get("x", [])
@@ -759,17 +782,21 @@ class DefLoadWorker(QThread):
                         self.comps_map = {}
                         self.comp_masters = {}
                         self.comp_types = {}
+                        mac_masters = mac.get("masters", [])
                         for i in range(len(self.mac_names)):
                             mname = self.mac_names[i]
                             self.comps_map[mname] = QRectF(self.mac_x[i], self.mac_y[i], self.mac_w[i], self.mac_h[i])
                             self.comp_types[mname] = "MACRO"
+                            self.comp_masters[mname] = mac_masters[i] if i < len(mac_masters) else mname
 
                         # Index std cells for instant inspector lookup and search
+                        std_masters = std.get("masters", [])
                         if self.std_names:
                             for i in range(len(self.std_names)):
                                 sname = self.std_names[i]
                                 self.comps_map[sname] = QRectF(self.std_x[i], self.std_y[i], self.std_w[i], self.std_h[i])
                                 self.comp_types[sname] = "STD"
+                                self.comp_masters[sname] = std_masters[i] if i < len(std_masters) else ""
                         
                         self.pins = []
                         for i in range(len(self.pin_names)):
@@ -830,6 +857,7 @@ class FastSiliconPeeker(QWidget):
         self.show_pins = True
         self.show_nets = True
         self.show_power = True
+        self.current_heatmap_mode = 0
 
         if fast_layout_viewer:
             self.core = fast_layout_viewer.FastLayoutViewerCore()
@@ -850,8 +878,8 @@ class FastSiliconPeeker(QWidget):
         so_layout.setContentsMargins(0, 0, 0, 0)
         so_layout.setSpacing(4)
 
-        self.btn_search_toggle = QPushButton("🔍", self.search_overlay)
-        self.btn_search_toggle.setFixedSize(26, 26)
+        self.btn_search_toggle = QPushButton("Search", self.search_overlay)
+        self.btn_search_toggle.setFixedSize(50, 24)
         self.btn_search_toggle.setToolTip("Search instance / macro (Ctrl+F)")
         self.btn_search_toggle.setStyleSheet("""
             QPushButton {
@@ -859,7 +887,7 @@ class FastSiliconPeeker(QWidget):
                 color: #e0e0e0;
                 border: 1px solid #555;
                 border-radius: 4px;
-                font-size: 12px;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background: rgba(50, 50, 50, 0.95);
@@ -902,7 +930,7 @@ class FastSiliconPeeker(QWidget):
         self.search_input.returnPressed.connect(self.on_search_instance)
         self.completer.activated.connect(self.on_search_instance)
 
-        self.btn_clear_search = QPushButton("✕", self.search_input_container)
+        self.btn_clear_search = QPushButton("X", self.search_input_container)
         self.btn_clear_search.setFixedSize(16, 16)
         self.btn_clear_search.setToolTip("Close Search")
         self.btn_clear_search.setStyleSheet("""
@@ -932,11 +960,14 @@ class FastSiliconPeeker(QWidget):
         # Note: Do not start timer unconditionally to prevent background polling.
         # Timer starts in showEvent and stops in hideEvent.
 
-    def toggle_ruler(self):
+    def toggle_ruler(self, state=None):
         if not self.core:
             return False
-        curr = self.core.is_ruler_active() if hasattr(self.core, 'is_ruler_active') else False
-        new_state = not curr
+        if state is None:
+            curr = self.core.is_ruler_active() if hasattr(self.core, 'is_ruler_active') else False
+            new_state = not curr
+        else:
+            new_state = bool(state)
         if hasattr(self.core, 'set_ruler_active'):
             self.core.set_ruler_active(new_state)
         return new_state
@@ -1048,6 +1079,8 @@ class FastSiliconPeeker(QWidget):
         if parsed_def:
             self.def_data = parsed_def
             self.redraw()
+            if getattr(self, 'current_heatmap_mode', 0) > 0:
+                self.set_heatmap(self.current_heatmap_mode)
         if self.ide and hasattr(self.ide, 'statusBar'):
             self.ide.statusBar().showMessage("DEF Layout Ready", 3000)
 
@@ -1089,6 +1122,7 @@ class FastSiliconPeeker(QWidget):
             "power_density": 6
         }
         mode_idx = mode_map.get(str(mode_name).lower(), 1)
+        self.current_heatmap_mode = mode_idx
         self.set_heatmap(mode_idx)
 
     def get_core_or_active_rect(self):
@@ -1180,8 +1214,10 @@ class FastSiliconPeeker(QWidget):
         dh = float(dr.height())
         dx0 = float(dr.x())
         dy0 = float(dr.y())
-        tile_w = dw / gw
-        tile_h = dh / gh
+        dx1 = dx0 + dw
+        dy1 = dy0 + dh
+        tile_w = dw / gw if gw > 0 else 1.0
+        tile_h = dh / gh if gh > 0 else 1.0
         tile_area = max(1.0, tile_w * tile_h)
 
         if mode == 1:
@@ -1525,18 +1561,25 @@ class FastSiliconPeeker(QWidget):
                         pwr_weight = 4.0
                     data[cy * gw + cx] += pwr_weight
 
-        # Pass 2: OpenROAD correctMapScale normalization
+        # Pass 2: OpenROAD correctMapScale normalization and NaN/Inf sanitization
         # Note: Mode 3 (Placement Density) is an absolute physical ratio (Area(Cells) / Area(Tile)).
         # It must NOT be scaled by 1/max_val, as that would distort true utilization (e.g. 45% showing as 100% hot-spot).
+        import math
+        # Clean any NaN or Inf
+        data = [0.0 if (math.isnan(v) or math.isinf(v)) else v for v in data]
+
         if mode == 3:
             # Physical placement density: clean saturation clamp at 1.0 (or >1.0 to highlight DRC overlaps)
             data = [min(1.0, max(0.0, v)) for v in data]
         else:
             # Unbounded models (RUDY wire counts, Pin counts, Activity weights) normalize against peak
-            max_val = max(data) if data else 0.0
+            valid_vals = [v for v in data if v > 0.0]
+            max_val = max(valid_vals) if valid_vals else 0.0
             if max_val > 0.0:
                 scale = 1.0 / max_val
-                data = [v * scale for v in data]
+                data = [min(1.0, max(0.0, v * scale)) for v in data]
+            else:
+                data = [0.0] * grid_size
 
         self.core.set_heatmap(mode, data, gw, gh)
 
@@ -1544,6 +1587,9 @@ class FastSiliconPeeker(QWidget):
         if not self.core or not self.def_data: return
         self.core.clear()
         
+        if hasattr(self.core, 'set_dbu') and hasattr(self.def_data, 'dbu'):
+            self.core.set_dbu(float(self.def_data.dbu))
+
         d = self.def_data.die_rect
         self.core.set_core(d.x(), d.y(), d.width(), d.height())
         
@@ -1561,6 +1607,8 @@ class FastSiliconPeeker(QWidget):
         if getattr(self.def_data, "is_opendb", False):
             if self.show_insts and getattr(self.def_data, "std_x", None):
                 self.core.load_std_cells(self.def_data.std_x, self.def_data.std_y, self.def_data.std_w, self.def_data.std_h)
+            if self.show_tapcells and getattr(self.def_data, "tap_x", None) and hasattr(self.core, "load_tap_cells"):
+                self.core.load_tap_cells(self.def_data.tap_x, self.def_data.tap_y, self.def_data.tap_w, self.def_data.tap_h)
             if self.show_macros and getattr(self.def_data, "mac_x", None):
                 mac_x = self.def_data.mac_x
                 mac_y = self.def_data.mac_y

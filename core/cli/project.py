@@ -85,10 +85,21 @@ def find_top_module_in_files(v_files):
 
 
 def resolve_pdk_name(pdk_input):
-    p = pdk_input.lower().strip()
+    p = str(pdk_input).lower().strip()
+    try:
+        from pdkmanagers.pdk.manager import SSAForge
+        resolved = SSAForge.resolve_pdk_key(p)
+        if resolved and resolved != SSAForge.DEFAULT_PDK:
+            return resolved
+    except Exception:
+        pass
     if "gf" in p or "180" in p:
         return "gf180mcu"
-    return "sky130"
+    if "asap7" in p or "7nm" in p:
+        return "asap7"
+    if "sky" in p or "130" in p:
+        return "sky130"
+    return p or "sky130"
 
 
 def create_project_structure(loc, name, top, pdk, rtl_paths=None, tb_paths=None, sdc_paths=None, macros=None):

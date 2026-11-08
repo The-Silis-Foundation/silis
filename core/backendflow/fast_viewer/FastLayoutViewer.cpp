@@ -3,6 +3,7 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QPen>
+#include <cmath>
 
 FastLayoutViewer::FastLayoutViewer(QWidget* parent) 
     : QWidget(parent), zoom_factor_(1.0), is_panning_(false) {
@@ -14,6 +15,7 @@ FastLayoutViewer::FastLayoutViewer(QWidget* parent)
 
 void FastLayoutViewer::clear() {
     std_cells_.clear();
+    tap_cells_.clear();
     macros_.clear();
     macro_names_.clear();
     pins_.clear();
@@ -26,6 +28,10 @@ void FastLayoutViewer::clear() {
     voltage_island_vals_.clear();
     voltage_island_names_.clear();
     blockages_.clear();
+    heatmap_data_.clear();
+    heatmap_mode_ = 0;
+    hover_active_ = false;
+    ruler_has_start_ = false;
     core_rect_ = QRectF();
     highlight_rect_ = QRectF();
     highlight_name_.clear();
@@ -234,8 +240,16 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         std::vector<QLineF> visible_sigs;
         visible_sigs.reserve(signals_.size() / 10);
         for (const auto& l : signals_) {
-            if (viewport.contains(l.p1()) || viewport.contains(l.p2()) || viewport.intersects(QRectF(l.p1(), l.p2()).normalized())) {
+            if (viewport.contains(l.p1()) || viewport.contains(l.p2())) {
                 visible_sigs.push_back(l);
+            } else {
+                double rx = std::min(l.p1().x(), l.p2().x());
+                double ry = std::min(l.p1().y(), l.p2().y());
+                double rw = std::max(0.001, std::abs(l.p2().x() - l.p1().x()));
+                double rh = std::max(0.001, std::abs(l.p2().y() - l.p1().y()));
+                if (viewport.intersects(QRectF(rx, ry, rw, rh))) {
+                    visible_sigs.push_back(l);
+                }
             }
         }
         painter.drawLines(visible_sigs.data(), visible_sigs.size());
@@ -256,10 +270,12 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         painter.drawRects(visible_std.data(), visible_std.size());
     }
 
-    // Draw Tap Cells (Greayer)
+    // Draw Tap Cells / Power Category Cells (Amber / Gold)
     if (zoom_factor_ > lod_std_cells_) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(128, 128, 128, 255));
+        QPen tap_pen(QColor(245, 190, 30, 200));
+        tap_pen.setCosmetic(true);
+        painter.setPen(tap_pen);
+        painter.setBrush(QColor(210, 145, 20, 220));
         std::vector<QRectF> visible_tap;
         visible_tap.reserve(tap_cells_.size() / 10);
         for (const auto& r : tap_cells_) {
@@ -303,13 +319,6 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         painter.setBrush(QColor(v_color.red(), v_color.green(), v_color.blue(), 45));
         painter.drawRect(voltage_islands_[vi]);
     }
-
-    // Draw Macros (Bright Orange/Red, solid)
-    macro_pen.setColor(QColor(0, 0, 0, 255));
-    macro_pen.setCosmetic(true);
-    painter.setPen(macro_pen);
-    painter.setBrush(QColor(76, 175, 80, 255));
-    painter.drawRects(macros_.data(), macros_.size());
     
     // Draw Pins with minimum visible screen threshold (at least 6px across)
     QPen pin_pen(QColor(255, 255, 255, 220));
@@ -432,9 +441,10 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
                     float cell_x = h_bounds.x() + x * cell_w;
                     if (cell_x + cell_w < viewport.left() || cell_x > viewport.right()) continue;
 
-                    float val = heatmap_data_[y * gw + x];
+                    float raw_val = heatmap_data_[y * gw + x];
+                    if (std::isnan(raw_val) || std::isinf(raw_val)) continue;
+                    float val = std::min(1.0f, std::max(0.0f, raw_val));
                     if (val > 0.01f) {
-                        val = std::min(1.0f, std::max(0.0f, val));
                         // Professional EDA Multi-stop colormap:
                         // 0.0 -> Blue, 0.25 -> Cyan, 0.5 -> Green, 0.75 -> Yellow, 1.0 -> Red
                         int r = 0, g = 0, b = 0;
@@ -482,13 +492,14 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         painter.drawLine(QPointF(ruler_current_.x() - tick, ruler_current_.y() - tick), QPointF(ruler_current_.x() + tick, ruler_current_.y() + tick));
         painter.drawLine(QPointF(ruler_current_.x() - tick, ruler_current_.y() + tick), QPointF(ruler_current_.x() + tick, ruler_current_.y() - tick));
 
-        // Distance in microns (assuming DBU is ~1000)
+        // Distance in microns exact conversion using DBU
+        double current_dbu = (dbu_ > 0.0f) ? (double)dbu_ : 1000.0;
         double dx = ruler_current_.x() - ruler_start_.x();
         double dy = ruler_current_.y() - ruler_start_.y();
         double dist = std::sqrt(dx * dx + dy * dy);
-        double dist_um = dist / 1000.0;
-        double dx_um = std::abs(dx) / 1000.0;
-        double dy_um = std::abs(dy) / 1000.0;
+        double dist_um = dist / current_dbu;
+        double dx_um = std::abs(dx) / current_dbu;
+        double dy_um = std::abs(dy) / current_dbu;
 
         painter.save();
         painter.scale(1.0 / zoom_factor_, -1.0 / zoom_factor_);
@@ -496,7 +507,7 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         double sx = mid.x() * zoom_factor_;
         double sy = mid.y() * -zoom_factor_;
 
-        QString lbl = QString("L: %1 µm (dx: %2, dy: %3)").arg(dist_um, 0, 'f', 2).arg(dx_um, 0, 'f', 2).arg(dy_um, 0, 'f', 2);
+        QString lbl = QString("L: %1 um (dx: %2, dy: %3)").arg(dist_um, 0, 'f', 2).arg(dx_um, 0, 'f', 2).arg(dy_um, 0, 'f', 2);
         QFont f = painter.font();
         f.setBold(true);
         f.setPointSize(10);
@@ -559,14 +570,26 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
         painter.drawText(QRectF(hud_x + 8, hud_y + 22, card_w - 16, 16), Qt::AlignLeft | Qt::AlignVCenter, line2);
 
         // Line 3: Micrometer database coordinates
-        double db_x_um = hover_db_pos_.x() / 1000.0;
-        double db_y_um = hover_db_pos_.y() / 1000.0;
+        double current_dbu = (dbu_ > 0.0f) ? (double)dbu_ : 1000.0;
+        double db_x_um = hover_db_pos_.x() / current_dbu;
+        double db_y_um = hover_db_pos_.y() / current_dbu;
         painter.setPen(QColor(139, 148, 158)); // muted gray
         QString line3 = QString("Coord: (%1, %2) um").arg(db_x_um, 0, 'f', 1).arg(db_y_um, 0, 'f', 1);
         painter.drawText(QRectF(hud_x + 8, hud_y + 38, card_w - 16, 16), Qt::AlignLeft | Qt::AlignVCenter, line3);
 
         painter.restore();
     }
+}
+
+void FastLayoutViewer::set_dbu(float dbu) {
+    if (dbu > 0.0f) {
+        dbu_ = dbu;
+        update();
+    }
+}
+
+float FastLayoutViewer::get_dbu() const {
+    return dbu_;
 }
 
 void FastLayoutViewer::set_ruler_active(bool active) {
@@ -611,8 +634,21 @@ void FastLayoutViewer::clear_highlight() {
 
 void FastLayoutViewer::wheelEvent(QWheelEvent* event) {
     double angle = event->angleDelta().y();
-    if (angle > 0) zoom_factor_ *= 1.2;
-    else zoom_factor_ /= 1.2;
+    if (angle == 0) return;
+    double factor = (angle > 0) ? 1.2 : (1.0 / 1.2);
+    double old_zoom = zoom_factor_;
+    zoom_factor_ *= factor;
+    // Bound zoom between 1e-4 and 1e4 to avoid numerical degeneracy
+    zoom_factor_ = std::max(1e-4, std::min(1e4, zoom_factor_));
+    double actual_factor = zoom_factor_ / old_zoom;
+
+    // Anchor zoom around cursor position on screen
+    QPointF cursor_pos = event->position();
+    double center_x = width() / 2.0;
+    double center_y = height() / 2.0;
+    pan_offset_.rx() += (cursor_pos.x() - center_x) * (1.0 / zoom_factor_ - 1.0 / old_zoom);
+    pan_offset_.ry() -= (cursor_pos.y() - center_y) * (1.0 / zoom_factor_ - 1.0 / old_zoom);
+
     update();
 }
 

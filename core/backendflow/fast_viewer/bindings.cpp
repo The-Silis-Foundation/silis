@@ -43,6 +43,8 @@ PYBIND11_MODULE(fast_layout_viewer, m) {
         .def("pan_to", &FastLayoutViewer::pan_to, py::arg("x"), py::arg("y"), py::arg("target_zoom") = -1.0f)
         .def("highlight_box", &FastLayoutViewer::highlight_box, py::arg("x"), py::arg("y"), py::arg("w"), py::arg("h"), py::arg("name"))
         .def("clear_highlight", &FastLayoutViewer::clear_highlight)
+        .def("set_dbu", &FastLayoutViewer::set_dbu, py::arg("dbu"))
+        .def("get_dbu", &FastLayoutViewer::get_dbu)
         .def("set_ruler_active", &FastLayoutViewer::set_ruler_active, py::arg("active"))
         .def("is_ruler_active", &FastLayoutViewer::is_ruler_active)
         .def("clear_ruler", &FastLayoutViewer::clear_ruler)

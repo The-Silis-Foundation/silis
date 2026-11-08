@@ -57,7 +57,15 @@ public:
                        const std::vector<float>& w, const std::vector<float>& h,
                        const std::vector<std::string>& names,
                        const std::vector<std::string>& masters,
-                       const std::vector<bool>& is_macro);
+                       const std::vector<bool>& is_macro,
+                       const std::vector<int>& categories = {});
+
+    void set_power_cells_visible(bool visible);
+    bool is_power_cells_visible() const { return show_power_cells_; }
+    void set_std_cells_visible(bool visible);
+    bool is_std_cells_visible() const { return show_std_cells_; }
+    void set_macros_visible(bool visible);
+    bool is_macros_visible() const { return show_macros_; }
 
     // Selection & Highlighting
     void select_instance(const std::string& name);
@@ -120,9 +128,13 @@ private:
         std::string name;
         std::string master;
         bool is_macro;
+        int category; // 0 = std cell, 1 = macro, 2 = power category cell (tap/switch/decap/level shifter)
     };
     std::vector<PlacedInst> instances_;
     std::map<std::string, size_t> inst_name_index_;
+    bool show_power_cells_ = true;
+    bool show_std_cells_ = true;
+    bool show_macros_ = true;
 
     // Selection
     std::string selected_inst_name_;

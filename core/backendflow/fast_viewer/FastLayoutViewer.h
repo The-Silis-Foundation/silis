@@ -43,6 +43,8 @@ public:
     void pan_to(float x, float y, float target_zoom = -1.0f);
     void highlight_box(float x, float y, float w, float h, const std::string& name);
     void clear_highlight();
+    void set_dbu(float dbu);
+    float get_dbu() const;
     void set_ruler_active(bool active);
     bool is_ruler_active() const;
     void clear_ruler();
@@ -98,4 +100,5 @@ private:
     bool ruler_has_start_ = false;
     QPointF ruler_start_;
     QPointF ruler_current_;
+    float dbu_ = 1000.0f;
 };

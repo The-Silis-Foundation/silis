@@ -647,9 +647,6 @@ class IOPlacerDialog(QDialog):
         self._load_design_context()
         self.update_live_tcl()
 
-    def _apply_dark_stylesheet(self):
-        pass
-
     def _init_ui(self):
         main_layout = QHBoxLayout(self)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -2984,22 +2981,6 @@ class IOPlacerDialog(QDialog):
 
         return adjusted_pos
 
-    def _check_pad_capacity(self, num_pads, pad_pitch=85.0):
-        """
-        Calculates physical perimeter capacity for I/O pads:
-        Capacity = 2 * (Die Width + Die Height) / (pad_pitch)
-        sky130 GPIO pads are 80um wide, so min pitch is ~85um.
-        If num_pads exceeds capacity, returns (False, required_perimeter, available_perimeter, min_die_dim)
-        """
-        w = self.die_rect.width()
-        h = self.die_rect.height()
-        avail_perimeter = 2.0 * (w + h)
-        req_perimeter = num_pads * pad_pitch
-        if req_perimeter > avail_perimeter:
-            min_dim = math.ceil(req_perimeter / 4.0)
-            return False, req_perimeter, avail_perimeter, min_dim
-        return True, req_perimeter, avail_perimeter, 0.0
-
     def on_pad_strategy_changed(self):
         is_staggered = self.rb_pad_staggered.isChecked()
         self.pad_strategy = "staggered" if is_staggered else "single"
@@ -3061,7 +3042,14 @@ class IOPlacerDialog(QDialog):
                 self._draw_die_boundary()
                 return
 
-            if os.environ.get("SILIS_HEADLESS_TEST", "") in ("1", "single"):
+            is_headless = os.environ.get("SILIS_HEADLESS_TEST", "") in ("1", "single", "staggered", "true", "TRUE")
+            p = self.parent()
+            if p and hasattr(p, 'ide') and getattr(p.ide, 'headless', False):
+                is_headless = True
+            if hasattr(self, 'project_config') and self.project_config.get('headless', False):
+                is_headless = True
+
+            if is_headless or os.environ.get("SILIS_HEADLESS_TEST", "") in ("1", "single"):
                 self.rb_pad_single.setChecked(True)
                 self.pad_strategy = "single"
                 self.expand_die_for_padring(single_die_w, single_die_h, margin=250.0)

@@ -27,11 +27,36 @@ SilisNativeLayerViewer::SilisNativeLayerViewer(QWidget* parent)
     // Seeded with VRL Brown palette: #00F, #F00, #0D0, etc.
     layer_colors_["li1"]  = QColor(126, 126, 255, 180); // Cut 0 / local interconnect
     layer_colors_["met1"] = QColor(0, 0, 254, 180);     // Metal 1 (Pure Deep Blue)
+    layer_colors_["via"]  = QColor(255, 126, 126, 190); // Cut via (mcon/via)
     layer_colors_["met2"] = QColor(254, 0, 0, 180);     // Metal 2 (Pure Bright Red)
+    layer_colors_["via2"] = QColor(255, 180, 126, 190); // Cut via2
     layer_colors_["met3"] = QColor(9, 221, 0, 180);     // Metal 3 (Vibrant Green)
+    layer_colors_["via3"] = QColor(126, 255, 180, 190); // Cut via3
     layer_colors_["met4"] = QColor(190, 244, 81, 180);   // Metal 4 (Lime Yellow-Green)
+    layer_colors_["via4"] = QColor(255, 255, 126, 190); // Cut via4
     layer_colors_["met5"] = QColor(222, 33, 96, 180);    // Metal 5 (Deep Rose / Magenta)
-    layer_colors_["vias"] = QColor(255, 126, 126, 190); // Cut vias
+    layer_colors_["vias"] = QColor(255, 126, 126, 190); // Cut vias alias
+
+    // Explicit GF180MCU layer name aliases
+    layer_colors_["Metal1"] = QColor(0, 0, 254, 180);
+    layer_colors_["Metal2"] = QColor(254, 0, 0, 180);
+    layer_colors_["Metal3"] = QColor(9, 221, 0, 180);
+    layer_colors_["Metal4"] = QColor(190, 244, 81, 180);
+    layer_colors_["Metal5"] = QColor(222, 33, 96, 180);
+    layer_colors_["Via1"]   = QColor(255, 126, 126, 190);
+    layer_colors_["Via2"]   = QColor(255, 126, 126, 190);
+    layer_colors_["Via3"]   = QColor(255, 126, 126, 190);
+    layer_colors_["Via4"]   = QColor(255, 126, 126, 190);
+
+    // Explicit ASAP7 layer name aliases
+    layer_colors_["M1"]   = QColor(0, 0, 254, 180);
+    layer_colors_["M2"]   = QColor(254, 0, 0, 180);
+    layer_colors_["M3"]   = QColor(9, 221, 0, 180);
+    layer_colors_["M4"]   = QColor(190, 244, 81, 180);
+    layer_colors_["M5"]   = QColor(222, 33, 96, 180);
+    layer_colors_["VIA1"] = QColor(255, 126, 126, 190);
+    layer_colors_["VIA2"] = QColor(255, 126, 126, 190);
+    layer_colors_["VIA3"] = QColor(255, 126, 126, 190);
 
     // Default: all layers visible
     for (auto& kv : layer_colors_) {
@@ -116,7 +141,8 @@ void SilisNativeLayerViewer::load_instances(const std::vector<float>& x,
                                            const std::vector<float>& h,
                                            const std::vector<std::string>& names,
                                            const std::vector<std::string>& masters,
-                                           const std::vector<bool>& is_macro) {
+                                           const std::vector<bool>& is_macro,
+                                           const std::vector<int>& categories) {
     size_t count = std::min({x.size(), y.size(), w.size(), h.size(), names.size()});
     instances_.clear();
     inst_name_index_.clear();
@@ -128,9 +154,29 @@ void SilisNativeLayerViewer::load_instances(const std::vector<float>& x,
         inst.name = names[i];
         inst.master = (i < masters.size()) ? masters[i] : "";
         inst.is_macro = (i < is_macro.size()) ? is_macro[i] : false;
+        if (i < categories.size()) {
+            inst.category = categories[i];
+        } else {
+            inst.category = inst.is_macro ? 1 : 0;
+        }
         inst_name_index_[names[i]] = instances_.size();
         instances_.push_back(inst);
     }
+    update();
+}
+
+void SilisNativeLayerViewer::set_power_cells_visible(bool visible) {
+    show_power_cells_ = visible;
+    update();
+}
+
+void SilisNativeLayerViewer::set_std_cells_visible(bool visible) {
+    show_std_cells_ = visible;
+    update();
+}
+
+void SilisNativeLayerViewer::set_macros_visible(bool visible) {
+    show_macros_ = visible;
     update();
 }
 
@@ -287,28 +333,6 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
     p.setBrush(QColor(10, 10, 10));
     p.drawRect(core_rect_);
 
-    // 2. Render Placed Macros & Standard Cells (OpenROAD style outlines)
-    // Draw standard cells when zoomed in sufficiently or as subtle site outlines
-    double min_cell_dim = 2.0 / zoom_factor_;
-    p.setPen(QPen(QColor(80, 140, 200, 160), 1.0 / zoom_factor_));
-    p.setBrush(QColor(40, 90, 140, 60));
-    for (const auto& inst : instances_) {
-        if (inst.is_macro) continue;
-        if (inst.rect.width() >= min_cell_dim || inst.rect.height() >= min_cell_dim) {
-            p.drawRect(inst.rect);
-        }
-    }
-
-    // Draw Macros (OpenROAD style orange-brown blocks)
-    for (const auto& inst : instances_) {
-        if (!inst.is_macro) continue;
-        p.setPen(QPen(QColor(230, 130, 20), 1.5 / zoom_factor_));
-        p.setBrush(QColor(60, 40, 20, 180));
-        p.drawRect(inst.rect);
-    }
-
-    // 3. Render Metal & Via Layers in Authentic OpenROAD Stacking Order
-    const std::vector<std::string> render_order = {"li1", "vias", "met1", "met2", "met3", "met4", "met5"};
     // Screen bounds in DBU world coordinates for viewport culling
     double view_half_w = (width() / 2.0) / zoom_factor_;
     double view_half_h = (height() / 2.0) / zoom_factor_;
@@ -318,6 +342,77 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
     double max_x = cx + view_half_w;
     double min_y = cy - view_half_h;
     double max_y = cy + view_half_h;
+
+    // 2. Render Placed Macros, Power Cells & Standard Cells (OpenROAD style outlines)
+    double min_cell_dim = 1.0 / zoom_factor_;
+
+    // 2a. Draw Standard Logic Cells (Steel Blue)
+    if (show_std_cells_) {
+        p.setPen(QPen(QColor(80, 140, 200, 160), 1.0 / zoom_factor_));
+        p.setBrush(QColor(40, 90, 140, 60));
+        for (const auto& inst : instances_) {
+            if (inst.is_macro || inst.category == 2) continue;
+            // Viewport frustum culling
+            if (inst.rect.right() < min_x || inst.rect.left() > max_x ||
+                inst.rect.top() < min_y || inst.rect.bottom() > max_y) continue;
+            if (inst.rect.width() >= min_cell_dim || inst.rect.height() >= min_cell_dim) {
+                p.drawRect(inst.rect);
+            }
+        }
+    }
+
+    // 2b. Draw Power Category Cells: tapcell, welltap, decap, power_switch, level_shifter (Vivid Amber / Gold)
+    if (show_power_cells_) {
+        p.setPen(QPen(QColor(245, 190, 30, 220), 1.0 / zoom_factor_));
+        p.setBrush(QColor(210, 145, 20, 170));
+        for (const auto& inst : instances_) {
+            if (inst.category == 2) {
+                // Viewport frustum culling
+                if (inst.rect.right() < min_x || inst.rect.left() > max_x ||
+                    inst.rect.top() < min_y || inst.rect.bottom() > max_y) continue;
+                if (inst.rect.width() >= min_cell_dim || inst.rect.height() >= min_cell_dim) {
+                    p.drawRect(inst.rect);
+                }
+            }
+        }
+    }
+
+    // 2c. Draw Macros (OpenROAD style orange-brown blocks)
+    if (show_macros_) {
+        for (const auto& inst : instances_) {
+            if (!inst.is_macro && inst.category != 1) continue;
+            // Viewport frustum culling
+            if (inst.rect.right() < min_x || inst.rect.left() > max_x ||
+                inst.rect.top() < min_y || inst.rect.bottom() > max_y) continue;
+            p.setPen(QPen(QColor(230, 130, 20), 1.5 / zoom_factor_));
+            p.setBrush(QColor(60, 40, 20, 180));
+            p.drawRect(inst.rect);
+        }
+    }
+
+    // 3. Render Metal & Via Layers in Authentic OpenROAD Stacking Order
+    std::vector<std::string> render_order = {
+        "nwell", "pwell", "li1", "vias",
+        "met1", "via", "met2", "via2", "met3", "via3", "met4", "via4", "met5",
+        "Metal1", "Via1", "Metal2", "Via2", "Metal3", "Via3", "Metal4", "Via4", "Metal5",
+        "M1", "VIA1", "M2", "VIA2", "M3", "VIA3", "M4", "VIA4", "M5"
+    };
+    // Append any dynamically loaded layers not already in render_order
+    for (const auto& kv : layers_) {
+        if (std::find(render_order.begin(), render_order.end(), kv.first) == render_order.end()) {
+            render_order.push_back(kv.first);
+        }
+    }
+
+    // Default layer colors for generic PDKs
+    static const std::vector<QColor> fallback_palette = {
+        QColor(0, 0, 254, 180),     // Blue (M1)
+        QColor(254, 0, 0, 180),     // Red (M2)
+        QColor(9, 221, 0, 180),     // Green (M3)
+        QColor(190, 244, 81, 180),  // Yellow-Green (M4)
+        QColor(222, 33, 96, 180),   // Magenta (M5)
+        QColor(255, 126, 126, 190)  // Vias
+    };
     double min_screen_dim = 1.0 / zoom_factor_; // Shapes smaller than 1px screen space are culled
 
     for (const auto& lname : render_order) {
@@ -327,17 +422,26 @@ void SilisNativeLayerViewer::paintEvent(QPaintEvent* /*event*/) {
         auto it_layer = layers_.find(lname);
         if (it_layer == layers_.end() || it_layer->second.empty()) continue;
 
-        QColor color = layer_colors_[lname];
+        QColor color;
+        auto it_col = layer_colors_.find(lname);
+        if (it_col != layer_colors_.end()) {
+            color = it_col->second;
+        } else {
+            // Hash layer name deterministically to fallback palette
+            size_t h_idx = std::hash<std::string>{}(lname) % fallback_palette.size();
+            color = fallback_palette[h_idx];
+        }
         p.setPen(Qt::NoPen);
         p.setBrush(color);
 
         for (const auto& s : it_layer->second) {
             // Viewport frustum culling
             if (s.x + s.w < min_x || s.x > max_x || s.y + s.h < min_y || s.y > max_y) continue;
-            // Sub-pixel LOD culling
-            if (s.w < min_screen_dim && s.h < min_screen_dim) continue;
 
-            p.drawRect(QRectF(s.x, s.y, s.w, s.h));
+            // Draw shape, ensuring minimum 1px visible footprint on canvas so sub-micron vias/cuts remain visible
+            double sw = std::max(static_cast<double>(s.w), 1.0 / zoom_factor_);
+            double sh = std::max(static_cast<double>(s.h), 1.0 / zoom_factor_);
+            p.drawRect(QRectF(s.x, s.y, sw, sh));
         }
     }
 

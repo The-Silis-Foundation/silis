@@ -314,8 +314,9 @@ import odb
 
 db = ord.get_db()
 pdk_base = "{pdk_base}"
-tlef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
-sc_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef")
+pdk_var = "sky130B" if os.path.isdir(os.path.join(pdk_base, "sky130B")) else "sky130A"
+tlef = os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+sc_lef = os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef")
 
 try:
     odb.read_lef(db, tlef)
@@ -331,8 +332,9 @@ except Exception:
     pass
 
 io_lefs = [
-    os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
-    os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef")
+    os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
+    os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
+    os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef")
 ]
 sram_macro_lefs = glob.glob(os.path.join(pdk_base, "**", "sky130_sram_macros", "lef", "*.lef"), recursive=True)
 for f in io_lefs + sram_macro_lefs:
@@ -362,6 +364,7 @@ core = [core_box.xMin(), core_box.yMin(), core_box.xMax(), core_box.yMax()]
 
 std_x, std_y, std_w, std_h, std_names = [], [], [], [], []
 mac_x, mac_y, mac_w, mac_h, mac_names = [], [], [], [], []
+tap_x, tap_y, tap_w, tap_h, tap_names = [], [], [], [], []
 is_filler_list = []
 
 for inst in block.getInsts():
@@ -374,15 +377,24 @@ for inst in block.getInsts():
     by = bbox.yMin()
     bw = bbox.xMax() - bx
     bh = bbox.yMax() - by
+    m_name = m.getName().lower()
+    m_type = str(m.getType())
+    is_power = bool(
+        "tap" in m_name or "fill" in m_name or "decap" in m_name or
+        "power_switch" in m_name or "pwron" in m_name or "isowell" in m_name or
+        "lsbuf" in m_name or "isobuf" in m_name or
+        m_type in ["CORE_WELLTAP", "CORE_SPACER", "ENDCAP"]
+    )
     if is_macro:
         mac_x.append(bx); mac_y.append(by); mac_w.append(bw); mac_h.append(bh)
         mac_names.append(inst.getName())
+    elif is_power:
+        tap_x.append(bx); tap_y.append(by); tap_w.append(bw); tap_h.append(bh)
+        tap_names.append(inst.getName())
     else:
         std_x.append(bx); std_y.append(by); std_w.append(bw); std_h.append(bh)
         std_names.append(inst.getName())
-        m_name = m.getName().lower()
-        is_fill = bool(m.isFiller() or "fill" in m_name or "tap" in m_name)
-        is_filler_list.append(is_fill)
+        is_filler_list.append(False)
 
 pin_x, pin_y, pin_w, pin_h, pin_names = [], [], [], [], []
 for bt in block.getBTerms():
@@ -434,6 +446,7 @@ out = {{
     "die": die,
     "core": core,
     "std_cells": {{"x": std_x, "y": std_y, "w": std_w, "h": std_h, "names": std_names, "is_filler": is_filler_list}},
+    "tap_cells": {{"x": tap_x, "y": tap_y, "w": tap_w, "h": tap_h, "names": tap_names}},
     "macros": {{"x": mac_x, "y": mac_y, "w": mac_w, "h": mac_h, "names": mac_names}},
     "pins": {{"x": pin_x, "y": pin_y, "w": pin_w, "h": pin_h, "names": pin_names}},
     "power": {{"x": pwr_x, "y": pwr_y, "w": pwr_w, "h": pwr_h}},

@@ -191,10 +191,10 @@ def view_layout(
     tb.setMovable(False)
     tb.setStyleSheet("background: #252526; color: #f0f0f0; border-bottom: 1px solid #3c3c3c;")
 
-    act_zoom_in = QAction("🔍+ Zoom In", win)
-    act_zoom_out = QAction("🔍- Zoom Out", win)
-    act_fit = QAction("↔ Fit", win)
-    act_reload = QAction("⟳ Reload", win)
+    act_zoom_in = QAction("Zoom In", win)
+    act_zoom_out = QAction("Zoom Out", win)
+    act_fit = QAction("Fit", win)
+    act_reload = QAction("Reload", win)
 
     def do_zoom_in():
         if hasattr(peeker, "scale"):
@@ -792,14 +792,16 @@ def view_layers(
         detach = (show and parent is None)
 
     if detach:
-        silis_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sdk_dir = os.path.dirname(os.path.abspath(__file__))
+        core_dir = os.path.dirname(sdk_dir)
+        silis_dir = os.path.dirname(core_dir)
         repo_root = os.path.dirname(silis_dir)
         import json
         vis_json = json.dumps(layer_visibility or {})
         launcher_script = (
             "import sys, os, json; "
-            "repo_root = sys.argv[1]; silis_dir = sys.argv[2]; abs_file = sys.argv[3]; win_title = sys.argv[4]; vis_json = sys.argv[5]; "
-            "sys.path.insert(0, silis_dir); sys.path.insert(0, repo_root); import silis; "
+            "repo_root = sys.argv[1]; silis_dir = sys.argv[2]; core_dir = sys.argv[3]; abs_file = sys.argv[4]; win_title = sys.argv[5]; vis_json = sys.argv[6]; "
+            "sys.path = [repo_root, silis_dir, core_dir] + [p for p in sys.path if 'silis' not in p]; import silis; "
             "from PyQt6.QtWidgets import QApplication; "
             "app = QApplication(sys.argv); "
             "layer_vis = json.loads(vis_json) if vis_json else None; "
@@ -807,14 +809,20 @@ def view_layers(
             "win.resize(1200, 800); win.show(); win.raise_(); win.activateWindow(); "
             "sys.exit(app.exec())"
         )
-        cmd = [sys.executable, "-c", launcher_script, repo_root, silis_dir, abs_file, win_title, vis_json]
+        cmd = [sys.executable, "-c", launcher_script, repo_root, silis_dir, core_dir, abs_file, win_title, vis_json]
         env = os.environ.copy()
         _ensure_desktop_env()
         env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
         if "XAUTHORITY" in os.environ:
             env["XAUTHORITY"] = os.environ["XAUTHORITY"]
         env["QT_QPA_PLATFORM"] = "xcb"
-        proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
         print(f"[SILIS] Desktop OpenROAD Layer Viewer window launched (PID: {proc.pid})")
         return proc
 

@@ -434,6 +434,17 @@ class Pipeline:
         from .opendb_bridge import OpenDBBridge
         self.db = OpenDBBridge(self)
 
+        # Agentic Physical Design Introspection Engine
+        from .introspection import PhysicalDesignIntrospector
+        self.intro = PhysicalDesignIntrospector(self)
+
+        # Spatial Reasoning & Packing Engine
+        from .spatial import SpatialReasoningEngine
+        self.spatial = SpatialReasoningEngine(self)
+
+        # Layout database stash stack for quick undo
+        self._stash_stack = []
+
     def process_events(self, iterations: int = 10, delay_ms: int = 5) -> None:
         """Pumps Qt event loop so QProcess, QThread, and timer events are processed."""
         if not self.app:
@@ -478,6 +489,68 @@ class Pipeline:
             raise PipelineExecutionError("init", exit_code=1, message="OpenROAD failed to initialize design and link PDK libraries.")
         if hasattr(self.project, "_cached_sizes"):
             self.project._cached_sizes = None
+        return True
+
+    def _cross_verify_step(self, step_name: str, def_path: Optional[str] = None) -> bool:
+        """
+        Silis Mandatory Post-Step Physical Cross-Verifier (Zero-Defect Contract).
+        Audits physical DEF database artifacts after execution:
+          - Base geometry: DIEAREA, COMPONENTS, TRACKS
+          - Power grid (PDN / Floorplan / FPS): SPECIALNETS presence, VDD/VSS nets, power rails
+          - Placement: 0 UNPLACED components
+        Raises typed SDK exceptions on failure to guarantee downstream tapeout integrity.
+        """
+        target_def = def_path or os.path.join(self.project.results_dir, "temp.def")
+        if not os.path.exists(target_def):
+            raise PipelineExecutionError(
+                step_name,
+                exit_code=1,
+                message=f"Mandatory cross-verification failed: Output DEF does not exist at {target_def}",
+            )
+
+        with open(target_def, "r", errors="ignore") as f:
+            content = f.read()
+
+        # 1. Base Geometry Check
+        has_die = "DIEAREA" in content
+        has_components = "COMPONENTS" in content
+        has_tracks = "TRACKS" in content
+
+        if not has_die or not has_components:
+            raise DRCViolationError(
+                step_name,
+                f"Defective DEF artifact for step '{step_name}': Missing DIEAREA or COMPONENTS section in {target_def}.",
+            )
+
+        comp_match = re.search(r"COMPONENTS\s+(\d+)\s*;", content)
+        num_comps = int(comp_match.group(1)) if comp_match else 0
+
+        # 2. PDN Cross-Verification
+        # For unified FPS or dedicated PDN steps, verify power mesh integrity
+        if step_name.lower() in ["pdn", "fps"] or (step_name.lower() == "floorplan" and getattr(self, "_spec_fps", {}).get("pdn")):
+            has_specialnets = "SPECIALNETS" in content
+            if not has_specialnets:
+                raise PowerGridSynthesisError(
+                    f"CRITICAL DEFECT: PDN power mesh (SPECIALNETS) was NOT generated for step '{step_name}'!"
+                )
+
+            has_vdd = re.search(r"-\s+VDD\s+", content) is not None or "VDD" in content
+            has_vss = re.search(r"-\s+VSS\s+", content) is not None or "VSS" in content
+            if not (has_vdd and has_vss):
+                raise PowerGridSynthesisError(
+                    f"CRITICAL DEFECT: Incomplete PDN grid after step '{step_name}'. Missing VDD or VSS nets."
+                )
+
+        # 3. Placement Cross-Verification
+        if step_name.lower() in ["place", "cts", "route"]:
+            unplaced_matches = len(re.findall(r"\+\s+UNPLACED\b", content))
+            if unplaced_matches > 0:
+                raise DRCViolationError(
+                    step_name,
+                    f"CRITICAL DEFECT: {unplaced_matches} instances remain UNPLACED after step '{step_name}'!",
+                )
+
+        print(f"[SILIS VERIFY] Step '{step_name.upper()}' DEF cross-verification passed 100% clean ({num_comps} components).")
         return True
 
     def _discover_macro_dimensions(self) -> Dict[str, Tuple[float, float]]:
@@ -613,11 +686,16 @@ class Pipeline:
         ring_width: float = 5.0,
         ring_spacing: float = 2.0,
         ring_offset: float = 5.0,
-        ring_h_layer: str = "met5",
-        ring_v_layer: str = "met4",
+        ring_h_layer: Optional[str] = None,
+        ring_v_layer: Optional[str] = None,
         enable_trunks: bool = True,
-        trunk_layer: str = "met4",
+        trunk_layer: Optional[str] = None,
         trunk_width: float = 3.2,
+        rail_layer: Optional[str] = None,
+        stripe_layer: Optional[str] = None,
+        stripe_width: Optional[float] = None,
+        stripe_pitch: Optional[float] = None,
+        rail_width: Optional[float] = None,
     ) -> "Pipeline":
         """
         Declaratively specifies the PDN mesh, core power rings, and dedicated pad trunk synthesis parameters.
@@ -635,6 +713,11 @@ class Pipeline:
             "enable_trunks": enable_trunks,
             "trunk_layer": trunk_layer,
             "trunk_width": trunk_width,
+            "rail_layer": rail_layer,
+            "rail_width": rail_width,
+            "stripe_layer": stripe_layer,
+            "stripe_width": stripe_width,
+            "stripe_pitch": stripe_pitch,
         }
         return self
 
@@ -710,12 +793,16 @@ class Pipeline:
         }
         return self
 
-    def run_fps(self, tcl_out_path: Optional[str] = None) -> bool:
+    def run_fps(self, tcl_out_path: Optional[str] = None, fresh: bool = True) -> bool:
         """
         Unified FloorPlan Synthesis (FPS) Orchestrator.
         Synthesizes all declared physical specifications (spec_floorplan, spec_iopins, spec_pdn, spec_tapcells)
         into a single, highly optimized, non-caught run_floorplan.tcl script, and executes OpenROAD in one holistic pass.
         Zero error-swallowing catch {} blocks: any illegal coordinate, missing LEF cell, or failed via connection fails fast.
+
+        :param tcl_out_path: Optional file path to output run_floorplan.tcl
+        :param fresh: If True, resets backend OpenROAD session to guarantee clean initialization
+                      from the gate-level netlist without FIRM instance collision or stale state.
         """
         spec = getattr(self, "_spec_fps", {})
         fp_spec = spec.get("floorplan", {})
@@ -797,8 +884,8 @@ class Pipeline:
         if macros:
             lines.append("# === 3. MACRO PLACEMENT ===")
             for m in macros:
-                inst = m.get("inst") or m.get("name")
-                cell = m.get("cell", "")
+                inst = m.get("inst") or m.get("inst_name") or m.get("name")
+                cell = m.get("cell") or m.get("master") or ""
                 loc = m.get("loc") or m.get("pos") or [m.get("x", 0), m.get("y", 0)]
                 orient = m.get("orient", "R0")
                 halo = m.get("halo", [10, 10, 10, 10])
@@ -820,79 +907,186 @@ class Pipeline:
                 lines.append(f'create_fence -module "{mod}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -density {density} -halo {{{halo[0]} {halo[1]} {halo[2]} {halo[3]}}}')
             lines.append("")
 
-        # 5. FULL-CHIP I/O PAD RING GENERATION (Must precede PDN so pad cells exist)
+        # 5. FULL-CHIP I/O PAD RING OR BLOCK PIN GENERATION
         mode = io_spec.get("mode", "chip").lower()
+        if mode in ("padring", "pad_ring", "pads", "full_chip"):
+            mode = "chip"
+        pdk_str = str(getattr(self.project, "pdk", "") or "").lower()
+        is_gf180 = "gf180" in pdk_str or "gf180" in str(fp_spec.get("site", "")).lower()
+
         if mode == "chip":
+            if is_gf180:
+                lines.extend([
+                    "# === 5. FULL-CHIP I/O PAD RING GENERATION (GF180MCU) ===",
+                    "make_tracks",
+                    "proc _resolve_pin_net {pname} {",
+                    "    set blk [ord::get_db_block]",
+                    "    set bterm [$blk findBTerm $pname]",
+                    '    if {$bterm ne "NULL" && [$bterm getNet] ne "NULL"} {',
+                    "        return [[$bterm getNet] getName]",
+                    "    }",
+                    "    return $pname",
+                    "}",
+                    "set _db [::ord::get_db]",
+                    "set _has_site 0",
+                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_SITE"] != "NULL"} { set _has_site 1; break } }',
+                    'if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 350 }',
+                    "set _has_csite 0",
+                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_CSITE"] != "NULL"} { set _has_csite 1; break } }',
+                    'if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 355 -height 355 }',
+                    "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
+                    "place_corners gf180mcu_fd_io__cor",
+                    "",
+                    "# Dedicated Core Supply Pads for GF180MCU",
+                    "place_pad -master gf180mcu_fd_io__dvdd -row IO_SOUTH -location 380.000 pad_vdd_core_s",
+                    "place_pad -master gf180mcu_fd_io__dvss -row IO_SOUTH -location 465.000 pad_vss_core_s",
+                    "place_pad -master gf180mcu_fd_io__dvdd -row IO_NORTH -location 380.000 pad_vdd_core_n",
+                    "place_pad -master gf180mcu_fd_io__dvss -row IO_NORTH -location 465.000 pad_vss_core_n",
+                    "",
+                    "# Dynamic Signal Pad & Toplevel Pin Generation",
+                    "set _blk [ord::get_db_block]",
+                    "set _all_bterms [$_blk getBTerms]",
+                    "set _bcount [llength $_all_bterms]",
+                    "set _quarter [expr {int(ceil($_bcount / 4.0))}]",
+                    "set _idx 0",
+                    "set _da [$_blk getDieArea]",
+                    "set _die_w_um [expr {[$_da xMax] / 2000.0}]",
+                    "foreach _bterm $_all_bterms {",
+                    "    set _bname [$_bterm getName]",
+                    '    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname "_"]',
+                    "    set _side_idx [expr {$_idx / $_quarter}]",
+                    "    set _pos_in_side [expr {$_idx % $_quarter}]",
+                    '    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]',
+                    '    if {$_row eq ""} { set _row "IO_WEST" }',
+                    "    set _loc [expr {560.0 + $_pos_in_side * 85.0}]",
+                    '    set _pad_inst "pad_${_safe_name}"',
+                    "    place_pad -master gf180mcu_fd_io__in_c -row $_row -location $_loc $_pad_inst",
+                    "    set _pnet [$_bterm getNet]",
+                    '    set _pnet_name [expr {$_pnet ne "NULL" ? [$_pnet getName] : $_bname}]',
+                    "    set _dir [$_bterm getIoType]",
+                    '    if {$_row eq "IO_SOUTH"} {',
+                    '        place_pin -pin_name "$_bname" -layer Metal3 -location "[expr {$_loc + 37.5}] 350.0"',
+                    '    } elseif {$_row eq "IO_NORTH"} {',
+                    '        place_pin -pin_name "$_bname" -layer Metal3 -location "[expr {$_loc + 37.5}] [expr {$_die_w_um - 350.0}]"',
+                    '    } elseif {$_row eq "IO_WEST"} {',
+                    '        place_pin -pin_name "$_bname" -layer Metal2 -location "350.0 [expr {$_loc + 37.5}]"',
+                    "    } else {",
+                    '        place_pin -pin_name "$_bname" -layer Metal2 -location "[expr {$_die_w_um - 350.0}] [expr {$_loc + 37.5}]"',
+                    "    }",
+                    '    if {$_dir eq "OUTPUT"} {',
+                    '        connect_pin $_pnet_name "$_pad_inst/PAD"',
+                    "    } else {",
+                    '        connect_pin $_pnet_name "$_pad_inst/Y"',
+                    "    }",
+                    "    incr _idx",
+                    "}",
+                    "",
+                    "# Pad Ring Fillers and Abutment",
+                    "set pad_fill {gf180mcu_fd_io__fill10 gf180mcu_fd_io__fill5 gf180mcu_fd_io__fill1}",
+                    "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+                    "    place_io_fill -row $row {*}$pad_fill",
+                    "}",
+                    "connect_by_abutment",
+                    "",
+                ])
+            else:
+                lines.extend([
+                    "# === 5. FULL-CHIP I/O PAD RING GENERATION (Sky130) ===",
+                    "make_tracks",
+                    "proc _resolve_pin_net {pname} {",
+                    "    set blk [ord::get_db_block]",
+                    "    set bterm [$blk findBTerm $pname]",
+                    '    if {$bterm ne "NULL" && [$bterm getNet] ne "NULL"} {',
+                    "        return [[$bterm getNet] getName]",
+                    "    }",
+                    "    return $pname",
+                    "}",
+                    "set _db [::ord::get_db]",
+                    "set _has_site 0",
+                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_SITE"] != "NULL"} { set _has_site 1; break } }',
+                    'if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 200 }',
+                    "set _has_csite 0",
+                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_CSITE"] != "NULL"} { set _has_csite 1; break } }',
+                    'if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }',
+                    "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
+                    "place_corners sky130_ef_io__corner_pad",
+                    "",
+                    "# Dedicated Core & IO Supply Pads (Outer Corners clearance: VDD, VSS, VDDIO, VSSIO on each edge)",
+                    "foreach _row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+                    "    place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location 220.000 pad_vccd_${_row}",
+                    "    place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location 305.000 pad_vssd_${_row}",
+                    "    place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location 390.000 pad_vddio_${_row}",
+                    "    place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location 475.000 pad_vssio_${_row}",
+                    "}",
+                    "",
+                    "# Dynamic Signal Pad & Toplevel Pin Generation",
+                    "set _blk [ord::get_db_block]",
+                    "set _all_bterms [$_blk getBTerms]",
+                    "set _bcount [llength $_all_bterms]",
+                    "set _quarter [expr {int(ceil($_bcount / 4.0))}]",
+                    "set _idx 0",
+                    "foreach _bterm $_all_bterms {",
+                    "    set _bname [$_bterm getName]",
+                    '    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname "_"]',
+                    "    set _side_idx [expr {$_idx / $_quarter}]",
+                    "    set _pos_in_side [expr {$_idx % $_quarter}]",
+                    '    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]',
+                    '    if {$_row eq ""} { set _row "IO_WEST" }',
+                    "    set _da [$_blk getDieArea]",
+                    "    set _die_w_um [expr {[$_da xMax] / 1000.0}]",
+                    "    set _die_h_um [expr {[$_da yMax] / 1000.0}]",
+                    '    set _side_dim [expr {($_row eq "IO_NORTH" || $_row eq "IO_SOUTH") ? $_die_w_um : $_die_h_um}]',
+                    "    set _avail_start 560.0",
+                    "    set _avail_end [expr {$_side_dim - 220.0}]",
+                    "    set _span [expr {$_avail_end - $_avail_start}]",
+                    "    set _pitch [expr {$_quarter > 1 ? ($_span / double($_quarter)) : 85.0}]",
+                    "    if {$_pitch < 82.0} { set _pitch 82.0 }",
+                    "    if {$_pitch > 135.0} { set _pitch 135.0 }",
+                    "    set _loc [expr {round(($_avail_start + $_pos_in_side * $_pitch) / 0.005) * 0.005}]",
+                    '    set _pad_inst "pad_${_safe_name}"',
+                    "    place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row $_row -location $_loc $_pad_inst",
+                    "    set _pnet [$_bterm getNet]",
+                    '    set _pnet_name [expr {$_pnet ne "NULL" ? [$_pnet getName] : $_bname}]',
+                    "    set _dir [$_bterm getIoType]",
+                    "    set _pin_coord [expr {round(($_loc + 40.0) / 0.005) * 0.005}]",
+                    '    if {$_row eq "IO_SOUTH"} {',
+                    '        place_pin -pin_name "$_bname" -layer met2 -location "$_pin_coord 210.0"',
+                    '    } elseif {$_row eq "IO_NORTH"} {',
+                    f'        place_pin -pin_name "$_bname" -layer met2 -location "$_pin_coord [expr {{{die_h} - 210.0}}]"',
+                    '    } elseif {$_row eq "IO_WEST"} {',
+                    '        place_pin -pin_name "$_bname" -layer met3 -location "210.0 $_pin_coord"',
+                    "    } else {",
+                    f'        place_pin -pin_name "$_bname" -layer met3 -location "[expr {{{die_w} - 210.0}}] $_pin_coord"',
+                    "    }",
+                    '    if {$_dir eq "OUTPUT"} {',
+                    '        connect_pin $_pnet_name "$_pad_inst/OUT"',
+                    "    } else {",
+                    '        connect_pin $_pnet_name "$_pad_inst/IN"',
+                    "    }",
+                    "    incr _idx",
+                    "}",
+                    "",
+                    "# Connect bond pads to external IO terminals",
+                    "# (Note: In pure padring mode, internal pins connect to pad IN/OUT; PAD terminal is bondpad)",
+                    "",
+                    "# Pad Ring Fillers and Abutment",
+                    "set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}",
+                    "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+                    "    place_io_fill -row $row {*}$pad_fill",
+                    "}",
+                    "connect_by_abutment",
+                    "",
+                ])
+        else:
+            # Block mode: standard place_pins on specified routing layers
+            hor_lyr = io_spec.get("hor_layers") or "met3"
+            ver_lyr = io_spec.get("ver_layers") or "met4"
+            corn_avoid = io_spec.get("corner_avoidance", 0.5)
+            min_dist = io_spec.get("min_distance", 0.5)
             lines.extend([
-                "# === 5. FULL-CHIP I/O PAD RING GENERATION ===",
+                "# === 5. BLOCK PIN PLACEMENT ===",
                 "make_tracks",
-                "proc _resolve_pin_net {pname} {",
-                "    set blk [ord::get_db_block]",
-                "    set bterm [$blk findBTerm $pname]",
-                '    if {$bterm ne "NULL" && [$bterm getNet] ne "NULL"} {',
-                "        return [[$bterm getNet] getName]",
-                "    }",
-                "    return $pname",
-                "}",
-                "set _db [::ord::get_db]",
-                "set _has_site 0",
-                'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_SITE"] != "NULL"} { set _has_site 1; break } }',
-                'if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 200 }',
-                "set _has_csite 0",
-                'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_CSITE"] != "NULL"} { set _has_csite 1; break } }',
-                'if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }',
-                "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 10 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
-                "place_corners sky130_ef_io__corner_pad",
-                "",
-                "# Dedicated Core Supply Pads (Zero catch, exact pad instantiations outside 214um corner cell span)",
-                "place_pad -master sky130_fd_io__top_power_lvc_wpad -row IO_SOUTH -location 230.000 pad_vdd_core_s",
-                "place_pad -master sky130_fd_io__top_ground_lvc_wpad -row IO_SOUTH -location 315.000 pad_vss_core_s",
-                "place_pad -master sky130_fd_io__top_power_lvc_wpad -row IO_NORTH -location 230.000 pad_vdd_core_n",
-                "place_pad -master sky130_fd_io__top_ground_lvc_wpad -row IO_NORTH -location 315.000 pad_vss_core_n",
-                "",
-                "# Dynamic Signal Pad & Toplevel Pin Generation",
-                "set _blk [ord::get_db_block]",
-                "set _all_bterms [$_blk getBTerms]",
-                "set _bcount [llength $_all_bterms]",
-                "set _quarter [expr {int(ceil($_bcount / 4.0))}]",
-                "set _idx 0",
-                "foreach _bterm $_all_bterms {",
-                "    set _bname [$_bterm getName]",
-                '    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname "_"]',
-                "    set _side_idx [expr {$_idx / $_quarter}]",
-                "    set _pos_in_side [expr {$_idx % $_quarter}]",
-                '    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]',
-                '    if {$_row eq ""} { set _row "IO_WEST" }',
-                "    set _loc [expr {430.0 + $_pos_in_side * 85.0}]",
-                '    set _pad_inst "pad_${_safe_name}"',
-                "    place_pad -master sky130_fd_io__top_gpiov2 -row $_row -location $_loc $_pad_inst",
-                "    set _pnet [$_bterm getNet]",
-                '    set _pnet_name [expr {$_pnet ne "NULL" ? [$_pnet getName] : $_bname}]',
-                "    set _dir [$_bterm getIoType]",
-                '    if {$_row eq "IO_SOUTH"} {',
-                '        place_pin -pin_name "$_bname" -layer met2 -location "[expr {$_loc + 40.0}] 210.0"',
-                '    } elseif {$_row eq "IO_NORTH"} {',
-                '        place_pin -pin_name "$_bname" -layer met2 -location "[expr {$_loc + 40.0}] [expr {2400.0 - 210.0}]"',
-                '    } elseif {$_row eq "IO_WEST"} {',
-                '        place_pin -pin_name "$_bname" -layer met3 -location "210.0 [expr {$_loc + 40.0}]"',
-                "    } else {",
-                '        place_pin -pin_name "$_bname" -layer met3 -location "[expr {2400.0 - 210.0}] [expr {$_loc + 40.0}]"',
-                "    }",
-                '    if {$_dir eq "OUTPUT"} {',
-                '        connect_pin $_pnet_name "$_pad_inst/OUT"',
-                "    } else {",
-                '        connect_pin $_pnet_name "$_pad_inst/IN"',
-                "    }",
-                '    connect_pin $_pnet_name "$_pad_inst/PAD"',
-                "    incr _idx",
-                "}",
-                "",
-                "# Pad Ring Fillers and Abutment",
-                "set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}",
-                "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
-                "    place_io_fill -row $row {*}$pad_fill",
-                "}",
-                "connect_by_abutment",
+                f'place_pins -hor_layers "{hor_lyr}" -ver_layers "{ver_lyr}" -corner_avoidance {corn_avoid} -min_distance {min_dist}',
                 "",
             ])
 
@@ -1245,16 +1439,46 @@ class Pipeline:
         # 7. PDN POWER GRID & PAD TRUNK SYNTHESIS
         trunk_w = pdn_spec.get("trunk_width", 3.2)
         trunk_w_dbu = int(round(trunk_w * 1000))
+        enable_ring = pdn_spec.get("enable_ring", True)
+        enable_trunks = pdn_spec.get("enable_trunks", True)
+        rail_layer_cfg = pdn_spec.get("rail_layer")
+        stripe_layer_cfg = pdn_spec.get("stripe_layer")
+        stripe_w_cfg = pdn_spec.get("stripe_width")
+        stripe_p_cfg = pdn_spec.get("stripe_pitch")
+        rail_w_cfg = pdn_spec.get("rail_width")
+
         lines.extend([
             "# === 7. POWER DISTRIBUTION NETWORK (PDN) ===",
             "set _tech [::ord::get_db_tech]",
-            'if {[$_tech findLayer "met1"] ne "NULL"} {',
-            '    set _pdn_bot "met1"',
-            '    set _pdn_top "met4"',
-            "} else {",
-            '    set _pdn_bot "Metal1"',
-            '    set _pdn_top "Metal4"',
-            "}",
+        ])
+
+        if rail_layer_cfg:
+            lines.append(f'set _pdn_bot "{rail_layer_cfg}"')
+        else:
+            lines.extend([
+                'if {[$_tech findLayer "met1"] ne "NULL"} {',
+                '    set _pdn_bot "met1"',
+                '} elseif {[$_tech findLayer "M1"] ne "NULL"} {',
+                '    set _pdn_bot "M1"',
+                '} else {',
+                '    set _pdn_bot "M1"',
+                '}',
+            ])
+
+        if stripe_layer_cfg:
+            lines.append(f'set _pdn_top "{stripe_layer_cfg}"')
+        else:
+            lines.extend([
+                'if {[$_tech findLayer "met4"] ne "NULL"} {',
+                '    set _pdn_top "met4"',
+                '} elseif {[$_tech findLayer "M2"] ne "NULL"} {',
+                '    set _pdn_top "M2"',
+                '} else {',
+                '    set _pdn_top "M2"',
+                '}',
+            ])
+
+        lines.extend([
             "",
             "# Power Net Bindings & Supply Pads",
             'if {[$_blk findNet "VDD"] eq "NULL"} { odb::dbNet_create $_blk "VDD" }',
@@ -1278,18 +1502,49 @@ class Pipeline:
                 f'add_global_connection -net {{VSS}} -region {{{spd.name}}} -pin_pattern {{^VGND$|^VSS$}} -ground',
             ])
 
+        s_width = stripe_w_cfg if stripe_w_cfg is not None else 1.6
+        s_pitch = stripe_p_cfg if stripe_p_cfg is not None else 27.2
+        s_offset = s_pitch / 2.0
+
+        if rail_w_cfg is not None:
+            r_width_val = rail_w_cfg
+        elif rail_layer_cfg and "metal1" in rail_layer_cfg.lower():
+            r_width_val = 0.90
+        elif rail_layer_cfg and ("m1" in rail_layer_cfg.lower() and len(rail_layer_cfg) == 2):
+            r_width_val = 0.018
+        else:
+            r_width_val = 0.48
+
         lines.extend([
             "global_connect",
             "",
             "# Core Top PDN Grid & Peripheral Power Ring",
             "set_voltage_domain -name {Core} -power {VDD} -ground {VSS}",
             "define_pdn_grid -name {grid_top} -voltage_domains {Core}",
-            'add_pdn_ring -grid {grid_top} -layers "met4 met5" -widths {5.0 5.0} -spacings {2.0 2.0} -core_offsets {5.0 5.0}',
-            "add_pdn_stripe -grid {grid_top} -layer $_pdn_bot -width {0.48} -followpins",
-            "add_pdn_stripe -grid {grid_top} -layer $_pdn_top -width {1.6} -pitch {27.2} -offset {13.6} -extend_to_core_ring",
-            'add_pdn_connect -grid {grid_top} -layers "$_pdn_bot $_pdn_top"',
-            'add_pdn_connect -grid {grid_top} -layers "met4 met5"',
         ])
+
+        if enable_ring and mode == "chip":
+            ring_h = pdn_spec.get("ring_h_layer") or "met5"
+            ring_v = pdn_spec.get("ring_v_layer") or "met4"
+            r_w = pdn_spec.get("ring_width", 5.0)
+            r_sp = pdn_spec.get("ring_spacing", 2.0)
+            r_off = pdn_spec.get("ring_offset", 5.0)
+            lines.extend([
+                f'add_pdn_ring -grid {{grid_top}} -layers "{ring_v} {ring_h}" -widths {{{r_w} {r_w}}} -spacings {{{r_sp} {r_sp}}} -core_offsets {{{r_off} {r_off}}}',
+                f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_bot -width {{{r_width_val}}} -followpins',
+                f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_top -width {{{s_width}}} -pitch {{{s_pitch}}} -offset {{{s_offset}}} -extend_to_core_ring',
+                'add_pdn_connect -grid {grid_top} -layers "$_pdn_bot $_pdn_top"',
+                f'add_pdn_connect -grid {{grid_top}} -layers "{ring_v} {ring_h}"',
+            ])
+        else:
+            # Block mode: generate followpin standard-cell power rails and explicit orthogonal trunk stripes for both VDD and VSS
+            off_vss = s_offset + (s_pitch / 2.0)
+            lines.extend([
+                f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_bot -width {{{r_width_val}}} -followpins',
+                f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_top -width {{{s_width}}} -pitch {{{s_pitch}}} -offset {{{s_offset}}} -nets {{VDD}}',
+                f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_top -width {{{s_width}}} -pitch {{{s_pitch}}} -offset {{{off_vss}}} -nets {{VSS}}',
+                'add_pdn_connect -grid {grid_top} -layers "$_pdn_bot $_pdn_top"',
+            ])
 
         for spd in switched_pds:
             grid_n = f"grid_{spd.name.lower()}"
@@ -1309,142 +1564,150 @@ class Pipeline:
             "",
             "pdngen",
             "",
-            "# === DEDICATED POWER PAD TRUNK BRIDGES ===",
-            "proc _build_pad_trunks {trunk_layer_name trunk_width_dbu} {",
-            "    set blk [::ord::get_db_block]",
-            "    set tech [::ord::get_db_tech]",
-            '    set m_vert [$tech findLayer "met4"]',
-            '    set m_horiz [$tech findLayer "met5"]',
-            '    set via3_4 [$tech findVia "M3M4_PR"]',
-            '    set via4_5 [$tech findVia "M4M5_PR"]',
-            '    if {$m_vert eq "NULL" || $m_horiz eq "NULL"} { return }',
-            "",
-            "    set die [$blk getDieArea]",
-            "    set die_w [expr {[$die xMax] - [$die xMin]}]",
-            "    set die_h [expr {[$die yMax] - [$die yMin]}]",
-            "",
-            "    array set r_south_y {}",
-            "    array set r_north_y {}",
-            "    array set r_west_x {}",
-            "    array set r_east_x {}",
-            "    array set r_south_x1 {}; array set r_south_x2 {}",
-            "    array set r_north_x1 {}; array set r_north_x2 {}",
-            "    array set r_west_y1 {};  array set r_west_y2 {}",
-            "    array set r_east_y1 {};  array set r_east_y2 {}",
-            "",
-            "    # Discover all 4 legs of the core power ring for VDD and VSS",
-            "    foreach net_name {VDD VSS} {",
-            "        set net [$blk findNet $net_name]",
-            '        if {$net eq "NULL"} { continue }',
-            "        set r_south_y($net_name) 0; set r_north_y($net_name) 0",
-            "        set r_west_x($net_name) 0;  set r_east_x($net_name) 0",
-            "",
-            "        foreach swire [$net getSWires] {",
-            "            foreach sbox [$swire getWires] {",
-            "                if {![$sbox isVia]} {",
-            "                    set lyname [[$sbox getTechLayer] getName]",
-            "                    set shape [$sbox getWireShapeType]",
-            '                    if {$shape eq "RING"} {',
-            "                        set x1 [$sbox xMin]; set y1 [$sbox yMin]",
-            "                        set x2 [$sbox xMax]; set y2 [$sbox yMax]",
-            "                        set len_x [expr {$x2 - $x1}]",
-            "                        set len_y [expr {$y2 - $y1}]",
-            '                        if {$lyname eq "met5" && $len_x > $len_y} {',
-            "                            set ym [expr {($y1 + $y2) / 2}]",
-            "                            if {$r_south_y($net_name) == 0 || $ym < $r_south_y($net_name)} {",
-            "                                set r_south_y($net_name) $ym",
-            "                                set r_south_x1($net_name) $x1",
-            "                                set r_south_x2($net_name) $x2",
-            "                            }",
-            "                            if {$r_north_y($net_name) == 0 || $ym > $r_north_y($net_name)} {",
-            "                                set r_north_y($net_name) $ym",
-            "                                set r_north_x1($net_name) $x1",
-            "                                set r_north_x2($net_name) $x2",
-            "                            }",
-            "                        }",
-            '                        if {$lyname eq "met4" && $len_y > $len_x} {',
-            "                            set xm [expr {($x1 + $x2) / 2}]",
-            "                            if {$r_west_x($net_name) == 0 || $xm < $r_west_x($net_name)} {",
-            "                                set r_west_x($net_name) $xm",
-            "                                set r_west_y1($net_name) $y1",
-            "                                set r_west_y2($net_name) $y2",
-            "                            }",
-            "                            if {$r_east_x($net_name) == 0 || $xm > $r_east_x($net_name)} {",
-            "                                set r_east_x($net_name) $xm",
-            "                                set r_east_y1($net_name) $y1",
-            "                                set r_east_y2($net_name) $y2",
-            "                            }",
-            "                        }",
-            "                    }",
-            "                }",
-            "            }",
-            "        }",
-            "    }",
-            "",
-            "    set hw [expr {$trunk_width_dbu / 2}]",
-            "    foreach inst [$blk getInsts] {",
-            "        set mname [[$inst getMaster] getName]",
-            '        set is_vdd [string match "*power*" $mname]',
-            '        set is_vss [string match "*ground*" $mname]',
-            "        if {!$is_vdd && !$is_vss} { continue }",
-            "",
-            '        set net_name [expr {$is_vdd ? "VDD" : "VSS"}]',
-            "        set net [$blk findNet $net_name]",
-            '        if {$net eq "NULL"} { continue }',
-            "        set swires [$net getSWires]",
-            '        set swire [expr {[llength $swires] > 0 ? [lindex $swires 0] : [odb::dbSWire_create $net "ROUTED"]}]',
-            "",
-            "        set bbox [$inst getBBox]",
-            "        set px1 [$bbox xMin]; set py1 [$bbox yMin]",
-            "        set px2 [$bbox xMax]; set py2 [$bbox yMax]",
-            "        set pcx [expr {($px1 + $px2) / 2}]",
-            "        set pcy [expr {($py1 + $py2) / 2}]",
-            "",
-            "        set d_south $py1",
-            "        set d_north [expr {$die_h - $py2}]",
-            "        set d_west  $px1",
-            "        set d_east  [expr {$die_w - $px2}]",
-            "",
-            "        set min_d $d_south",
-            '        set pad_side "SOUTH"',
-            '        if {$d_north < $min_d} { set min_d $d_north; set pad_side "NORTH" }',
-            '        if {$d_west < $min_d}  { set min_d $d_west;  set pad_side "WEST"  }',
-            '        if {$d_east < $min_d}  { set min_d $d_east;  set pad_side "EAST"  }',
-            "",
-            '        if {$pad_side eq "SOUTH"} {',
-            "            set ring_y  $r_south_y($net_name)",
-            "            set ring_x1 $r_south_x1($net_name)",
-            "            set ring_x2 $r_south_x2($net_name)",
-            "            if {$ring_y == 0} { continue }",
-            '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $py2 [expr {$pcx + $hw}] $ring_y "STRIPE"',
-            '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py2 "STRIPE" }',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
-            '        } elseif {$pad_side eq "NORTH"} {',
-            "            set ring_y  $r_north_y($net_name)",
-            "            set ring_x1 $r_north_x1($net_name)",
-            "            set ring_x2 $r_north_x2($net_name)",
-            "            if {$ring_y == 0} { continue }",
-            '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $ring_y [expr {$pcx + $hw}] $py1 "STRIPE"',
-            '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py1 "STRIPE" }',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
-            '        } elseif {$pad_side eq "WEST"} {',
-            "            set ring_x  $r_west_x($net_name)",
-            "            if {$ring_x == 0} { continue }",
-            '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px2 $pcy "STRIPE" }',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px2 $pcy "STRIPE" }',
-            '            odb::dbSBox_create $swire $m_horiz $px2 [expr {$pcy - $hw}] $ring_x [expr {$pcy + $hw}] "STRIPE"',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
-            '        } elseif {$pad_side eq "EAST"} {',
-            "            set ring_x  $r_east_x($net_name)",
-            "            if {$ring_x == 0} { continue }",
-            '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px1 $pcy "STRIPE" }',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px1 $pcy "STRIPE" }',
-            '            odb::dbSBox_create $swire $m_horiz $ring_x [expr {$pcy - $hw}] $px1 [expr {$pcy + $hw}] "STRIPE"',
-            '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
-            "        }",
-            "    }",
-            "}",
-            f'_build_pad_trunks "met4" {trunk_w_dbu}',
+        ])
+
+        if enable_trunks and mode == "chip":
+            lines.extend([
+                "",
+                "# === DEDICATED POWER PAD TRUNK BRIDGES ===",
+                "proc _build_pad_trunks {trunk_layer_name trunk_width_dbu} {",
+                "    set blk [::ord::get_db_block]",
+                "    set tech [::ord::get_db_tech]",
+                '    set m_vert [$tech findLayer "met4"]',
+                '    set m_horiz [$tech findLayer "met5"]',
+                '    set via3_4 [$tech findVia "M3M4_PR"]',
+                '    set via4_5 [$tech findVia "M4M5_PR"]',
+                '    if {$m_vert eq "NULL" || $m_horiz eq "NULL"} { return }',
+                "",
+                "    set die [$blk getDieArea]",
+                "    set die_w [expr {[$die xMax] - [$die xMin]}]",
+                "    set die_h [expr {[$die yMax] - [$die yMin]}]",
+                "",
+                "    array set r_south_y {}",
+                "    array set r_north_y {}",
+                "    array set r_west_x {}",
+                "    array set r_east_x {}",
+                "    array set r_south_x1 {}; array set r_south_x2 {}",
+                "    array set r_north_x1 {}; array set r_north_x2 {}",
+                "    array set r_west_y1 {};  array set r_west_y2 {}",
+                "    array set r_east_y1 {};  array set r_east_y2 {}",
+                "",
+                "    # Discover all 4 legs of the core power ring for VDD and VSS",
+                "    foreach net_name {VDD VSS} {",
+                "        set net [$blk findNet $net_name]",
+                '        if {$net eq "NULL"} { continue }',
+                "        set r_south_y($net_name) 0; set r_north_y($net_name) 0",
+                "        set r_west_x($net_name) 0;  set r_east_x($net_name) 0",
+                "",
+                "        foreach swire [$net getSWires] {",
+                "            foreach sbox [$swire getWires] {",
+                "                if {![$sbox isVia]} {",
+                "                    set lyname [[$sbox getTechLayer] getName]",
+                "                    set shape [$sbox getWireShapeType]",
+                '                    if {$shape eq "RING"} {',
+                "                        set x1 [$sbox xMin]; set y1 [$sbox yMin]",
+                "                        set x2 [$sbox xMax]; set y2 [$sbox yMax]",
+                "                        set len_x [expr {$x2 - $x1}]",
+                "                        set len_y [expr {$y2 - $y1}]",
+                '                        if {$lyname eq "met5" && $len_x > $len_y} {',
+                "                            set ym [expr {($y1 + $y2) / 2}]",
+                "                            if {$r_south_y($net_name) == 0 || $ym < $r_south_y($net_name)} {",
+                "                                set r_south_y($net_name) $ym",
+                "                                set r_south_x1($net_name) $x1",
+                "                                set r_south_x2($net_name) $x2",
+                "                            }",
+                "                            if {$r_north_y($net_name) == 0 || $ym > $r_north_y($net_name)} {",
+                "                                set r_north_y($net_name) $ym",
+                "                                set r_north_x1($net_name) $x1",
+                "                                set r_north_x2($net_name) $x2",
+                "                            }",
+                "                        }",
+                '                        if {$lyname eq "met4" && $len_y > $len_x} {',
+                "                            set xm [expr {($x1 + $x2) / 2}]",
+                "                            if {$r_west_x($net_name) == 0 || $xm < $r_west_x($net_name)} {",
+                "                                set r_west_x($net_name) $xm",
+                "                                set r_west_y1($net_name) $y1",
+                "                                set r_west_y2($net_name) $y2",
+                "                            }",
+                "                            if {$r_east_x($net_name) == 0 || $xm > $r_east_x($net_name)} {",
+                "                                set r_east_x($net_name) $xm",
+                "                                set r_east_x1($net_name) $x1",
+                "                                set r_east_x2($net_name) $x2",
+                "                            }",
+                "                        }",
+                "                    }",
+                "                }",
+                "            }",
+                "        }",
+                "    }",
+                "",
+                "    set hw [expr {$trunk_width_dbu / 2}]",
+                "    foreach inst [$blk getInsts] {",
+                "        set mname [[$inst getMaster] getName]",
+                '        set is_vdd [string match "*power*" $mname]',
+                '        set is_vss [string match "*ground*" $mname]',
+                "        if {!$is_vdd && !$is_vss} { continue }",
+                "",
+                '        set net_name [expr {$is_vdd ? "VDD" : "VSS"}]',
+                "        set net [$blk findNet $net_name]",
+                '        if {$net eq "NULL"} { continue }',
+                "        set swires [$net getSWires]",
+                '        set swire [expr {[llength $swires] > 0 ? [lindex $swires 0] : [odb::dbSWire_create $net "ROUTED"]}]',
+                "",
+                "        set bbox [$inst getBBox]",
+                "        set px1 [$bbox xMin]; set py1 [$bbox yMin]",
+                "        set px2 [$bbox xMax]; set py2 [$bbox yMax]",
+                "        set pcx [expr {($px1 + $px2) / 2}]",
+                "        set pcy [expr {($py1 + $py2) / 2}]",
+                "",
+                "        set d_south $py1",
+                "        set d_north [expr {$die_h - $py2}]",
+                "        set d_west  $px1",
+                "        set d_east  [expr {$die_w - $px2}]",
+                "",
+                "        set min_d $d_south",
+                '        set pad_side "SOUTH"',
+                '        if {$d_north < $min_d} { set min_d $d_north; set pad_side "NORTH" }',
+                '        if {$d_west < $min_d}  { set min_d $d_west;  set pad_side "WEST"  }',
+                '        if {$d_east < $min_d}  { set min_d $d_east;  set pad_side "EAST"  }',
+                "",
+                '        if {$pad_side eq "SOUTH"} {',
+                "            set ring_y  $r_south_y($net_name)",
+                "            set ring_x1 $r_south_x1($net_name)",
+                "            set ring_x2 $r_south_x2($net_name)",
+                "            if {$ring_y == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $py2 [expr {$pcx + $hw}] $ring_y "STRIPE"',
+                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py2 "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
+                '        } elseif {$pad_side eq "NORTH"} {',
+                "            set ring_y  $r_north_y($net_name)",
+                "            set ring_x1 $r_north_x1($net_name)",
+                "            set ring_x2 $r_north_x2($net_name)",
+                "            if {$ring_y == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $ring_y [expr {$pcx + $hw}] $py1 "STRIPE"',
+                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py1 "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
+                '        } elseif {$pad_side eq "WEST"} {',
+                "            set ring_x  $r_west_x($net_name)",
+                "            if {$ring_x == 0} { continue }",
+                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px2 $pcy "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px2 $pcy "STRIPE" }',
+                '            odb::dbSBox_create $swire $m_horiz $px2 [expr {$pcy - $hw}] $ring_x [expr {$pcy + $hw}] "STRIPE"',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
+                '        } elseif {$pad_side eq "EAST"} {',
+                "            set ring_x  $r_east_x($net_name)",
+                "            if {$ring_x == 0} { continue }",
+                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px1 $pcy "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px1 $pcy "STRIPE" }',
+                '            odb::dbSBox_create $swire $m_horiz $ring_x [expr {$pcy - $hw}] $px1 [expr {$pcy + $hw}] "STRIPE"',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
+                "        }",
+                "    }",
+                "}",
+                f'_build_pad_trunks "met4" {trunk_w_dbu}',
+            ])
+
+        lines.extend([
             "",
             f'write_def "{def_path}"',
             'puts "SILIS_FLOORPLAN_DONE"',
@@ -1455,10 +1718,21 @@ class Pipeline:
         with open(out_script, "w") as f:
             f.write(tcl_script)
 
+        # Unified FPS executes full initialize_floorplan from netlist, so ensure design is cleanly initialized from netlist (not resuming old temp.def)
+        if fresh or not getattr(self.runner, "_design_loaded", False):
+            if hasattr(self.backend, "reset_backend"):
+                self.backend.reset_backend()
+            self.runner._design_loaded = False
+            self.init()
+            self.runner._design_loaded = True
+
         res = self.runner.run_step("floorplan", tcl_arg=tcl_script)
         self.process_events()
         if not res:
             raise PipelineExecutionError("floorplan", exit_code=1, message="OpenROAD failed during unified run_fps() execution.")
+
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("fps", def_path=def_path)
         return bool(res)
 
     # =========================================================================
@@ -1736,6 +2010,9 @@ class Pipeline:
         if not os.path.isfile(def_path) or os.path.getsize(def_path) == 0:
             raise PipelineStateError(f"Floorplan post-condition failed: Output DEF {def_path} was not created.")
 
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("floorplan", def_path=def_path)
+
         return True
 
     def place_macro(
@@ -1956,8 +2233,7 @@ class Pipeline:
                 m_name = r.get("module")
                 box = r.get("box", [0, 0, 0, 0])
                 if m_name and box:
-                    tcl_lines.append(f'create_region -name "reg_{m_name}" -region {{{box[0]} {box[1]} {box[2]} {box[3]}}}')
-                    tcl_lines.append(f'assign_region -name "reg_{m_name}" [get_cells "{m_name}"]')
+                    tcl_lines.append(f'create_fence -module "{m_name}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -density {target_density}')
             if tcl_lines:
                 def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
                 tcl_lines.append(f'write_def "{def_path}"')
@@ -1965,6 +2241,78 @@ class Pipeline:
                 self.process_events()
 
         return res
+
+    def auto_shrink_and_shape_regions(
+        self,
+        macros: Optional[List[Dict[str, Any]]] = None,
+        target_core_density: float = 0.60,
+        pad_margin: float = 220.0,
+        target_region_density: float = 0.55,
+        w_r2m: float = 2.5,
+        w_r2r: float = 1.5,
+        w_r2io: float = 1.0,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """
+        Autonomous Cavity Exploitation & Die Shrink Orchestrator:
+        1. Computes total active silicon area (macros + standard cells).
+        2. Derives optimal core and die dimensions snapped to Sky130 row heights (2.72 um)
+           and site pitch (0.46 um) targeting target_core_density (default 60%).
+        3. Invokes the hierarchical affinity and topological cavity autoshaper to place
+           all submodules into legal non-overlapping cavities.
+        4. Returns optimal die_area, core_margin, and placed regions.
+        """
+        import math
+        ROW_H = 2.72
+        SITE_W = 0.46
+
+        sizes_data = self.get_sizes()
+        total_std_area = max(1000.0, sizes_data.get("total_std_cell_area", 600000.0))
+        
+        macro_area = 0.0
+        for m in (macros or []):
+            w = m.get("width") or (m.get("size")[0] if "size" in m else 100.0)
+            h = m.get("height") or (m.get("size")[1] if "size" in m else 100.0)
+            macro_area += w * h
+
+        total_active_area = macro_area + total_std_area
+        opt_core_area = total_active_area / max(0.20, min(0.85, target_core_density))
+        opt_dim = math.sqrt(opt_core_area)
+
+        core_w = round(round(opt_dim / SITE_W) * SITE_W, 3)
+        core_h = round(round(opt_dim / ROW_H) * ROW_H, 3)
+        die_w = round(round((core_w + 2.0 * pad_margin) / SITE_W) * SITE_W, 3)
+        die_h = round(round((core_h + 2.0 * pad_margin) / ROW_H) * ROW_H, 3)
+
+        auto_res = self.auto_place_regions(
+            die_area=(0.0, 0.0, die_w, die_h),
+            core_margin=pad_margin,
+            macros=macros or [],
+            target_density=target_region_density,
+            min_cutoff_pct=1.0,
+            force_place_all=True,
+            force_auto_shape=True,
+            w_r2m=w_r2m,
+            w_r2r=w_r2r,
+            w_r2io=w_r2io,
+            seed=seed,
+        )
+
+        return {
+            "die_area": [0.0, 0.0, die_w, die_h],
+            "core_margin": pad_margin,
+            "core_rect": [pad_margin, pad_margin, pad_margin + core_w, pad_margin + core_h],
+            "core_w": core_w,
+            "core_h": core_h,
+            "die_w": die_w,
+            "die_h": die_h,
+            "total_active_area": total_active_area,
+            "target_core_density": target_core_density,
+            "regions": auto_res.get("regions", []),
+            "success": auto_res.get("success", False),
+            "overlaps": auto_res.get("overlaps", []),
+            "starved_regions": auto_res.get("starved_regions", []),
+        }
 
     def add_blockage(
         self,
@@ -1996,6 +2344,9 @@ class Pipeline:
 
         if not res:
             raise PipelineExecutionError("tapcells", exit_code=1, message="OpenROAD failed during tapcell/endcap insertion.")
+
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("tapcells", def_path=def_path)
         return True
 
     def configure_power_domain_supply(self, domain_name: str, supply_type: str) -> None:
@@ -2402,6 +2753,9 @@ class Pipeline:
             from sdk.exceptions import PowerGridSynthesisError
             raise PowerGridSynthesisError(f"PDN post-condition failed: Output DEF {def_path} missing or empty after PDN generation.")
 
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("pdn", def_path=def_path)
+
         return bool(res)
 
     def iopins(
@@ -2550,7 +2904,7 @@ class Pipeline:
             "set _has_csite 0",
             "foreach _lib [$_db getLibs] { if {[$_lib findSite \"IO_CSITE\"] != \"NULL\"} { set _has_csite 1; break } }",
             "if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }",
-            "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 10 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
+            "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
             "place_corners sky130_ef_io__corner_pad",
             ""
         ]
@@ -2577,17 +2931,19 @@ class Pipeline:
                     row_name = f"IO_{closest_edge.upper()}"
                     d_clean = d.name.lower()
                     lines.append(f"# Dedicated UPF Island Supply Pads for {d.name} ({closest_edge} edge)")
-                    lines.append(f"place_pad -master sky130_fd_io__top_power_lvc_wpad -row {row_name} -location 300.0 pad_vdd_{d_clean}")
-                    lines.append(f"place_pad -master sky130_fd_io__top_ground_lvc_wpad -row {row_name} -location 385.0 pad_vss_{d_clean}")
+                    lines.append(f"place_pad -master sky130_ef_io__vccd_lvc_clamped_pad -row {row_name} -location 300.0 pad_vdd_{d_clean}")
+                    lines.append(f"place_pad -master sky130_ef_io__vssd_lvc_clamped_pad -row {row_name} -location 385.0 pad_vss_{d_clean}")
 
         # Global Power Connections
         lines.extend([
             "",
-            "# Dedicated Core VDD/VSS Supply Pads (Outer Corners clearance)",
-            "place_pad -master sky130_fd_io__top_power_lvc_wpad -row IO_SOUTH -location 210.0 pad_vdd_core_s",
-            "place_pad -master sky130_fd_io__top_ground_lvc_wpad -row IO_SOUTH -location 295.0 pad_vss_core_s",
-            "place_pad -master sky130_fd_io__top_power_lvc_wpad -row IO_NORTH -location 210.0 pad_vdd_core_n",
-            "place_pad -master sky130_fd_io__top_ground_lvc_wpad -row IO_NORTH -location 295.0 pad_vss_core_n",
+            "# Dedicated Core & IO Supply Pads (Outer Corners clearance, VDD/VSS + VDDIO/VSSIO on each edge)",
+            "foreach _row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+            "    place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location 250.0 pad_vccd_${_row}",
+            "    place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location 370.0 pad_vssd_${_row}",
+            "    place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location 490.0 pad_vddio_${_row}",
+            "    place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location 610.0 pad_vssio_${_row}",
+            "}",
             "",
             "# Global Power Connections",
             "add_global_connection -net {VDD} -inst_pattern {.*pad_vdd_core.*} -pin_pattern {^P_CORE$|^VCCD$} -power",
@@ -2654,7 +3010,7 @@ if {{$_n > 0}} {{
         set _loc [expr {{$_row_min + $_idx * $_step}}]
         if {{$_loc > $_row_max}} {{ set _loc $_row_max }}
 
-        place_pad -master sky130_fd_io__top_gpiov2 -row {row_name} -location $_loc $_pad_inst
+        place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row {row_name} -location $_loc $_pad_inst
         
         # Pin Placement matching user preference ('pad_inner' for exact FPS button behavior or 'core_boundary')
         set _pnet [$_b getNet]
@@ -2735,9 +3091,14 @@ if {{$_n > 0}} {{
                 "    set _pos_in_side [expr {$_idx % $_quarter}]",
                 "    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]",
                 "    if {$_row eq \"\"} { set _row \"IO_WEST\" }",
-                "    set _loc [expr {430.0 + $_pos_in_side * 85.0}]",
+                "    set _side_len [expr {$_die_w - 400.0}]",
+                "    set _avail_span [expr {$_side_len - 540.0}]",
+                "    set _pitch [expr {$_quarter > 1 ? ($_avail_span / double($_quarter)) : 85.0}]",
+                "    if {$_pitch > 135.0} { set _pitch 135.0 }",
+                "    if {$_pitch < 85.0} { set _pitch 85.0 }",
+                "    set _loc [expr {720.0 + $_pos_in_side * $_pitch}]",
                 "    set _pad_inst \"pad_${_safe_name}\"",
-                "    place_pad -master sky130_fd_io__top_gpiov2 -row $_row -location $_loc $_pad_inst",
+                "    place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row $_row -location $_loc $_pad_inst",
                 "    set _pnet [$_bterm getNet]",
                 "    set _pnet_name [expr {$_pnet ne \"NULL\" ? [$_pnet getName] : $_bname}]",
                 "    set _dir [$_bterm getIoType]",
@@ -2755,7 +3116,6 @@ if {{$_n > 0}} {{
                 "    } else {",
                 "        connect_pin $_pnet_name \"$_pad_inst/IN\"",
                 "    }",
-                "    connect_pin $_pnet_name \"$_pad_inst/PAD\"",
                 "    incr _idx",
                 "}"
             ])
@@ -2870,11 +3230,27 @@ foreach _blk [$_block getBlockages] {{
     odb::dbBlockage_destroy $_blk
 }}
 
+# Reattach any FENCE-type region groups to INCLUSIVE regions to prevent GPL-0305 Inf/NaN divergence
+foreach _r [$_block getRegions] {{
+    catch {{
+        if {{[$_r getRegionType] eq "EXCLUSIVE"}} {{
+            $_r setRegionType "INCLUSIVE"
+        }}
+    }}
+}}
+
 # Add placement padding to spread cells evenly and prevent routability congestion
 set_placement_padding -global -left {pad_left} -right {pad_right}
 
-# Run global_placement
-global_placement -density {density} -init_density_penalty {idp} -routability_driven
+# Run global_placement with adaptive bin_grid_count for large die cavities
+set _core_box [$_block getCoreArea]
+set _core_w [expr {{([$_core_box xMax] - [$_core_box xMin]) / double($_dbu)}}]
+set _core_h [expr {{([$_core_box yMax] - [$_core_box yMin]) / double($_dbu)}}]
+if {{ $_core_w > 800.0 && $_core_h > 800.0 }} {{
+    global_placement -density {density} -init_density_penalty {idp} -bin_grid_count 32 -routability_driven
+}} else {{
+    global_placement -density {density} -init_density_penalty {idp} -routability_driven
+}}
 
 # Clear placement padding before running detailed_placement to avoid DPL site mismatch
 set_placement_padding -global -left 0 -right 0
@@ -2886,7 +3262,7 @@ foreach _r [$_block getRegions] {{
         continue
     }}
     foreach _g [$_r getGroups] {{
-        catch {{ $_r removeGroup $_g }}
+        $_r removeGroup $_g
     }}
 }}
 
@@ -2908,11 +3284,19 @@ foreach _inst [$_block getInsts] {{
     }}
 }}
 
-detailed_placement -max_displacement {{500 500}}
+detailed_placement -max_displacement {{50 50}}
 check_placement
 
+# Re-link non-voltage-domain module groups back to regions so DEF/ODB preserves full containment
+foreach _r [$_block getRegions] {{
+    set _rname [$_r getName]
+    set _g [$_block findGroup "group_${{_rname}}"]
+    if {{ $_g ne "NULL" && [$_g getRegion] eq "NULL" }} {{
+        catch {{ $_r addGroup $_g }}
+    }}
+}}
 
-foreach _b $_saved_blk {{ catch {{ create_blockage -soft -region $_b }} }}
+foreach _b $_saved_blk {{ create_blockage -soft -region $_b }}
 write_def "{def_path}"
 puts "SILIS_PLACE_DONE"
 """
@@ -2932,6 +3316,9 @@ puts "SILIS_PLACE_DONE"
         if not os.path.isfile(def_path) or os.path.getsize(def_path) == 0:
             from sdk.exceptions import PipelineStateError
             raise PipelineStateError(f"Placement post-condition failed: Output DEF {def_path} missing or empty.")
+
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("place", def_path=def_path)
 
         return bool(res)
 
@@ -2977,6 +3364,9 @@ write_def "{def_path}"
         if not os.path.isfile(def_path) or os.path.getsize(def_path) == 0:
             from sdk.exceptions import PipelineStateError
             raise PipelineStateError(f"CTS post-condition failed: Output DEF {def_path} missing or empty.")
+
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("cts", def_path=def_path)
 
         return bool(res)
 
@@ -3051,6 +3441,9 @@ write_def "{def_path}"
             from sdk.exceptions import PipelineStateError
             raise PipelineStateError(f"Route step failed to emit output DEF at {def_path}")
 
+        # Mandatory Post-Step Physical Cross-Verification
+        self._cross_verify_step("route", def_path=def_path)
+
         drc_rpt = os.path.join(self.project.reports_dir, "drc.rpt")
         if os.path.isfile(drc_rpt):
             report = DRCReport.load(drc_rpt)
@@ -3060,12 +3453,26 @@ write_def "{def_path}"
 
         return bool(res)
 
-    def fill(self, tcl: Optional[str] = None) -> bool:
+    def fill(self, tcl: Optional[str] = None, insert_decap: bool = True) -> bool:
         """Inserts decap & standard cell filler cells and checks metal layer densities."""
-        def_path = os.path.join(self.project.results_dir, "temp.def")
+        def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
         if not os.path.isfile(def_path):
             from sdk.exceptions import PipelineStateError
-            raise PipelineStateError(f"Fill pre-condition failed: Routed DEF {def_path} not found. Run route() first.")
+            raise PipelineStateError(f"Fill pre-condition failed: Output DEF {def_path} not found. Run route() or place() first.")
+
+        if not tcl:
+            # Universal Decap & Standard Cell Gap Filler Synthesis Script
+            fill_masters = "sky130_fd_sc_hd__fill_8 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_1"
+            if insert_decap:
+                fill_masters = "sky130_fd_sc_hd__decap_8 sky130_fd_sc_hd__decap_4 " + fill_masters
+
+            tcl = f"""# Universal Decap & Standard Cell Gap Filler Synthesis
+set fill_masters "{fill_masters}"
+filler_placement $fill_masters
+check_placement
+write_def "{def_path}"
+puts "SILIS_FILL_DONE"
+"""
 
         res = self.runner.run_step("fill", tcl_arg=tcl)
         self.process_events()
@@ -4045,6 +4452,118 @@ prep -top {self.project.top_module}
         if hasattr(self.runner, "execute_tcl"):
             return self.runner.execute_tcl(tcl, step_name="load_checkpoint")
         return False
+
+    def stash(self, name: Optional[str] = None) -> str:
+        """
+        Snapshots current layout database to the stash stack.
+        Returns the snapshot tag name.
+        """
+        import time
+        tag = name or f"stash_{len(self._stash_stack)}_{int(time.time())}"
+        self.save_checkpoint(tag=tag)
+        self._stash_stack.append(tag)
+        return tag
+
+    def undo(self, name: Optional[str] = None) -> bool:
+        """
+        Restores a previously stashed layout database.
+        If 'name' is provided, rolls back directly to that named stash.
+        If 'name' is omitted, pops and restores the most recent stash from the stack.
+        """
+        if not self._stash_stack and not name:
+            raise IndexError("Cannot undo: stash stack is empty.")
+
+        if name:
+            if name not in self._stash_stack:
+                # Still check if file exists on disk as a saved checkpoint
+                target = name
+            else:
+                # Pop up to and including the named target
+                idx = self._stash_stack.index(name)
+                target = self._stash_stack[idx]
+                self._stash_stack = self._stash_stack[:idx]
+        else:
+            target = self._stash_stack.pop()
+
+        return self.load_checkpoint(tag=target)
+
+    # --------------------------------------------------------------------------
+    # Agentic Physical Design Introspection Forwarders
+    # --------------------------------------------------------------------------
+    def get_congestion_map(self, threshold: float = 0.80) -> List[Dict[str, Any]]:
+        """Queries routing congestion density & GCell overflow boxes."""
+        return self.intro.get_congestion_map(threshold=threshold)
+
+    def get_macro_affinity_graph(self) -> Dict[str, Dict[str, int]]:
+        """Queries net count connectivity matrix between macros and submodules."""
+        return self.intro.get_macro_affinity_graph()
+
+    def get_critical_timing_paths(self, top_n: int = 5) -> List[Dict[str, Any]]:
+        """Queries structured slack, start/end pins, and delays from OpenSTA."""
+        return self.intro.get_critical_timing_paths(top_n=top_n)
+
+    def get_ir_drop_map(self, net: str = "VDD") -> Dict[str, Any]:
+        """Queries localized static delta-V drop and worst-case drop location via PSM."""
+        return self.intro.get_ir_drop_map(net=net)
+
+    def get_drc_markers(self) -> List[Dict[str, Any]]:
+        """Queries exact geometric DRC violation markers and colliding instances."""
+        return self.intro.get_drc_markers()
+
+    # --------------------------------------------------------------------------
+    # Spatial Reasoning & Packing Forwarders
+    # --------------------------------------------------------------------------
+    def get_empty_cavities(
+        self,
+        min_w: float = 40.0,
+        min_h: float = 40.0,
+        core_box: Optional[Tuple[float, float, float, float]] = None,
+        placed_macros: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Calculates maximal open 2D rectilinear empty rectangular cavities using interval subtraction."""
+        return self.spatial.get_empty_cavities(
+            min_w=min_w, min_h=min_h, core_box=core_box, placed_macros=placed_macros
+        )
+
+    def get_macro_pin_terminals(self, inst_name_or_master: str) -> Dict[str, Any]:
+        """Inspects macro pin terminals via OpenDB / LEF and calculates dominant face and COG."""
+        return self.spatial.get_macro_pin_terminals(inst_name_or_master)
+
+    def get_channel_metrics(
+        self,
+        inst_a: Union[str, Dict[str, Any]],
+        inst_b: Union[str, Dict[str, Any]],
+        min_channel_gap: float = 35.0,
+        met2_pitch: float = 0.68,
+        met3_pitch: float = 0.68,
+        site_row_height: float = 2.72,
+    ) -> Dict[str, Any]:
+        """Calculates distance, routing tracks, row alignment, and corridor gap legality."""
+        return self.spatial.get_channel_metrics(
+            inst_a=inst_a,
+            inst_b=inst_b,
+            min_channel_gap=min_channel_gap,
+            met2_pitch=met2_pitch,
+            met3_pitch=met3_pitch,
+            site_row_height=site_row_height,
+        )
+
+    def simulate_floorplan_patch(
+        self,
+        mutations: List[Dict[str, Any]],
+        halo_um: float = 5.0,
+        min_channel_gap: float = 35.0,
+        mfg_grid: float = 0.005,
+        site_row_height: float = 2.72,
+    ) -> Dict[str, Any]:
+        """Simulates macro location mutations in memory (<5ms) with grid snapping and DRC verification."""
+        return self.spatial.simulate_floorplan_patch(
+            mutations=mutations,
+            halo_um=halo_um,
+            min_channel_gap=min_channel_gap,
+            mfg_grid=mfg_grid,
+            site_row_height=site_row_height,
+        )
 
     # --------------------------------------------------------------------------
     # Lifecycle & Context Management

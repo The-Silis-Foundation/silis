@@ -90,3 +90,49 @@ npu_domain.set_row_site("unithd")  # or "unithddbl"
 # Configure physical power switch cell mapping
 npu_domain.enable_physical_power_switches(False)
 ```
+
+---
+
+## 5. Declarative Floorplan Synthesis (FPS) & Cross-Verification
+
+Silis offers the declarative `run_fps()` API for executing floorplan synthesis in a single unified operation:
+
+```python
+pipe = Pipeline(proj)
+
+# 1. Stage floorplan intent
+pipe.spec_floorplan(
+    die_area=[0.0, 0.0, 2400.0, 2400.0],
+    core_margin=[250.0, 250.0, 250.0, 250.0],
+    macros=[
+        {"name": "u_sram_0", "master": "sky130_sram_2k", "x": 300.0, "y": 750.0, "orient": "R0"},
+        {"name": "u_sram_1", "master": "sky130_sram_2k", "x": 300.0, "y": 1210.0, "orient": "R0"},
+    ]
+)
+
+# 2. Stage peripheral pad ring
+pipe.spec_iopins(mode="padring")
+
+# 3. Stage PDN mesh & tapcells
+pipe.spec_pdn(enable_ring=True, enable_trunks=True, trunk_width=3.2)
+pipe.spec_tapcells(distance=14.0)
+
+# 4. Synthesize floorplan
+pipe.run_fps()
+```
+
+### 5.1 Automated Macro Snapping & Channel Invariants
+- **Site Row Quantization**: Macro Y-origins are snapped to row height multiples ($y = k \cdot 2.72\,\mu\text{m}$).
+- **Manufacturing Grid Quantization**: Macro X-origins are snapped to the $0.005\,\mu\text{m}$ grid.
+- **Corridor Verification**: Macro pairs are verified for minimum routing channel width:
+  $$W_{\text{channel}} \ge 2 \times \text{Halo} + W_{\text{routing\_tracks}} \ge 35.0\,\mu\text{m}$$
+
+### 5.2 Peripheral I/O Pad Ring Architecture
+When `spec_iopins(mode="padring")` is staged:
+- Corner cells (`sky130_ef_io__corner_pad`) are placed at all 4 die corners with exact rotation.
+- Core clamp pads (`vccd_lvc_clamped_pad`, `vssd_lvc_clamped_pad`) and I/O clamp pads (`vddio_hvc_clamped_pad`, `vssio_hvc_clamped_pad`) are placed across the 4 perimeter edges.
+- Primary I/O signals map to `sky130_ef_io__gpiov2_pad_wrapped`, exposing bond pads on `met5`.
+- Abutting pad fillers (`sky130_ef_io__com_bus_slice_*`) form continuous ESD and power rails.
+
+### 5.3 Automated Post-Step Cross-Verification
+Every stage (`run_fps()`, `floorplan()`, `pdn()`, `tapcells()`, `place()`, `cts()`, `route()`) runs `_cross_verify_step()` to validate the emitted DEF against semiconductor invariants (die area bounds, component count, power mesh special nets, and zero unplaced cells) before progressing.

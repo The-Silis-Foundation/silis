@@ -16,6 +16,7 @@ import urllib.error
 import tempfile
 import shutil
 from typing import Dict, Any, Optional, Tuple, List
+from packaging.version import parse as parse_version, InvalidVersion
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -71,8 +72,14 @@ def get_update_target(releases: List[Dict[str, Any]], current_ver: str = CURRENT
     second_latest = valid_releases[1] if len(valid_releases) > 1 else None
 
     latest_tag = latest.get("tag_name", "").lstrip("v")
-    if latest_tag != current_ver.lstrip("v"):
-        return latest, second_latest
+    cur_tag = current_ver.lstrip("v")
+    try:
+        if parse_version(latest_tag) > parse_version(cur_tag):
+            return latest, second_latest
+    except InvalidVersion:
+        # Fallback to strict string inequality if non-PEP440 versions are used
+        if latest_tag != cur_tag:
+            return latest, second_latest
     return None
 
 
