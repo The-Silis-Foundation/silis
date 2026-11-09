@@ -1,5 +1,7 @@
 #!/bin/bash
-# Silis AppRun for AppImage & portable execution
+# ==============================================================================
+# Silis ASIC EDA Self-Contained AppRun for 100% Standalone AppImage Execution
+# ==============================================================================
 set -e
 
 # Resolve base directories
@@ -14,28 +16,47 @@ export REPO_ROOT="$APPDIR"
 export PDK_ROOT="${PDK_ROOT:-$HOME/.silis/pdks}"
 mkdir -p "$PDK_ROOT"
 
-# 2. Dynamic Library Paths
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/usr/local/lib/python3.12/dist-packages/PyQt6/Qt6/lib:$APPDIR/opt/python/lib:$APPDIR/terminal:$APPDIR/clocktreeviewer:$APPDIR/synthengine:$APPDIR/backendflow/fast_viewer:$APPDIR/editor:$APPDIR/schematicviewer:$APPDIR/third-party/GDS3D:$LD_LIBRARY_PATH"
+# 2. Standalone Python Selection & Environment Isolation
+if [ -d "$APPDIR/opt/python" ]; then
+    export PYTHONHOME="$APPDIR/opt/python"
+    export PYTHON_BIN="$APPDIR/opt/python/bin/python3"
+    export PATH="$APPDIR/opt/python/bin:$PATH"
+    PY_SITE="$APPDIR/opt/python/lib/python3.12/site-packages"
+elif [ -f "$APPDIR/usr/bin/python3" ]; then
+    export PYTHON_BIN="$APPDIR/usr/bin/python3"
+    PY_SITE="$APPDIR/usr/lib/python3.12/site-packages"
+else
+    export PYTHON_BIN="$(which python3 2>/dev/null || echo "python3")"
+    PY_SITE=""
+fi
 
-# 3. Python Environment
-export PYTHONPATH="$APPDIR:$APPDIR/core:$APPDIR/third-party:$PYTHONPATH"
+# 3. Dynamic Library Paths (Include embedded Qt6 and OpenROAD shared libraries)
+QT6_LIB="$PY_SITE/PyQt6/Qt6/lib"
+WEBENGINE_LIB="$PY_SITE/PyQt6_WebEngine/Qt6/lib"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/backendflow/def_viewer_cpp/build:$LD_LIBRARY_PATH"
 
-# 4. Qt6 & QtWebEngine Discovery
-if [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
+# 4. Strict Isolated PYTHONPATH (prioritize bundled wheels, then repo core)
+if [ -n "$PY_SITE" ] && [ -d "$PY_SITE" ]; then
+    export PYTHONPATH="$PY_SITE:$APPDIR:$APPDIR/core:$APPDIR/third-party:$PYTHONPATH"
+else
+    export PYTHONPATH="$APPDIR:$APPDIR/core:$APPDIR/third-party:$PYTHONPATH"
+fi
+
+# 5. Qt6 & QtWebEngine Discovery
+QTWEBENGINE_EXE="$PY_SITE/PyQt6_WebEngine/Qt6/libexec/QtWebEngineProcess"
+if [ -f "$QTWEBENGINE_EXE" ]; then
+    export QTWEBENGINEPROCESS_PATH="$QTWEBENGINE_EXE"
+    export QTWEBENGINE_RESOURCES_PATH="$PY_SITE/PyQt6_WebEngine/Qt6/resources"
+    export QTWEBENGINE_LOCALES_PATH="$PY_SITE/PyQt6_WebEngine/Qt6/translations/qtwebengine_locales"
+elif [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
     export QTWEBENGINEPROCESS_PATH="$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess"
     export QTWEBENGINE_RESOURCES_PATH="$APPDIR/usr/share/qt6/resources"
     export QTWEBENGINE_LOCALES_PATH="$APPDIR/usr/share/qt6/translations/qtwebengine_locales"
 fi
 
-# 5. Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
+# 6. EDA Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
 export PATH="$APPDIR/third-party/bin:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
 export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
-
-# 6. Python Binary Selection
-PYTHON_BIN="$(which python3 2>/dev/null || echo "python3")"
-if [ -f "$APPDIR/usr/bin/python3" ]; then
-    PYTHON_BIN="$APPDIR/usr/bin/python3"
-fi
 
 # 7. Dedicated CLI switches for SDK and First-Boot handling
 if [ "$1" == "--install-sdk" ]; then
