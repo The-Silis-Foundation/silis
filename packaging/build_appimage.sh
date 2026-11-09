@@ -40,6 +40,10 @@ PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
     numpy \
     websockify
 
+# 3b. Collect all external shared libraries (libxcb*, libxkbcommon*, libEGL*, etc.)
+echo "=== Bundling system shared libraries into AppDir/usr/lib/x86_64-linux-gnu ==="
+python3 "${REPO_DIR}/packaging/bundle_shared_libs.py" "${APPDIR}"
+
 # 4. Copy application core files into AppDir
 echo "=== Staging application codebase into AppDir ==="
 cp -a "${REPO_DIR}/silis.py" "${APPDIR}/silis.py"
