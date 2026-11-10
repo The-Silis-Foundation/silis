@@ -90,7 +90,7 @@ class OpenROADPort(QWidget):
     def launch_viewer(self):
         viewer_exe = os.path.join(REPO_ROOT, "backendflow", "def_viewer_cpp", "build", "silis_def_viewer")
         if not os.path.exists(viewer_exe):
-            self.info_label.setText("❌ Missing C++ Viewer Executable!")
+            self.info_label.setText("Error: Missing C++ Viewer Executable")
             self.info_label.setStyleSheet("color: #ff7b72;")
             return
 
@@ -480,7 +480,7 @@ class BackendWidget(QWidget):
             btn_ct_out.clicked.connect(self.clock_engine.zoom_out)
             tb_lay.addWidget(btn_ct_out)
 
-            btn_ct_fit = QPushButton("⛶ Fit View")
+            btn_ct_fit = QPushButton("Fit View")
             btn_ct_fit.setStyleSheet("background: #21262d; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 10px; font-weight: bold;")
             btn_ct_fit.clicked.connect(self.clock_engine.fit_view)
             tb_lay.addWidget(btn_ct_fit)

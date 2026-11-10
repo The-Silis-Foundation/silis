@@ -1887,7 +1887,7 @@ class IOPlacerDialog(QDialog):
             pd_item.setZValue(-13)
 
             # Domain Header Label
-            d_lbl = self.scene.addText(f"⚡ {pd.get('domain_name', 'PD')} ({volt:.2f}V)")
+            d_lbl = self.scene.addText(f"[PWR] {pd.get('domain_name', 'PD')} ({volt:.2f}V)")
             d_lbl.setDefaultTextColor(pd_color)
             df = d_lbl.font()
             df.setPointSize(8)

@@ -1094,7 +1094,7 @@ class SilisIDE(QMainWindow):
             if base:
                 self.show_module_schematic(base)
 
-    def run_synthesis_flow(self, bypass_prompt=False):
+    def run_synthesis_flow(self, bypass_prompt=True):
         base = None
         if hasattr(self, 'project_config') and self.project_config:
             base = self.project_config.get("top_module")

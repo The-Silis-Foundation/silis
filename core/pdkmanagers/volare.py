@@ -91,13 +91,13 @@ class VolareManagerWidget(QWidget):
         btn_curr = QPushButton("Show Active"); btn_curr.clicked.connect(lambda: self.run_volare("output"))
         
         # Row 2: Actions
-        btn_enable = QPushButton("⚡ Enable Version..."); btn_enable.clicked.connect(self.ask_enable)
+        btn_enable = QPushButton("Enable Version..."); btn_enable.clicked.connect(self.ask_enable)
         btn_enable.setStyleSheet("background: #2da44e; color: white; font-weight: bold;")
         
-        btn_build = QPushButton("⬇ Build/Install..."); btn_build.clicked.connect(self.ask_build)
+        btn_build = QPushButton("Build/Install..."); btn_build.clicked.connect(self.ask_build)
         btn_build.setStyleSheet("background: #00509d; color: white; font-weight: bold;")
         
-        btn_prune = QPushButton("✂ Prune Old"); btn_prune.clicked.connect(self.ask_prune)
+        btn_prune = QPushButton("Prune Old"); btn_prune.clicked.connect(self.ask_prune)
         
         btn_grid.addWidget(btn_ls, 0, 0)
         btn_grid.addWidget(btn_rem, 0, 1)

@@ -173,7 +173,7 @@ class LazyTclEditor:
         gutter_w = 6
 
         # Draw Header
-        header = f" ⚡ SILIS ASIC TCL EDITOR — {self.title} "
+        header = f" SILIS ASIC TCL EDITOR — {self.title} "
         stdscr.attron(curses.A_BOLD)
         stdscr.addstr(0, 0, header.ljust(w)[:w], curses.color_pair(1))
         stdscr.attroff(curses.A_BOLD)

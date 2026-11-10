@@ -346,7 +346,7 @@ class SynthesisTab(QWidget):
             "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
         )
 
-        btn_sel = QPushButton("⚙ PDK"); btn_sel.setStyleSheet(btn_style)
+        btn_sel = QPushButton("Select PDK"); btn_sel.setStyleSheet(btn_style)
         btn_sel.clicked.connect(self.ide.open_pdk_selector)
         self.btn_run = QPushButton("Run Flow"); self.btn_run.setStyleSheet(run_style)
         self.btn_run.clicked.connect(self.ide.run_synthesis_flow)

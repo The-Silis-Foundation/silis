@@ -291,7 +291,7 @@ set_output_delay 2.0 -clock clk [all_outputs]
 def run_interactive_init(default_name=None):
     """Guided terminal setup wizard matching the user's workflow."""
     print("\n" + "=" * 65)
-    print("  ✨ SILIS ASIC PROJECT SETUP WIZARD")
+    print("  SILIS ASIC PROJECT SETUP WIZARD")
     print("=" * 65 + "\n")
 
     # 1. Project Name & Location
