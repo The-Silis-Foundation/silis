@@ -410,6 +410,38 @@
             if (navBackBtn) navBackBtn.disabled = !canBack;
             if (navForwardBtn) navForwardBtn.disabled = !canForward;
         };
+
+        // Auto-fetch netlist if URL parameters (?project=... or ?file=...) are provided
+        (function autoLoadSchematic() {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const proj = params.get('project');
+                const file = params.get('file');
+                if (proj || file) {
+                    const query = proj ? `project=${encodeURIComponent(proj)}` : `file=${encodeURIComponent(file)}`;
+                    fetch(`/api/schematic?${query}`)
+                        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                        .then(data => {
+                            if (data && (data.modules || Object.keys(data).length > 0)) {
+                                window.postMessage({ type: 'loadSchematic', netlist: data, backend: 'yosys' }, '*');
+                            }
+                        })
+                        .catch(err => console.log('Notice: Auto schematic fetch deferred:', err));
+                }
+            } catch (e) {}
+        })();
+
+        // Parent iframe postMessage bridge
+        window.addEventListener('message', function(e) {
+            const msg = e.data;
+            if (!msg) return;
+            if (msg.command === 'loadNetlist' || msg.command === 'loadSchematic') {
+                const netlist = msg.netlist || msg.data;
+                if (netlist) {
+                    window.postMessage({ type: 'loadSchematic', netlist: netlist, backend: 'yosys' }, '*');
+                }
+            }
+        });
     </script>
 </body>
 </html>

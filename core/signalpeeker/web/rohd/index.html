@@ -46,7 +46,41 @@
       if (e.data && typeof window.__rohdMessageCallback === 'function') {
         window.__rohdMessageCallback(e.data);
       }
+      if (e.data && (e.data.command === 'loadVcd' || e.data.type === 'loadVcd')) {
+        const text = e.data.text || e.data.vcd;
+        const fn = e.data.fileName || 'waveform.vcd';
+        if (text) {
+          window.loadVcdContent(text, fn);
+        }
+      }
+      if (e.data && (e.data.command === 'addSignal' || e.data.type === 'addSignal')) {
+        const sig = e.data.signal || e.data.name;
+        if (sig) {
+          window.addRohdSignal(sig);
+        }
+      }
     });
+
+    // Auto-fetch VCD waveform if URL parameters (?project=... or ?file=...) are provided
+    (function autoLoadWaveform() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const proj = params.get('project');
+        const file = params.get('file');
+        if (proj || file) {
+          const query = proj ? `project=${encodeURIComponent(proj)}` : `file=${encodeURIComponent(file)}`;
+          fetch(`/api/waveform?${query}`)
+            .then(r => r.ok ? r.text() : Promise.reject(r.status))
+            .then(vcdText => {
+              if (vcdText && vcdText.length > 0) {
+                const fname = file ? file.split('/').pop() : 'waveform.vcd';
+                window.loadVcdContent(vcdText, fname);
+              }
+            })
+            .catch(err => console.log('Notice: Auto VCD fetch deferred:', err));
+        }
+      } catch (e) {}
+    })();
 
     // Dynamic Signal Addition function
     window.addRohdSignal = function(signalName) {
