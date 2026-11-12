@@ -442,6 +442,26 @@
                 }
             }
         });
+
+        // Bi-Directional Schematic Cross-Probe Dispatch (Iteration 94)
+        document.addEventListener('click', function(e) {
+            const cellEl = e.target.closest('.joint-cell, .joint-element, .joint-link');
+            if (cellEl) {
+                const textNodes = cellEl.querySelectorAll('text, tspan');
+                let label = '';
+                textNodes.forEach(function(t) { if (t.textContent && !label) label = t.textContent.trim(); });
+                if (label) {
+                    const isWire = cellEl.classList.contains('joint-link');
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({
+                            type: isWire ? 'wireSelected' : 'componentSelected',
+                            net: label,
+                            name: label
+                        }, '*');
+                    }
+                }
+            }
+        });
     </script>
 </body>
 </html>

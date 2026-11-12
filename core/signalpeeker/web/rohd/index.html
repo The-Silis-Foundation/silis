@@ -13,6 +13,10 @@
       postMessage: function(msg) {
         // Emit through console prefix so Python QWebEnginePage intercepts it
         console.log('SILIS_ROHD_MSG:' + JSON.stringify(msg));
+        // Bi-Directional Waveform Signal Selection Dispatch to Parent Workbench (Iteration 95)
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ fromSilisRohd: true, data: msg }, '*');
+        }
       }
     };
     window.deliverRohdResponse = function(msg) {
