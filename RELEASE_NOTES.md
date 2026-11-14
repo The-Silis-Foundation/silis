@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/The-Silis-Foundation/silis/main/packaging/silisicon.png" alt="Silis ASIC EDA Logo" width="128" height="128">
 </p>
 
-<h3 align="center">Silis ASIC EDA Studio & Real-Time Physical Design Orchestrator</h3>
+<h3 align="center">Silis ASIC Design Studio</h3>
 
 <p align="center">
   <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre"><img src="https://img.shields.io/badge/Release-v0.1.1--pre-blue.svg" alt="Release Badge"></a>
@@ -39,9 +39,7 @@
 
 ---
 
-## Quickstart & Zero-Configuration First Run
-
-Silis v0.1.1-pre is fully self-contained. Running the AppImage for the first time automatically provisions your physical design environment without requiring root privileges or external setup scripts:
+## Quickstart
 
 ```bash
 # 1. Make executable
@@ -54,18 +52,28 @@ chmod +x Silis-x86_64.AppImage
 ./Silis-x86_64.AppImage --projects
 ```
 
-### Automated First-Run Setup Highlights
-- **System Application Menu Integration**: Automatically registers `~/.local/share/applications/silis.desktop` and application icons so Silis appears directly in your system launcher, dock, and file manager.
-- **Global Terminal Command**: Installs `~/.local/bin/silis` linking to the AppImage. You can run `silis` anywhere in your terminal.
-- **Python SDK Host Bridge**: Configures `~/.local/lib/python3.*/site-packages/silis.pth`, enabling `import silis; from silis import Project, Floorplan, Pipeline` across your host Python environment.
-- **Bundled SkyWater 130nm PDK**: Auto-provisions `~/.silis/pdks/sky130B` with standard cell libraries, technology LEFs, and power switches (`power_switch.lef`).
-- **Starter Workspace**: Stages a complete demonstration design at `~/silis/projects/demo_chip_top`.
+---
+
+## System Requirements & FUSE Prerequisite Notice
+
+Silis AppImage runs on Linux distributions with kernel >= 4.18 and GLIBC >= 2.38.
+
+> [!NOTE]
+> **Ubuntu 24.04 and RHEL 9 Users**: Newer Linux distributions omit `libfuse2` by default. If the AppImage fails to mount, install the FUSE library or use the extract flag:
+> ```bash
+> # Ubuntu / Debian
+> sudo apt install libfuse2t64
+>
+> # RHEL / Fedora
+> sudo dnf install fuse-libs
+>
+> # Or run directly without FUSE
+> ./Silis-x86_64.AppImage --appimage-extract-and-run
+> ```
 
 ---
 
 ## Verification & Checksums
-
-Verify your downloaded AppImage using the official SHA-256 or MD5 cryptographic hashes:
 
 | File | Size | MD5 Hash | SHA-256 Checksum |
 | :--- | :--- | :--- | :--- |
@@ -79,10 +87,7 @@ sha256sum -c <<< "7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19
 
 ---
 
-# Changelog
-
-<details>
-<summary>Detailed Changelog for v0.1.1-pre</summary>
+## Changelog
 
 ### Added
 - **First-Boot Setup Orchestrator**: Implemented native Qt6 onboarding progress dialog (`FirstBootSetupDialog`) and headless runner (`run_headless_setup`) in `core/setup_wizard.py` to auto-provision workspace, PDKs, and application data.
@@ -103,5 +108,3 @@ sha256sum -c <<< "7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19
 - **Current Working Directory Security Leak**: Patched trailing-colon in `LD_LIBRARY_PATH` and `PYTHONPATH` in `packaging/AppRun` preventing untrusted `.so` searches in `.` under clean environments.
 - **Developer Host Path Leak**: Purged stale duplicate directory `Silis.AppDir/core/core` containing absolute developer paths.
 - **Symlink Normalization**: Rebased all absolute GHDL plugin and Monaco editor symlinks to valid relative targets inside the AppDir.
-
-</details>
