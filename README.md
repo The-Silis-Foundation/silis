@@ -40,7 +40,13 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
   <img alt="Language" src="https://img.shields.io/badge/Language-Python%203.12%20%7C%20C%2B%2B17-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.0--pre-orange.svg?style=for-the-badge">
+  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre"><img alt="Release" src="https://img.shields.io/badge/Release-v0.1.1--pre-orange.svg?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  Developed by <strong>Jerome Antony Robin</strong>. This repository follows a <strong>BDFL Governance model</strong>.<br>
+  Co-developed by <strong>Eatheshwar</strong>, <strong>Venkat</strong>, and <strong>Adhil</strong>.<br>
+  <em>Silis took 11 months from POC to pre-release.</em>
 </p>
 
 <br>

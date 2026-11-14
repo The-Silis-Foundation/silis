@@ -78,7 +78,7 @@ Academic use is encouraged.
 
 Publications using Silis should:
 - Cite the project (see CITATION.cff)
-- Acknowledge the Silis core team
+- Acknowledge Jerome Antony Robin and The Silis Foundation
 - Reference the official repository
 
 ---
@@ -100,9 +100,8 @@ Silis has authors.
 
 ---
 
-Silis is not governed by a single developer, but guided by a unified vision.
-Technical decisions are shared.  
-Philosophical, UX, and public-facing decisions are stewarded by the Lead.
+Silis operates under a Benevolent Dictator for Life (BDFL) model.  
+All technical, architectural, and strategic decisions are stewarded by the Founder and BDFL, Jerome Antony Robin.
 
 ```
 

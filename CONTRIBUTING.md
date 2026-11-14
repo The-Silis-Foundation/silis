@@ -35,9 +35,9 @@ It allows the Foundation to offer separate commercial licenses when required.
 
 ## 3. Governance Model
 
-Silis follows a centralized governance model.
+Developed by Jerome Antony Robin, this repository follows a BDFL Governance model. Co-developed by Eatheshwar, Venkat, and Adhil.
 
-Project direction, philosophy, architecture decisions, and public representation are determined by The Silis Foundation core team.
+Project direction, philosophy, architecture decisions, and public representation are determined by the Founder and BDFL, Jerome Antony Robin. Silis took 11 months from POC to pre-release.
 
 Contributing code does **not**:
 

@@ -1,29 +1,41 @@
-# Governance
+# Governance Charter — Silis
 
-Silis is governed by a core maintainer team.
+Developed by **Jerome Antony Robin**, this repository follows a **BDFL Governance model**.  
+Co-developed by **Eatheshwar**, **Venkat**, and **Adhil**.
 
-## Decision Model
-
-Technical decisions are made collaboratively by maintainers.
-
-Philosophical, UX, and public-facing decisions are stewarded by the Founder to preserve project identity.
+*Silis took 11 months from POC to pre-release.*
 
 ---
 
-## Maintainer Roles
+## 1. Benevolent Dictator for Life (BDFL)
 
-See [MAINTAINERS.md](https://github.com/The-Silis-Foundation/silis/blob/main/MAINTAINERS.md) for detailed responsibilities.
+**Jerome Antony Robin** is the Lead and BDFL of Silis.
+
+As BDFL, Jerome Antony Robin holds final authority and decision-making power over:
+- Technical architecture and semiconductor invariant enforcement
+- Physical design algorithms and downstream EDA tool integration (RTL to GDSII flow)
+- User experience philosophy, design systems, and typography
+- Release planning, versioning, and distribution
+- Governance, trademark identity, and licensing policies
 
 ---
 
-## License
+## 2. Decision Model
 
-Silis is licensed under AGPL-3.0.
-
-All contributions must comply with this license.
+While discussion, feedback, and peer review are encouraged, Silis does not operate by committee:
+- **Technical Proposals**: Community suggestions and pull requests are evaluated on technical merit and physical design validity.
+- **Final Determination**: In the event of consensus deadlocks or architectural disagreements, the BDFL has the definitive and final say.
+- **The Parity Law**: No feature or patch may violate GUI-SDK parity or downstream tapeout integrity.
 
 ---
 
-## Future Changes
+## 3. Co-Developers & Maintainers
 
-This governance model may evolve as the project grows.
+Silis is co-developed with **Eatheshwar**, **Venkat**, and **Adhil**. See [MAINTAINERS.md](MAINTAINERS.md) for details.
+
+---
+
+## 4. Licensing & IP
+
+Silis is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.  
+The Foundation retains commercial dual-licensing and stewardship rights as outlined in [CONTRIBUTING.md](CONTRIBUTING.md).

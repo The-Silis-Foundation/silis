@@ -1,6 +1,6 @@
 # Attribution and Credit
 
-Silis — Silicon Scaffold is developed by the Silis core team.
+Silis — Silicon Scaffold is created and architected by Jerome Antony Robin (The Silis Foundation).
 
 Any derived work, fork, or distribution must clearly acknowledge:
 ```
