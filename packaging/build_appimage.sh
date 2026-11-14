@@ -53,6 +53,9 @@ cp -a "${REPO_DIR}/packaging/silis.desktop" "${APPDIR}/silis.desktop"
 cp -a "${REPO_DIR}/packaging/silisicon.png" "${APPDIR}/silisicon.png"
 mkdir -p "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
 cp -a "${REPO_DIR}/packaging/silisicon.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/silisicon.png"
+if [ -d "${REPO_DIR}/examples" ]; then
+    cp -a "${REPO_DIR}/examples" "${APPDIR}/examples"
+fi
 
 # 5. Stage lean Sky130 PDK assets for first-boot provisioning
 HOST_PDK="${HOME}/.silis/pdks/sky130B"

@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 import time
+import stat
+import subprocess
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog,
@@ -22,14 +24,21 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QPalette
+from PyQt6.QtGui import QFont, QPalette, QFontDatabase
 
 
 def is_first_boot_needed() -> bool:
     """Check if the user environment has already completed first-boot provisioning."""
     marker = os.path.expanduser("~/.silis/.initialized")
     pdk_dir = os.path.expanduser("~/.silis/pdks/sky130B")
-    return not (os.path.isfile(marker) and os.path.isdir(pdk_dir))
+    tlef = os.path.join(pdk_dir, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+    desktop_file = os.path.expanduser("~/.local/share/applications/silis.desktop")
+    cli_bin = os.path.expanduser("~/.local/bin/silis")
+    
+    # If marker and PDK and desktop integration exist, first boot is already done
+    has_pdk = os.path.isdir(pdk_dir) and (os.path.isfile(tlef) or os.path.isdir(os.path.join(pdk_dir, "libs.tech")))
+    has_desktop = os.path.isfile(desktop_file) and (os.path.isfile(cli_bin) or os.path.islink(cli_bin))
+    return not (os.path.isfile(marker) and has_pdk and has_desktop)
 
 
 class SetupWorker(QThread):
@@ -118,26 +127,34 @@ class SetupWorker(QThread):
             self.progress_updated.emit(60, "PDK root verified at destination.")
 
         # Ensure power switch cell LEF is present in the PDK
-        self.progress_updated.emit(85, "Configuring multi-voltage power switch standard cell...")
+        self.progress_updated.emit(75, "Configuring multi-voltage power switch standard cell...")
         lef_dir = os.path.join(dest_sky130, "libs.ref", "sky130_fd_sc_hd", "lef")
+        psw_dir = os.path.join(dest_sky130, "libs.ref", "sky130_power_switch", "lef")
         os.makedirs(lef_dir, exist_ok=True)
+        os.makedirs(psw_dir, exist_ok=True)
         psw_lef = os.path.join(lef_dir, "sky130_power_switch.lef")
         
-        # Look for existing power switch template in silisprojects or repo
+        # Look for existing power switch template in silis, OpenROAD, or AppDir
         known_psw_paths = [
-            "/home/econsystems/silisprojects/tapeout_mini_soc/sky130_power_switch.lef",
+            os.path.join(dest_sky130, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef"),
+            os.path.join(appdir, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef") if appdir else None,
+            os.path.join(repo_root, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef"),
             os.path.join(repo_root, "core", "sky130_power_switch.lef"),
             os.path.join(appdir, "assets", "sky130_power_switch.lef") if appdir else None,
         ]
         for kp in known_psw_paths:
             if kp and os.path.isfile(kp):
-                shutil.copy2(kp, psw_lef)
-                break
+                try:
+                    shutil.copy2(kp, psw_lef)
+                    shutil.copy2(kp, os.path.join(psw_dir, "power_switch.lef"))
+                    break
+                except Exception:
+                    pass
 
         # Register default PDK configuration manifest
         pdk_master_json = os.path.expanduser("~/.silis/pdks/pdk_master.json")
         if not os.path.isfile(pdk_master_json):
-            self.progress_updated.emit(90, "Writing PDK configuration registry...")
+            self.progress_updated.emit(80, "Writing PDK configuration registry...")
             import json
             manifest = {
                 "default_pdk": "sky130B",
@@ -153,11 +170,100 @@ class SetupWorker(QThread):
             with open(pdk_master_json, "w") as f:
                 json.dump(manifest, f, indent=2)
 
+        # 85%: Desktop integration & System Icons
+        self.progress_updated.emit(85, "Installing desktop menu shortcuts and application icons...")
+        apps_dir = os.path.expanduser("~/.local/share/applications")
+        icons_dir = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps")
+        pixmaps_dir = os.path.expanduser("~/.local/share/pixmaps")
+        os.makedirs(apps_dir, exist_ok=True)
+        os.makedirs(icons_dir, exist_ok=True)
+        os.makedirs(pixmaps_dir, exist_ok=True)
+
+        icon_src = (
+            os.path.join(appdir, "silisicon.png") if appdir and os.path.isfile(os.path.join(appdir, "silisicon.png"))
+            else os.path.join(repo_root, "packaging", "silisicon.png") if os.path.isfile(os.path.join(repo_root, "packaging", "silisicon.png"))
+            else os.path.join(repo_root, "silisicon.png")
+        )
+        if os.path.isfile(icon_src):
+            try:
+                shutil.copy2(icon_src, os.path.join(icons_dir, "silisicon.png"))
+                shutil.copy2(icon_src, os.path.join(pixmaps_dir, "silisicon.png"))
+            except Exception:
+                pass
+
+        appimage_bin = os.environ.get("APPIMAGE") or os.path.expanduser("~/.local/bin/silis")
+        desktop_content = f"""[Desktop Entry]
+Type=Application
+Name=Silis ASIC EDA Studio
+GenericName=ASIC Physical Design Studio
+Comment=Real-Time ASIC Physical Design, Floorplanning, and Signoff Studio
+Exec={appimage_bin} %F
+Icon=silisicon
+Terminal=false
+Categories=Development;Engineering;Electronics;
+Keywords=ASIC;EDA;VLSI;Floorplan;OpenROAD;Yosys;Verilog;Silicon;
+MimeType=application/x-silis-project;application/x-silisproj;
+StartupWMClass=silis
+"""
+        desktop_file = os.path.join(apps_dir, "silis.desktop")
+        try:
+            with open(desktop_file, "w") as f:
+                f.write(desktop_content)
+            try:
+                subprocess.run(["update-desktop-database", apps_dir], capture_output=True, timeout=2)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[First-Boot Setup WARN] Could not write desktop entry: {e}")
+
+        # 90%: Host CLI executable in ~/.local/bin/silis
+        self.progress_updated.emit(90, "Registering host CLI executable in ~/.local/bin/silis...")
+        local_bin = os.path.expanduser("~/.local/bin")
+        os.makedirs(local_bin, exist_ok=True)
+        cli_symlink = os.path.join(local_bin, "silis")
+        try:
+            if os.path.lexists(cli_symlink):
+                try:
+                    os.remove(cli_symlink)
+                except Exception:
+                    pass
+            if os.environ.get("APPIMAGE"):
+                os.symlink(os.environ["APPIMAGE"], cli_symlink)
+            else:
+                launcher_script = f"#!/bin/bash\nexec python3 \"{os.path.join(repo_root, 'silis.py')}\" \"$@\"\n"
+                with open(cli_symlink, "w") as f:
+                    f.write(launcher_script)
+                st = os.stat(cli_symlink)
+                os.chmod(cli_symlink, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        except Exception as e:
+            print(f"[First-Boot Setup WARN] Could not register CLI symlink: {e}")
+
+        # 94%: Register Python SDK host bridge
+        self.progress_updated.emit(94, "Registering Python SDK host bridge...")
+        try:
+            from core.sdk_installer import install_host_sdk_bridge
+            install_host_sdk_bridge(appimage_path=os.environ.get("APPIMAGE"))
+        except Exception as e:
+            print(f"[First-Boot Setup WARN] Could not install SDK host bridge: {e}")
+
+        # 97%: Stage starter project and templates
+        self.progress_updated.emit(97, "Staging starter project and templates...")
+        demo_dest = os.path.join(home_silis, "projects", "demo_chip_top")
+        if not os.path.exists(demo_dest):
+            demo_src = os.path.join(repo_root, "examples", "cpp_macro_to_sv_chip", "chip_top_proj")
+            if not os.path.isdir(demo_src) and appdir:
+                demo_src = os.path.join(appdir, "examples", "cpp_macro_to_sv_chip", "chip_top_proj")
+            if os.path.isdir(demo_src):
+                try:
+                    shutil.copytree(demo_src, demo_dest)
+                except Exception:
+                    pass
+
         # Mark initialization complete
-        self.progress_updated.emit(98, "Writing initialization marker...")
+        self.progress_updated.emit(99, "Writing initialization marker...")
         marker_file = os.path.expanduser("~/.silis/.initialized")
         with open(marker_file, "w") as f:
-            f.write(f"SILIS_INITIALIZED=1\nTIMESTAMP={time.time()}\n")
+            f.write(f"SILIS_INITIALIZED=1\nTIMESTAMP={time.time()}\nVERSION=1.0.0\n")
 
         self.progress_updated.emit(100, "Setup complete.")
 

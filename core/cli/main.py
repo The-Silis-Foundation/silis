@@ -260,7 +260,12 @@ def handle_cli(args_list):
         tui_repl.run_interactive_shell(target_proj)
         return True
 
-    # 1. Project Initialization
+    # 1. Project Initialization & First-Boot Environment Check
+    try:
+        from core.setup_wizard import run_first_boot_if_needed
+        run_first_boot_if_needed()
+    except Exception as _e_init:
+        print(f"[Silis Init] Note on CLI first-boot check: {_e_init}")
 
     if args.init is not None:
         if args.init == "__INTERACTIVE__" and not args.rtl and not args.top:

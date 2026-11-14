@@ -12,6 +12,7 @@ or dynamically mount and invoke the Silis AppImage headlessly.
 import os
 import sys
 import site
+import time
 import shutil
 import stat
 import subprocess
@@ -90,6 +91,25 @@ def install_host_sdk_bridge(appimage_path=None, force=False):
     print(f"[SUCCESS] Silis Python SDK package registered at: {silis_pkg_dir}")
     print("You can now run 'python3 -c \"import silis; print(silis.Pipeline)\"' from any host terminal.")
     return True
+
+
+def check_and_auto_bootstrap(appimage_path=None):
+    """
+    Checks if host SDK bridge is already installed. If not, installs it.
+    """
+    marker = os.path.expanduser("~/.silis/.sdk_bootstrap_done")
+    if os.path.isfile(marker):
+        return True
+    try:
+        success = install_host_sdk_bridge(appimage_path=appimage_path)
+        if success:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w") as f:
+                f.write(f"SDK_BOOTSTRAP_DONE=1\nTIMESTAMP={time.time()}\n")
+        return success
+    except Exception as e:
+        print(f"[WARN] Auto-bootstrap error: {e}")
+        return False
 
 
 if __name__ == "__main__":
