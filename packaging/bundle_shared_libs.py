@@ -17,12 +17,33 @@ def collect_libs(appdir: str):
         print(f"Error: site-packages not found at {python_site}")
         sys.exit(1)
         
-    # Find all .so files in PyQt6, PyQt6_WebEngine, and opt/python/lib
+    # Find all binary ELF and .so files across opt/python, third-party/bin, core, and GDS3D
+    scan_dirs = [
+        os.path.join(appdir, "opt", "python"),
+        os.path.join(appdir, "third-party", "bin"),
+        os.path.join(appdir, "core"),
+        os.path.join(appdir, "third-party", "GDS3D"),
+    ]
     so_binaries = []
-    for root, _, files in os.walk(os.path.join(appdir, "opt", "python")):
-        for f in files:
-            if f.endswith(".so") or ".so." in f or f.startswith("python3"):
-                so_binaries.append(os.path.join(root, f))
+    for s_dir in scan_dirs:
+        if not os.path.exists(s_dir):
+            continue
+        for root, _, files in os.walk(s_dir):
+            if "build/_deps" in root:
+                continue
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.islink(fp):
+                    continue
+                if f.endswith(".so") or ".so." in f or f.startswith("python3"):
+                    so_binaries.append(fp)
+                else:
+                    try:
+                        with open(fp, "rb") as bf:
+                            if bf.read(4) == b"\x7fELF":
+                                so_binaries.append(fp)
+                    except Exception:
+                        pass
                 
     print(f"Found {len(so_binaries)} binary objects inside AppDir to analyze.")
     
@@ -33,8 +54,15 @@ def collect_libs(appdir: str):
         "libnss_files.so", "libnss_dns.so"
     }
     
+    # Compute transitive closure of all external library dependencies
     needed_libs = set()
-    for binary in so_binaries:
+    to_scan = list(so_binaries)
+    scanned = set()
+    while to_scan:
+        binary = to_scan.pop()
+        if binary in scanned:
+            continue
+        scanned.add(binary)
         try:
             out = subprocess.check_output(["ldd", binary], text=True, stderr=subprocess.DEVNULL)
             for line in out.splitlines():
@@ -47,7 +75,9 @@ def collect_libs(appdir: str):
                     if any(lib_name.startswith(excl) for excl in GLIBC_EXCLUDE):
                         continue
                     if os.path.exists(lib_path) and not lib_path.startswith(appdir):
-                        needed_libs.add(lib_path)
+                        if lib_path not in needed_libs:
+                            needed_libs.add(lib_path)
+                            to_scan.append(lib_path)
         except Exception:
             pass
 

@@ -30,7 +30,7 @@ if [ ! -d "${APPDIR}/opt/python" ]; then
     tar -xzf "${PYTHON_TAR}" -C "${APPDIR}/opt"
 fi
 
-# 3. Install self-contained wheels (PyQt6, WebEngine, QScintilla, gdstk, numpy)
+# 3. Install self-contained wheels (PyQt6, WebEngine, QScintilla, gdstk, numpy, Pillow, packaging)
 echo "=== Installing fully self-contained wheels into AppDir Python ==="
 PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
     PyQt6 \
@@ -38,17 +38,15 @@ PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
     PyQt6-QScintilla \
     gdstk \
     numpy \
-    websockify
-
-# 3b. Collect all external shared libraries (libxcb*, libxkbcommon*, libEGL*, etc.)
-echo "=== Bundling system shared libraries into AppDir/usr/lib/x86_64-linux-gnu ==="
-python3 "${REPO_DIR}/packaging/bundle_shared_libs.py" "${APPDIR}"
+    websockify \
+    Pillow \
+    packaging
 
 # 4. Copy application core files into AppDir
 echo "=== Staging application codebase into AppDir ==="
 cp -a "${REPO_DIR}/silis.py" "${APPDIR}/silis.py"
 cp -a "${REPO_DIR}/__init__.py" "${APPDIR}/__init__.py"
-cp -a "${REPO_DIR}/core" "${APPDIR}/core"
+rsync -a --exclude='.git' "${REPO_DIR}/core/" "${APPDIR}/core/"
 cp -a "${REPO_DIR}/packaging/AppRun" "${APPDIR}/AppRun"
 cp -a "${REPO_DIR}/packaging/silis.desktop" "${APPDIR}/silis.desktop"
 cp -a "${REPO_DIR}/packaging/silisicon.png" "${APPDIR}/silisicon.png"
@@ -88,6 +86,21 @@ if [ -d "${REPO_DIR}/third-party" ] && [ ! -d "${APPDIR}/third-party" ]; then
     echo "=== Copying third-party tool binaries and plugins ==="
     cp -a "${REPO_DIR}/third-party" "${APPDIR}/third-party"
 fi
+
+# Normalize symlinks to relative targets inside AppDir for zero host path leaks
+if [ -d "${APPDIR}/core/editor" ]; then
+    (cd "${APPDIR}/core/editor" && ln -sfn ../../third-party/monaco/node_modules/monaco-editor/min/vs vs)
+fi
+if [ -d "${APPDIR}/third-party/monaco/min" ]; then
+    (cd "${APPDIR}/third-party/monaco/min" && ln -sfn ../node_modules/monaco-editor/min/vs vs)
+fi
+if [ -d "${APPDIR}/third-party/bin" ]; then
+    (cd "${APPDIR}/third-party/bin" && ln -sfn ../OpenSTA/build/sta sta)
+fi
+
+# 6b. Collect all external shared libraries (libxcb*, libxkbcommon*, libEGL*, libtcl*, libreadline*, etc.)
+echo "=== Bundling system shared libraries into AppDir/usr/lib/x86_64-linux-gnu ==="
+python3 "${REPO_DIR}/packaging/bundle_shared_libs.py" "${APPDIR}"
 
 chmod +x "${APPDIR}/AppRun"
 

@@ -17,6 +17,7 @@ export PDK_ROOT="${PDK_ROOT:-$HOME/.silis/pdks}"
 mkdir -p "$PDK_ROOT"
 
 # 2. Standalone Python Selection & Environment Isolation
+export PYTHONNOUSERSITE=1
 if [ -d "$APPDIR/opt/python" ]; then
     export PYTHONHOME="$APPDIR/opt/python"
     export PYTHON_BIN="$APPDIR/opt/python/bin/python3"
@@ -33,7 +34,7 @@ fi
 # 3. Dynamic Library Paths (Include embedded Qt6 and OpenROAD shared libraries)
 QT6_LIB="$PY_SITE/PyQt6/Qt6/lib"
 WEBENGINE_LIB="$PY_SITE/PyQt6_WebEngine/Qt6/lib"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/backendflow/def_viewer_cpp/build:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build:$LD_LIBRARY_PATH"
 
 # 4. Strict Isolated PYTHONPATH (prioritize bundled wheels, then repo core)
 if [ -n "$PY_SITE" ] && [ -d "$PY_SITE" ]; then
@@ -43,9 +44,12 @@ else
 fi
 
 # 5. Qt6 & QtWebEngine Discovery
-QTWEBENGINE_EXE="$PY_SITE/PyQt6_WebEngine/Qt6/libexec/QtWebEngineProcess"
-if [ -f "$QTWEBENGINE_EXE" ]; then
-    export QTWEBENGINEPROCESS_PATH="$QTWEBENGINE_EXE"
+if [ -f "$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess" ]; then
+    export QTWEBENGINEPROCESS_PATH="$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess"
+    export QTWEBENGINE_RESOURCES_PATH="$PY_SITE/PyQt6/Qt6/resources"
+    export QTWEBENGINE_LOCALES_PATH="$PY_SITE/PyQt6/Qt6/translations/qtwebengine_locales"
+elif [ -f "$PY_SITE/PyQt6_WebEngine/Qt6/libexec/QtWebEngineProcess" ]; then
+    export QTWEBENGINEPROCESS_PATH="$PY_SITE/PyQt6_WebEngine/Qt6/libexec/QtWebEngineProcess"
     export QTWEBENGINE_RESOURCES_PATH="$PY_SITE/PyQt6_WebEngine/Qt6/resources"
     export QTWEBENGINE_LOCALES_PATH="$PY_SITE/PyQt6_WebEngine/Qt6/translations/qtwebengine_locales"
 elif [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
@@ -55,7 +59,7 @@ elif [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
 fi
 
 # 6. EDA Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
-export PATH="$APPDIR/third-party/bin:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
+export PATH="$APPDIR/third-party/bin:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
 export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
 
 # 7. Dedicated CLI switches for SDK and First-Boot handling
