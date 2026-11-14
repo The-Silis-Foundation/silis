@@ -18,7 +18,7 @@ import readline
 import subprocess
 import json
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 VENDOR_DIR = os.path.join(REPO_ROOT, "third-party", "python-packages")
 if VENDOR_DIR not in sys.path:
     sys.path.insert(0, VENDOR_DIR)
@@ -202,7 +202,10 @@ class SilisCompleter:
 class SilisInteractiveShell:
     """Interactive TUI REPL for Silis ASIC Flow."""
     def __init__(self, project_arg=None):
-        import cli_flow
+        try:
+            from . import flow as cli_flow
+        except ImportError:
+            from cli import flow as cli_flow
         self.cli_flow = cli_flow
         self.proj_file = cli_flow.find_project_file(project_arg)
         self.runner = None
@@ -560,7 +563,10 @@ class SilisInteractiveShell:
                         self.runner.execute_tcl(line, "interactive")
                 else:
                     # Fallback to standard CLI handling
-                    import cli_main
+                    try:
+                        from . import main as cli_main
+                    except ImportError:
+                        from cli import main as cli_main
                     try:
                         cli_main.handle_cli(shlex.split(line))
                     except Exception as e:

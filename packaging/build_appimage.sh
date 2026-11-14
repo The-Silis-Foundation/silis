@@ -46,7 +46,8 @@ PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
 echo "=== Staging application codebase into AppDir ==="
 cp -a "${REPO_DIR}/silis.py" "${APPDIR}/silis.py"
 cp -a "${REPO_DIR}/__init__.py" "${APPDIR}/__init__.py"
-rsync -a --exclude='.git' "${REPO_DIR}/core/" "${APPDIR}/core/"
+rsync -a --delete --exclude='.git' "${REPO_DIR}/core/" "${APPDIR}/core/"
+rm -rf "${APPDIR}/core/core"
 cp -a "${REPO_DIR}/packaging/AppRun" "${APPDIR}/AppRun"
 cp -a "${REPO_DIR}/packaging/silis.desktop" "${APPDIR}/silis.desktop"
 cp -a "${REPO_DIR}/packaging/silisicon.png" "${APPDIR}/silisicon.png"
@@ -97,6 +98,14 @@ fi
 if [ -d "${APPDIR}/third-party/bin" ]; then
     (cd "${APPDIR}/third-party/bin" && ln -sfn ../OpenSTA/build/sta sta)
 fi
+if [ -d "${APPDIR}/third-party/plugins/ghdl" ]; then
+    (cd "${APPDIR}/third-party/plugins/ghdl" && ln -sfn vhdl/ieee ieee && ln -sfn vhdl/std std)
+    if [ -d "${APPDIR}/third-party/plugins/ghdl/gcc" ]; then
+        (cd "${APPDIR}/third-party/plugins/ghdl/gcc" && ln -sfn ../vhdl vhdl)
+    fi
+    rm -f "${APPDIR}/third-party/plugins/ghdl/vhdl/src"
+fi
+find "${APPDIR}/third-party" -name "node_gyp_bins" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # 6b. Collect all external shared libraries (libxcb*, libxkbcommon*, libEGL*, libtcl*, libreadline*, etc.)
 echo "=== Bundling system shared libraries into AppDir/usr/lib/x86_64-linux-gnu ==="
@@ -121,7 +130,11 @@ fi
 echo "=== Generating 100% Standalone Silis-x86_64.AppImage ==="
 export ARCH=x86_64
 UPDATE_INFO="zsync|https://github.com/The-Silis-Foundation/silis/releases/latest/download/Silis-x86_64.AppImage.zsync"
+RUNTIME_OPT=()
+if [ -f "${CACHE_DIR}/runtime-x86_64" ]; then
+    RUNTIME_OPT=(--runtime-file "${CACHE_DIR}/runtime-x86_64")
+fi
 
-"${TOOL_CMD}" -u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage" || "${TOOL_CMD}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage"
+"${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" -u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage" || "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage"
 
 echo "=== Standalone AppImage build complete! Deliverable: ${OUTPUT_DIR}/Silis-x86_64.AppImage ==="

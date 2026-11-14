@@ -253,10 +253,6 @@ def handle_cli(args_list):
                 print(f"[WARN] No registered project matched '{tgt}'.")
         return True
 
-    # Standalone Backend GUI launcher
-    parser.add_argument("--bend", "--backend", dest="backend_gui", action="store_true",
-                        help="Launch standalone backend physical design GUI decoupled from frontend RTL/synthesis tabs")
-
     # Interactive Shell mode
     if getattr(args, "interactive_shell", None) is not None:
         target_proj = args.interactive_shell if args.interactive_shell != "__DEFAULT__" else None
