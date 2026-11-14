@@ -236,18 +236,53 @@ Downstream engines execute Silis instructions verbatim. All OpenROAD TCL scripts
 
 ---
 
-## Pre-Release Packages
+## Pre-Release Packages (v0.1.1-pre)
 
-Standalone release deliverables are published on [GitHub Releases](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.0-pre):
+Standalone release deliverables and manifests are published on [GitHub Releases (v0.1.1-pre)](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre):
 
-- **Standalone Linux Package**: [`Silis-x86_64.AppImage`](https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.0-pre/Silis-x86_64.AppImage) (Self-contained Linux executable bundling Python 3.12, Qt6 runtime, and SkyWater 130nm technology resources).
-- **Differential Update Manifest**: [`Silis-x86_64.AppImage.zsync`](https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.0-pre/Silis-x86_64.AppImage.zsync) (Bandwidth-efficient incremental updates via Zsync).
+<table>
+<thead>
+<tr>
+<th>Platform / Architecture</th>
+<th>Standalone Deliverable</th>
+<th>Delta Updater</th>
+<th>Web / Cloud Edition</th>
+<th>Source Code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Linux x86-64 (64-bit)</strong></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.2 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
+<td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.zip">zip</a></td>
+</tr>
+</tbody>
+</table>
+
+### Quickstart
 
 ```bash
-# Make executable and launch immediately on Linux:
+# 1. Make executable
 chmod +x Silis-x86_64.AppImage
+
+# 2. Launch Silis Studio (GUI mode)
 ./Silis-x86_64.AppImage
+
+# Alternatively, invoke headless CLI flow directly
+./Silis-x86_64.AppImage --projects
 ```
+
+> [!NOTE]
+> **Ubuntu 24.04 and RHEL 9 Users**: Newer distributions omit `libfuse2` by default. If the AppImage fails to mount, install `libfuse2t64` (Ubuntu/Debian) or `fuse-libs` (RHEL/Fedora), or execute directly with `--appimage-extract-and-run`.
+
+### Verification & Checksums
+
+| File | Size | MD5 Hash | SHA-256 Checksum |
+| :--- | :--- | :--- | :--- |
+| `Silis-x86_64.AppImage` | 1.2 GB | `91174e689c7e27e1d536295ab9f41bf9` | `7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19b9` |
+| `Silis-x86_64.AppImage.zsync` | 2.4 MB | `7ffbf4a966967ccc44fe5fe122b8c3e1` | `e1df1a9061571e29e17fb97961f88fd5600ba91eb586d6618ad326628a4b454a` |
 
 ---
 
