@@ -105,6 +105,13 @@ if [ -f "${REPO_DIR}/assets/ssa/pdk_aliases.json" ]; then
     cp -a "${REPO_DIR}/assets/ssa/pdk_aliases.json" "${APPDIR}/assets/pdk/pdk_aliases.json"
 fi
 
+# Ensure cross-compatibility symlinks between assets/pdk and third-party/pdks
+mkdir -p "${APPDIR}/assets/pdk/third-party"
+(cd "${APPDIR}/assets/pdk/third-party" && ln -sfn .. pdks)
+mkdir -p "${APPDIR}/third-party/pdks"
+(cd "${APPDIR}/third-party/pdks" && ln -sfn ../../assets/pdk/sky130A sky130A && ln -sfn ../../assets/pdk/sky130B sky130B && ln -sfn ../../assets/pdk/gf180mcu gf180mcu)
+(cd "${APPDIR}/third-party/pdks" && ln -sfn ../../assets/pdk/pdk_master.json pdk_master.json && ln -sfn ../../assets/pdk/pdk_aliases.json pdk_aliases.json)
+
 # 6. Copy third-party tools & extensions if present
 if [ -d "${REPO_DIR}/third-party" ] && [ ! -d "${APPDIR}/third-party" ]; then
     echo "=== Copying third-party tool binaries and plugins ==="
@@ -159,5 +166,10 @@ if [ -f "${CACHE_DIR}/runtime-x86_64" ]; then
 fi
 
 "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" -u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage" || "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage"
+
+if command -v zsyncmake &>/dev/null; then
+    echo "=== Generating zsync update metadata ==="
+    (cd "${OUTPUT_DIR}" && zsyncmake -u "Silis-x86_64.AppImage" "Silis-x86_64.AppImage")
+fi
 
 echo "=== Standalone AppImage build complete! Deliverable: ${OUTPUT_DIR}/Silis-x86_64.AppImage ==="

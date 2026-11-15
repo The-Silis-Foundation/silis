@@ -12,9 +12,17 @@ fi
 export APPDIR
 export REPO_ROOT="$APPDIR"
 
-# 1. PDK Root default inside AppDir bundle (self-contained fallback)
-export PDK_ROOT="${PDK_ROOT:-$HOME/.silis/pdks}"
-mkdir -p "$PDK_ROOT"
+# 1. PDK Root resolution (prioritize host ~/.silis/pdks if populated, else bundle fallback)
+if [ -z "${PDK_ROOT:-}" ]; then
+    if [ -d "$HOME/.silis/pdks/sky130A" ]; then
+        export PDK_ROOT="$HOME/.silis/pdks"
+    elif [ -d "$APPDIR/assets/pdk/sky130A" ]; then
+        export PDK_ROOT="$APPDIR/assets/pdk"
+    else
+        export PDK_ROOT="$HOME/.silis/pdks"
+    fi
+fi
+mkdir -p "$HOME/.silis/pdks" 2>/dev/null || true
 
 # 2. Standalone Python Selection & Environment Isolation
 export PYTHONNOUSERSITE=1
@@ -75,7 +83,12 @@ fi
 export PATH="$APPDIR/third-party/bin:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
 export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
 
-# 7. Dedicated CLI switches for SDK and First-Boot handling
+# 7. Verilator compilation optimization & ccache fallback
+if ! command -v ccache &>/dev/null; then
+    export OBJCACHE=""
+fi
+
+# 8. Dedicated CLI switches for SDK and First-Boot handling
 if [ "${1:-}" = "--install-sdk" ]; then
     exec "$PYTHON_BIN" "$APPDIR/core/sdk_installer.py" --force "$APPIMAGE"
 fi

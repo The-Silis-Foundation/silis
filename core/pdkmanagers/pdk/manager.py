@@ -407,6 +407,45 @@ class PDKManager:
     def get_cts_cmd(self, pdk_name, lib_path=None):
         return SSAForge.get_cts_cmd(pdk_name, lib_path)
 
+    def _resolve_pdk_file(self, base_dir: str, rel_path: str) -> str:
+        """Deterministically resolves PDK asset paths across AppImage bundles, user cache, and source tree."""
+        if not rel_path:
+            return ""
+        if os.path.isabs(rel_path) and os.path.exists(rel_path):
+            return os.path.normpath(rel_path)
+
+        cleaned = rel_path
+        for pfx in ("third-party/pdks/", "assets/pdk/", "third-party/", "assets/"):
+            if cleaned.startswith(pfx):
+                cleaned = cleaned[len(pfx):]
+
+        appdir = os.environ.get("APPDIR", "")
+        pdk_root = os.environ.get("PDK_ROOT", "")
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        candidates = [
+            os.path.normpath(os.path.join(base_dir, rel_path)),
+            os.path.normpath(os.path.join(base_dir, cleaned)),
+            os.path.normpath(os.path.join(appdir, "assets", "pdk", cleaned)) if appdir else "",
+            os.path.normpath(os.path.join(appdir, "assets", "pdk", rel_path)) if appdir else "",
+            os.path.normpath(os.path.join(appdir, "third-party", "pdks", cleaned)) if appdir else "",
+            os.path.normpath(os.path.join(pdk_root, cleaned)) if pdk_root else "",
+            os.path.normpath(os.path.join(pdk_root, rel_path)) if pdk_root else "",
+            os.path.expanduser(f"~/.silis/pdks/{cleaned}"),
+            os.path.expanduser(f"~/.silis/pdks/{rel_path}"),
+            os.path.normpath(os.path.join(repo_root, "assets", "pdk", cleaned)),
+            os.path.normpath(os.path.join(repo_root, "third-party", "pdks", cleaned)),
+            os.path.normpath(os.path.join(repo_root, "third-party", "pdks", rel_path)),
+        ]
+
+        for cand in candidates:
+            if cand and os.path.exists(cand):
+                return cand
+
+        if any(kw in base_dir.lower() for kw in ("assets/pdk", ".silis/pdks", "pdks")):
+            return os.path.normpath(os.path.join(base_dir, cleaned))
+        return os.path.normpath(os.path.join(base_dir, rel_path))
+
     def load_master_catalog(self):
         """Loads PDK master JSON catalog mapping relative paths to absolute repo paths."""
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -442,21 +481,10 @@ class PDKManager:
             for var_key, var_info in variants.items():
                 var_name = var_info.get("name", var_key)
 
-                tlef = var_info.get("tech_lef", "")
-                if tlef and not os.path.isabs(tlef):
-                    tlef = os.path.normpath(os.path.join(base_dir, tlef))
-
-                lef = var_info.get("std_cell_lef", "")
-                if lef and not os.path.isabs(lef):
-                    lef = os.path.normpath(os.path.join(base_dir, lef))
-
-                gds = var_info.get("gds", "")
-                if gds and not os.path.isabs(gds):
-                    gds = os.path.normpath(os.path.join(base_dir, gds))
-
-                tech = var_info.get("magic_tech", "")
-                if tech and not os.path.isabs(tech):
-                    tech = os.path.normpath(os.path.join(base_dir, tech))
+                tlef = self._resolve_pdk_file(base_dir, var_info.get("tech_lef", ""))
+                lef = self._resolve_pdk_file(base_dir, var_info.get("std_cell_lef", ""))
+                gds = self._resolve_pdk_file(base_dir, var_info.get("gds", ""))
+                tech = self._resolve_pdk_file(base_dir, var_info.get("magic_tech", ""))
 
                 corner_groups = var_info.get("corners", {})
                 all_corners = {}
@@ -467,9 +495,7 @@ class PDKManager:
                 for grp_key, grp_corners in corner_groups.items():
                     resolved_corner_groups[grp_key] = {}
                     for c_name, c_data in grp_corners.items():
-                        c_lib = c_data.get("lib", "")
-                        if c_lib and not os.path.isabs(c_lib):
-                            c_lib = os.path.normpath(os.path.join(base_dir, c_lib))
+                        c_lib = self._resolve_pdk_file(base_dir, c_data.get("lib", ""))
                         all_corners[c_name] = c_lib
                         resolved_corner_groups[grp_key][c_name] = {
                             "lib": c_lib,

@@ -1735,6 +1735,8 @@ exit
                 sim_tool_name = "Verilator" if use_verilator else "iverilog"
                 self.queue.put(("[SYS]", f"Compiling RTL & Testbenches with {sim_tool_name} ({len(src_v)} files, {cpu_threads} threads)..."))
                 sub_env = os.environ.copy()
+                if not shutil.which("ccache"):
+                    sub_env["OBJCACHE"] = ""
                 v_root = os.path.abspath(os.path.join(REPO_ROOT, "third-party", "share", "verilator"))
                 if os.path.isdir(v_root):
                     sub_env["VERILATOR_ROOT"] = v_root

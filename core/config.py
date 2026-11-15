@@ -52,8 +52,22 @@ def setup_environment():
         except Exception as e:
             print(f"[SILIS] Notice: First-launch PDK initialization: {e}")
 
-    # Set standard process environment variables
-    os.environ["PDK_ROOT"] = SILIS_PDK_DIR
+    # Determine active PDK root with fallback hierarchy:
+    # 1. User local cache (~/.silis/pdks) if populated with standard cell libraries
+    # 2. AppDir bundled assets ($APPDIR/assets/pdk) for zero-latency standalone execution
+    # 3. Source repository third-party pdks
+    appdir = os.environ.get("APPDIR", "")
+    if os.path.isdir(os.path.join(SILIS_PDK_DIR, "sky130A")):
+        os.environ["PDK_ROOT"] = SILIS_PDK_DIR
+    elif appdir and os.path.isdir(os.path.join(appdir, "assets", "pdk", "sky130A")):
+        os.environ["PDK_ROOT"] = os.path.join(appdir, "assets", "pdk")
+    elif os.path.isdir(os.path.join(repo_root, "third-party", "pdks", "sky130A")):
+        os.environ["PDK_ROOT"] = os.path.join(repo_root, "third-party", "pdks")
+    elif os.path.isdir(os.path.join(repo_root, "assets", "pdk", "sky130A")):
+        os.environ["PDK_ROOT"] = os.path.join(repo_root, "assets", "pdk")
+    else:
+        os.environ["PDK_ROOT"] = SILIS_PDK_DIR
+
     os.environ["SILIS_MACRO_CACHE"] = SILIS_MACRO_DIR
 
 setup_environment()

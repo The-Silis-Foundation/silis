@@ -15,7 +15,11 @@
 AR = ar
 CXX = g++
 LINK = g++
+ifeq ($(shell which ccache 2>/dev/null),)
+OBJCACHE ?=
+else
 OBJCACHE ?= ccache
+endif
 PERL = perl
 PYTHON3 = python3
 
