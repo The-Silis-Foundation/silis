@@ -281,8 +281,8 @@ chmod +x Silis-x86_64.AppImage
 
 | File | Size | MD5 Hash | SHA-256 Checksum |
 | :--- | :--- | :--- | :--- |
-| `Silis-x86_64.AppImage` | 1.2 GB | `91174e689c7e27e1d536295ab9f41bf9` | `7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19b9` |
-| `Silis-x86_64.AppImage.zsync` | 2.4 MB | `7ffbf4a966967ccc44fe5fe122b8c3e1` | `e1df1a9061571e29e17fb97961f88fd5600ba91eb586d6618ad326628a4b454a` |
+| `Silis-x86_64.AppImage` | 1.2 GB | `44325dab58c8eec87070aa7bab420414` | `330deae0e527ec70b8087b2432cc8302acc39fe4b1d3e605264f2ce439dc7703` |
+| `Silis-x86_64.AppImage.zsync` | 2.5 MB | `810ae37f1d59084fb2a9b034ffcc40d1` | `25eeb3cb2ad1a7a31d8823efd9029c954586bb393aafb6f547393e8e458363c7` |
 
 ---
 
