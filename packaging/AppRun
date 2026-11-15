@@ -34,7 +34,7 @@ fi
 # 3. Dynamic Library Paths (Include embedded Qt6 and OpenROAD shared libraries)
 QT6_LIB="$PY_SITE/PyQt6/Qt6/lib"
 WEBENGINE_LIB="$PY_SITE/PyQt6_WebEngine/Qt6/lib"
-BASE_LD_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build"
+BASE_LD_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/third-party/plugins:$APPDIR/third-party/ordlibs:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build"
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
     export LD_LIBRARY_PATH="$BASE_LD_PATH:$LD_LIBRARY_PATH"
 else

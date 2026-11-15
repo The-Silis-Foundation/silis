@@ -112,7 +112,6 @@ class SetupWorker(QThread):
                 os.path.join(repo_root, "assets", "pdk", variant),
                 os.path.join(repo_root, "third-party", "pdks", variant),
                 os.path.expanduser(f"~/.silis/pdks/{variant}"),
-                f"/home/econsystems/.silis_backup_audit/pdks/{variant}",
             ]
 
             found_src = None
@@ -157,7 +156,6 @@ class SetupWorker(QThread):
                 os.path.join(repo_root, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef"),
                 os.path.join(repo_root, "core", "sky130_power_switch.lef"),
                 os.path.join(appdir, "assets", "sky130_power_switch.lef") if appdir else None,
-                f"/home/econsystems/.silis_backup_audit/pdks/{variant}/libs.ref/sky130_power_switch/lef/power_switch.lef",
             ]
             for kp in known_psw_paths:
                 if kp and os.path.isfile(kp):
@@ -173,7 +171,6 @@ class SetupWorker(QThread):
             if not os.path.isdir(dst_sram_lef) or not os.listdir(dst_sram_lef):
                 sram_candidates = [
                     os.path.join(appdir, "assets", "pdk", variant, "libs.ref", "sky130_sram_macros") if appdir else None,
-                    f"/home/econsystems/.silis_backup_audit/pdks/{variant}/libs.ref/sky130_sram_macros",
                     os.path.join(repo_root, "assets", "pdk", variant, "libs.ref", "sky130_sram_macros"),
                 ]
                 for sc in sram_candidates:
@@ -191,7 +188,6 @@ class SetupWorker(QThread):
         ssa_candidates = [
             os.path.join(appdir, "assets", "ssa") if appdir else None,
             os.path.join(repo_root, "assets", "ssa"),
-            "/home/econsystems/.silis_backup_audit/ssa",
         ]
         for s_cand in ssa_candidates:
             if s_cand and os.path.isdir(s_cand):
@@ -223,7 +219,6 @@ class SetupWorker(QThread):
         master_candidates = [
             os.path.join(appdir, "assets", "pdk", "pdk_master.json") if appdir else None,
             os.path.join(repo_root, "assets", "pdk", "pdk_master.json"),
-            "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json",
         ]
         master_copied = False
         for mc in master_candidates:

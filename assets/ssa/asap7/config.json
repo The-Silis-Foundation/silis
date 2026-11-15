@@ -3,7 +3,7 @@
   "display_name": "ASAP 7nm Predictive FinFET (ASAP7)",
   "aliases_pdk": ["asap7", "asap_7nm", "asap7sc7p5t"],
   "paths": {
-    "pdk_root": "/home/econsystems/silisfoundation/pdk_asap7",
+    "pdk_root": "~/.silis/pdks/asap7",
     "tech_lef": "lef/asap7_tech.tlef",
     "std_cell_lef": "lef/asap7_cells.lef",
     "liberty": "lib/asap7_tt.lib",

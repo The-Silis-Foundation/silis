@@ -3,12 +3,12 @@
   "display_name": "GlobalFoundries 180nm MCU (GF180MCU)",
   "aliases_pdk": ["gf180mcu", "gf180", "gf180mcuC"],
   "paths": {
-    "pdk_root": "/home/econsystems/.silis/pdks/gf180mcu",
+    "pdk_root": "~/.silis/pdks/gf180mcu",
     "tech_lef": "gf180mcu_5LM_1TM_9K_9t_tech.lef",
     "std_cell_lef": "gf180mcu_5LM_1TM_9K_9t_sc.lef",
     "liberty": "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib",
     "extra_lefs": [
-      "/home/econsystems/.silis/pdks/gf180mcu/gf180mcu_fd_io.lef"
+      "gf180mcu_fd_io.lef"
     ]
   },
   "site": {

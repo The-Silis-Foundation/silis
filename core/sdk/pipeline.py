@@ -813,12 +813,13 @@ class Pipeline:
         ls_spec = spec.get("level_shifters", {})
 
         def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
+        fp_tcl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backendflow", "floorplanner", "silis_fp.tcl")).replace("\\", "/")
         lines = [
             "# ===================================================================",
             "# SILIS AUTO-SYNTHESIZED UNIFIED FLOORPLAN (FPS ARCHITECTURE)",
             "# Zero error-swallowing catch blocks - 100% downstream execution integrity",
             "# ===================================================================",
-            'if {[info procs create_fence] eq ""} { source "/home/econsystems/silisfoundation/silis/core/backendflow/floorplanner/silis_fp.tcl" }',
+            f'if {{[info procs create_fence] eq ""}} {{ source "{fp_tcl}" }}',
             'if {[info commands NULL] eq ""} { proc NULL {args} { return "NULL" } }',
             "",
         ]
