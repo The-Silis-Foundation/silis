@@ -40,6 +40,9 @@ def configure_display_and_auth():
     if "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
+    # Suppress Chromium diagnostic fallbacks (e.g. GBM DRI fallback to Vulkan on Linux systems without direct GBM buffers)
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-logging --log-level=3 --disable-gpu-compositing")
+
 configure_display_and_auth()
 
 # 1. PDK Root default inside project directory

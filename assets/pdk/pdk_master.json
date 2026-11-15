@@ -1,0 +1,225 @@
+{
+  "version": "1.0",
+  "default_pdk": "sky130A",
+  "families": {
+    "sky130": {
+      "display_name": "SkyWater 130nm",
+      "variants": {
+        "sky130A": {
+          "name": "Sky130A (High Density)",
+          "tech_lef": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+          "std_cell_lef": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+          "gds": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+          "magic_tech": "third-party/pdks/sky130A/libs.tech/magic/sky130A.tech",
+          "default_corner": "tt_025C_1v80",
+          "corners": {
+            "ss": {
+              "ss_n40C_1v35": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v35.lib",
+                "temp": -40,
+                "volt": 1.35
+              },
+              "ss_n40C_1v28": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v28.lib",
+                "temp": -40,
+                "volt": 1.28
+              },
+              "ss_n40C_1v60": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v60.lib",
+                "temp": -40,
+                "volt": 1.6
+              },
+              "ss_n40C_1v44": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v44.lib",
+                "temp": -40,
+                "volt": 1.44
+              },
+              "ss_100C_1v60": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v60.lib",
+                "temp": 100,
+                "volt": 1.6
+              },
+              "ss_n40C_1v76": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v76.lib",
+                "temp": -40,
+                "volt": 1.8
+              },
+              "ss_100C_1v40": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v40.lib",
+                "temp": 100,
+                "volt": 1.4
+              },
+              "ss_n40C_1v40": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v40.lib",
+                "temp": -40,
+                "volt": 1.4
+              }
+            },
+            "ff": {
+              "ff_n40C_1v95": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v95.lib",
+                "temp": -40,
+                "volt": 1.95
+              },
+              "ff_100C_1v65": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_100C_1v65.lib",
+                "temp": 100,
+                "volt": 1.65
+              },
+              "ff_100C_1v95": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_100C_1v95.lib",
+                "temp": 100,
+                "volt": 1.95
+              },
+              "ff_n40C_1v56": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v56.lib",
+                "temp": -40,
+                "volt": 1.56
+              },
+              "ff_n40C_1v65": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v65.lib",
+                "temp": -40,
+                "volt": 1.65
+              },
+              "ff_n40C_1v76": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v76.lib",
+                "temp": -40,
+                "volt": 1.8
+              }
+            },
+            "tt": {
+              "tt_100C_1v80": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_100C_1v80.lib",
+                "temp": 100,
+                "volt": 1.8
+              },
+              "tt_025C_1v80": {
+                "lib": "third-party/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                "temp": 25,
+                "volt": 1.8
+              }
+            }
+          }
+        },
+        "sky130B": {
+          "name": "Sky130B (High Density)",
+          "tech_lef": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+          "std_cell_lef": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+          "gds": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+          "magic_tech": "third-party/pdks/sky130B/libs.tech/magic/sky130B.tech",
+          "default_corner": "tt_025C_1v80",
+          "corners": {
+            "ss": {
+              "ss_n40C_1v35": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v35.lib",
+                "temp": -40,
+                "volt": 1.35
+              },
+              "ss_n40C_1v28": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v28.lib",
+                "temp": -40,
+                "volt": 1.28
+              },
+              "ss_n40C_1v60": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v60.lib",
+                "temp": -40,
+                "volt": 1.6
+              },
+              "ss_n40C_1v44": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v44.lib",
+                "temp": -40,
+                "volt": 1.44
+              },
+              "ss_100C_1v60": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v60.lib",
+                "temp": 100,
+                "volt": 1.6
+              },
+              "ss_n40C_1v76": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v76.lib",
+                "temp": -40,
+                "volt": 1.8
+              },
+              "ss_100C_1v40": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v40.lib",
+                "temp": 100,
+                "volt": 1.4
+              },
+              "ss_n40C_1v40": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_n40C_1v40.lib",
+                "temp": -40,
+                "volt": 1.4
+              }
+            },
+            "ff": {
+              "ff_n40C_1v95": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v95.lib",
+                "temp": -40,
+                "volt": 1.95
+              },
+              "ff_100C_1v65": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_100C_1v65.lib",
+                "temp": 100,
+                "volt": 1.65
+              },
+              "ff_100C_1v95": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_100C_1v95.lib",
+                "temp": 100,
+                "volt": 1.95
+              },
+              "ff_n40C_1v56": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v56.lib",
+                "temp": -40,
+                "volt": 1.56
+              },
+              "ff_n40C_1v65": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v65.lib",
+                "temp": -40,
+                "volt": 1.65
+              },
+              "ff_n40C_1v76": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v76.lib",
+                "temp": -40,
+                "volt": 1.8
+              }
+            },
+            "tt": {
+              "tt_100C_1v80": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_100C_1v80.lib",
+                "temp": 100,
+                "volt": 1.8
+              },
+              "tt_025C_1v80": {
+                "lib": "third-party/pdks/sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                "temp": 25,
+                "volt": 1.8
+              }
+            }
+          }
+        }
+      }
+    },
+    "gf180mcu": {
+      "display_name": "GlobalFoundries 180nm MCU",
+      "variants": {
+        "gf180mcuC": {
+          "name": "GF180MCU (9-Track 5V)",
+          "tech_lef": "third-party/pdks/gf180mcu/gf180mcu_5LM_1TM_9K_9t_tech.lef",
+          "std_cell_lef": "third-party/pdks/gf180mcu/gf180mcu_5LM_1TM_9K_9t_sc.lef",
+          "gds": "",
+          "magic_tech": "",
+          "default_corner": "tt_025C_5v00",
+          "corners": {
+            "tt": {
+              "tt_025C_5v00": {
+                "lib": "third-party/pdks/gf180mcu/gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib",
+                "temp": 25,
+                "volt": 5.0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

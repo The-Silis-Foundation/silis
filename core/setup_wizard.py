@@ -32,6 +32,7 @@ def is_first_boot_needed() -> bool:
     marker = os.path.expanduser("~/.silis/.initialized")
     pdk_a = os.path.expanduser("~/.silis/pdks/sky130A")
     pdk_b = os.path.expanduser("~/.silis/pdks/sky130B")
+    ssa_dir = os.path.expanduser("~/.silis/ssa")
     tlef_a = os.path.join(pdk_a, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
     tlef_b = os.path.join(pdk_b, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
     sram_a = os.path.join(pdk_a, "libs.ref", "sky130_sram_macros", "lef")
@@ -39,14 +40,15 @@ def is_first_boot_needed() -> bool:
     desktop_file = os.path.expanduser("~/.local/share/applications/silis.desktop")
     cli_bin = os.path.expanduser("~/.local/bin/silis")
     
-    # If marker and both PDKs (with techlef and sram macros) and desktop integration exist, first boot is already done
+    # If marker and PDKs (with techlef and sram macros) and SSA and desktop integration exist, first boot is already done
     has_pdk = (
         os.path.isdir(pdk_a) and (os.path.isfile(tlef_a) or os.path.isdir(os.path.join(pdk_a, "libs.tech")))
         and os.path.isdir(pdk_b) and (os.path.isfile(tlef_b) or os.path.isdir(os.path.join(pdk_b, "libs.tech")))
         and os.path.isdir(sram_a) and os.path.isdir(sram_b)
     )
+    has_ssa = os.path.isdir(ssa_dir) and len(os.listdir(ssa_dir)) > 0
     has_desktop = os.path.isfile(desktop_file) and (os.path.isfile(cli_bin) or os.path.islink(cli_bin))
-    return not (os.path.isfile(marker) and has_pdk and has_desktop)
+    return not (os.path.isfile(marker) and has_pdk and has_ssa and has_desktop)
 
 
 class SetupWorker(QThread):
@@ -80,8 +82,10 @@ class SetupWorker(QThread):
             os.path.join(dot_silis, "designs"),
             os.path.join(dot_silis, "macrocache"),
             os.path.join(dot_silis, "reports"),
+            os.path.join(dot_silis, "ssa"),
             os.path.join(dot_silis, "pdks", "sky130A"),
             os.path.join(dot_silis, "pdks", "sky130B"),
+            os.path.join(dot_silis, "pdks", "gf180mcu"),
         ]
         for d in subdirs:
             os.makedirs(d, exist_ok=True)
@@ -93,11 +97,11 @@ class SetupWorker(QThread):
         appdir = os.environ.get("APPDIR", "")
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         
-        variants = ["sky130A", "sky130B"]
+        variants = ["sky130A", "sky130B", "gf180mcu"]
         dest_dirs = {}
 
         for v_idx, variant in enumerate(variants):
-            pct_base = 20 + v_idx * 28  # 20..48 for sky130A, 48..76 for sky130B
+            pct_base = 20 + v_idx * 18  # 20..38 for sky130A, 38..56 for sky130B, 56..74 for gf180mcu
             dest_var = os.path.expanduser(f"~/.silis/pdks/{variant}")
             dest_dirs[variant] = dest_var
 
@@ -113,7 +117,10 @@ class SetupWorker(QThread):
 
             found_src = None
             for c in candidates:
-                if c and os.path.isdir(c) and os.path.isdir(os.path.join(c, "libs.ref")):
+                if c and os.path.isdir(c) and (
+                    os.path.isdir(os.path.join(c, "libs.ref"))
+                    or os.path.isfile(os.path.join(c, "gf180mcu_5LM_1TM_9K_9t_sc.lef"))
+                ):
                     found_src = c
                     break
 
@@ -133,7 +140,7 @@ class SetupWorker(QThread):
                         if not os.path.exists(dst_file) or os.path.getsize(dst_file) != os.path.getsize(src_file):
                             shutil.copy2(src_file, dst_file)
                         if idx % 15 == 0:
-                            pct = pct_base + int((idx / total_files) * 25)
+                            pct = pct_base + int((idx / total_files) * 16)
                             self.progress_updated.emit(pct, f"Installing {variant}: {os.path.basename(rel_path)}")
 
             # Ensure power switch cell LEF is present in each PDK variant
@@ -177,67 +184,123 @@ class SetupWorker(QThread):
                         except Exception:
                             pass
 
-        # Register default PDK configuration manifest
+        # Stage complete SSA configs into ~/.silis/ssa
+        self.progress_updated.emit(75, "Provisioning SSA family configuration profiles...")
+        ssa_dst = os.path.join(dot_silis, "ssa")
+        os.makedirs(ssa_dst, exist_ok=True)
+        ssa_candidates = [
+            os.path.join(appdir, "assets", "ssa") if appdir else None,
+            os.path.join(repo_root, "assets", "ssa"),
+            "/home/econsystems/.silis_backup_audit/ssa",
+        ]
+        for s_cand in ssa_candidates:
+            if s_cand and os.path.isdir(s_cand):
+                try:
+                    shutil.copytree(s_cand, ssa_dst, dirs_exist_ok=True)
+                    break
+                except Exception:
+                    pass
+
+        # Provision pdk_aliases.json
+        alias_candidates = [
+            os.path.join(appdir, "assets", "ssa", "pdk_aliases.json") if appdir else None,
+            os.path.join(appdir, "assets", "pdk", "pdk_aliases.json") if appdir else None,
+            os.path.join(repo_root, "assets", "ssa", "pdk_aliases.json"),
+            os.path.join(repo_root, "core", "pdkmanagers", "pdk", "pdk_aliases.json"),
+        ]
+        for ac in alias_candidates:
+            if ac and os.path.isfile(ac):
+                try:
+                    shutil.copy2(ac, os.path.join(dot_silis, "ssa", "pdk_aliases.json"))
+                    shutil.copy2(ac, os.path.join(dot_silis, "pdks", "pdk_aliases.json"))
+                    break
+                except Exception:
+                    pass
+
+        # Register master PDK configuration manifest
         self.progress_updated.emit(78, "Writing multi-variant PDK configuration registry...")
         pdk_master_json = os.path.expanduser("~/.silis/pdks/pdk_master.json")
-        import json
-        manifest = {
-            "version": "1.0",
-            "default_pdk": "sky130A",
-            "pdks": {
-                "sky130A": {
-                    "path": dest_dirs.get("sky130A", os.path.expanduser("~/.silis/pdks/sky130A")),
-                    "type": "skywater130",
-                    "status": "installed",
-                    "standard_cells": ["sky130_fd_sc_hd"],
-                    "sram_macros": ["sky130_sram_macros"],
-                    "io_cells": ["sky130_fd_io"],
-                    "power_switches": ["sky130_power_switch"]
+        master_candidates = [
+            os.path.join(appdir, "assets", "pdk", "pdk_master.json") if appdir else None,
+            os.path.join(repo_root, "assets", "pdk", "pdk_master.json"),
+            "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json",
+        ]
+        master_copied = False
+        for mc in master_candidates:
+            if mc and os.path.isfile(mc):
+                try:
+                    shutil.copy2(mc, pdk_master_json)
+                    master_copied = True
+                    break
+                except Exception:
+                    pass
+
+        if not master_copied:
+            import json
+            manifest = {
+                "version": "1.0",
+                "default_pdk": "sky130A",
+                "pdks": {
+                    "sky130A": {
+                        "path": dest_dirs.get("sky130A", os.path.expanduser("~/.silis/pdks/sky130A")),
+                        "type": "skywater130",
+                        "status": "installed",
+                        "standard_cells": ["sky130_fd_sc_hd", "sky130_fd_sc_hvl"],
+                        "sram_macros": ["sky130_sram_macros"],
+                        "io_cells": ["sky130_fd_io"],
+                        "power_switches": ["sky130_power_switch"]
+                    },
+                    "sky130B": {
+                        "path": dest_dirs.get("sky130B", os.path.expanduser("~/.silis/pdks/sky130B")),
+                        "type": "skywater130",
+                        "status": "installed",
+                        "standard_cells": ["sky130_fd_sc_hd", "sky130_fd_sc_hvl"],
+                        "sram_macros": ["sky130_sram_macros"],
+                        "io_cells": ["sky130_fd_io"],
+                        "power_switches": ["sky130_power_switch"]
+                    },
+                    "gf180mcu": {
+                        "path": dest_dirs.get("gf180mcu", os.path.expanduser("~/.silis/pdks/gf180mcu")),
+                        "type": "gf180mcu",
+                        "status": "installed",
+                        "standard_cells": ["gf180mcu_fd_sc_mcu9t5v0", "gf180mcu_fd_sc_mcu7t5v0"]
+                    }
                 },
-                "sky130B": {
-                    "path": dest_dirs.get("sky130B", os.path.expanduser("~/.silis/pdks/sky130B")),
-                    "type": "skywater130",
-                    "status": "installed",
-                    "standard_cells": ["sky130_fd_sc_hd"],
-                    "sram_macros": ["sky130_sram_macros"],
-                    "io_cells": ["sky130_fd_io"],
-                    "power_switches": ["sky130_power_switch"]
-                }
-            },
-            "families": {
-                "sky130": {
-                    "display_name": "SkyWater 130nm",
-                    "variants": {
-                        "sky130A": {
-                            "name": "Sky130A (High Density)",
-                            "tech_lef": "sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
-                            "std_cell_lef": "sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
-                            "gds": "sky130A/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
-                            "magic_tech": "sky130A/libs.tech/magic/sky130A.tech",
-                            "default_corner": "tt_025C_1v80",
-                            "corners": {
-                                "tt": {
-                                    "tt_025C_1v80": {
-                                        "lib": "sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
-                                        "temp": 25,
-                                        "volt": 1.8
+                "families": {
+                    "sky130": {
+                        "display_name": "SkyWater 130nm",
+                        "variants": {
+                            "sky130A": {
+                                "name": "Sky130A (High Density)",
+                                "tech_lef": "sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+                                "std_cell_lef": "sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+                                "gds": "sky130A/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+                                "magic_tech": "sky130A/libs.tech/magic/sky130A.tech",
+                                "default_corner": "tt_025C_1v80",
+                                "corners": {
+                                    "tt": {
+                                        "tt_025C_1v80": {
+                                            "lib": "sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                                            "temp": 25,
+                                            "volt": 1.8
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        "sky130B": {
-                            "name": "Sky130B (High Density)",
-                            "tech_lef": "sky130B/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
-                            "std_cell_lef": "sky130B/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
-                            "gds": "sky130B/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
-                            "magic_tech": "sky130B/libs.tech/magic/sky130B.tech",
-                            "default_corner": "tt_025C_1v80",
-                            "corners": {
-                                "tt": {
-                                    "tt_025C_1v80": {
-                                        "lib": "sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
-                                        "temp": 25,
-                                        "volt": 1.8
+                            },
+                            "sky130B": {
+                                "name": "Sky130B (High Density)",
+                                "tech_lef": "sky130B/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+                                "std_cell_lef": "sky130B/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+                                "gds": "sky130B/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+                                "magic_tech": "sky130B/libs.tech/magic/sky130B.tech",
+                                "default_corner": "tt_025C_1v80",
+                                "corners": {
+                                    "tt": {
+                                        "tt_025C_1v80": {
+                                            "lib": "sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                                            "temp": 25,
+                                            "volt": 1.8
+                                        }
                                     }
                                 }
                             }
@@ -245,9 +308,8 @@ class SetupWorker(QThread):
                     }
                 }
             }
-        }
-        with open(pdk_master_json, "w") as f:
-            json.dump(manifest, f, indent=2)
+            with open(pdk_master_json, "w") as f:
+                json.dump(manifest, f, indent=2)
 
         # 85%: Desktop integration & System Icons
         self.progress_updated.emit(85, "Installing desktop menu shortcuts and application icons...")

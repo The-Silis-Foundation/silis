@@ -1,0 +1,38 @@
+{
+  "pdk": "asap7",
+  "display_name": "ASAP 7nm Predictive FinFET (ASAP7)",
+  "aliases_pdk": ["asap7", "asap_7nm", "asap7sc7p5t"],
+  "paths": {
+    "pdk_root": "/home/econsystems/silisfoundation/pdk_asap7",
+    "tech_lef": "lef/asap7_tech.tlef",
+    "std_cell_lef": "lef/asap7_cells.lef",
+    "liberty": "lib/asap7_tt.lib",
+    "extra_lefs": []
+  },
+  "site": {
+    "name": "asap7sc7p5t",
+    "height_um": 0.27,
+    "width_um": 0.054,
+    "double_height_site": "asap7sc7p5t_dbl",
+    "double_height_um": 0.54
+  },
+  "cells": {
+    "tapcells": {
+      "default": "TAPCELL_ASAP7_75t_R",
+      "tap1": "TAPCELL_ASAP7_75t_R"
+    },
+    "power_switches": {
+      "default": "HEADER_SW_ASAP7",
+      "sw1": "HEADER_SW_ASAP7"
+    },
+    "clock_tree": {
+      "root": "BUFx4_ASAP7_75t_R",
+      "leaf": "BUFx2_ASAP7_75t_R"
+    }
+  },
+  "interconnect": {
+    "min_layer": "M1",
+    "max_layer": "M2",
+    "rail_layer": "M1"
+  }
+}

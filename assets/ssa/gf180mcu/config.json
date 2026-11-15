@@ -1,0 +1,36 @@
+{
+  "pdk": "gf180mcu",
+  "display_name": "GlobalFoundries 180nm MCU (GF180MCU)",
+  "aliases_pdk": ["gf180mcu", "gf180", "gf180mcuC"],
+  "paths": {
+    "pdk_root": "/home/econsystems/.silis/pdks/gf180mcu",
+    "tech_lef": "gf180mcu_5LM_1TM_9K_9t_tech.lef",
+    "std_cell_lef": "gf180mcu_5LM_1TM_9K_9t_sc.lef",
+    "liberty": "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib",
+    "extra_lefs": [
+      "/home/econsystems/.silis/pdks/gf180mcu/gf180mcu_fd_io.lef"
+    ]
+  },
+  "site": {
+    "name": "GF018hv5v_green_sc9",
+    "height_um": 5.04,
+    "width_um": 0.56
+  },
+  "cells": {
+    "tapcells": {
+      "default": "gf180mcu_fd_sc_mcu9t5v0__filltie",
+      "tap1": "gf180mcu_fd_sc_mcu9t5v0__filltie"
+    },
+    "clock_tree": {
+      "root": "gf180mcu_fd_sc_mcu9t5v0__clkbuf_16",
+      "leaf": "gf180mcu_fd_sc_mcu9t5v0__clkbuf_4"
+    },
+    "tie_high": "gf180mcu_fd_sc_mcu9t5v0__tieh",
+    "tie_low": "gf180mcu_fd_sc_mcu9t5v0__tiel"
+  },
+  "interconnect": {
+    "min_layer": "Metal1",
+    "max_layer": "Metal5",
+    "rail_layer": "Metal1"
+  }
+}

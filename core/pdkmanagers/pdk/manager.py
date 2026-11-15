@@ -79,14 +79,23 @@ class SSAForge:
 
     @classmethod
     def load_dropin_configs(cls):
-        """Discovers and parses ~/.silis/ssa/<family>/config.json and ./.silis_ssa.json."""
-        import glob
-        base_dir = os.path.expanduser("~/.silis/ssa")
-        if os.path.isdir(base_dir):
-            for entry in os.listdir(base_dir):
-                cfg_path = os.path.join(base_dir, entry, "config.json")
-                if os.path.isfile(cfg_path):
-                    cls._load_single_config(cfg_path)
+        """Discovers and parses ~/.silis/ssa/<family>/config.json, AppDir assets, and ./.silis_ssa.json."""
+        candidate_dirs = [
+            os.path.expanduser("~/.silis/ssa"),
+        ]
+        appdir = os.environ.get("APPDIR")
+        if appdir:
+            candidate_dirs.append(os.path.join(appdir, "assets", "ssa"))
+        curr_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.abspath(os.path.join(curr_dir, "..", "..", ".."))
+        candidate_dirs.append(os.path.join(repo_root, "assets", "ssa"))
+
+        for base_dir in candidate_dirs:
+            if os.path.isdir(base_dir):
+                for entry in os.listdir(base_dir):
+                    cfg_path = os.path.join(base_dir, entry, "config.json")
+                    if os.path.isfile(cfg_path):
+                        cls._load_single_config(cfg_path)
 
         # Local project drop-in override
         proj_cfg = os.path.abspath(".silis_ssa.json")
@@ -134,24 +143,56 @@ class SSAForge:
 
     @staticmethod
     def load_aliases(json_filename="pdk_aliases.json"):
-        """Loads aliases from disk. Checks CWD first, then the script's own directory."""
-        paths_to_check = [os.path.abspath(json_filename)]
+        """Loads aliases from disk across standard environment, AppDir, and user directories."""
+        SSAForge._ensure_initialized()
+        paths_to_check = [
+            os.path.abspath(json_filename),
+        ]
         if hasattr(sys, 'argv') and sys.argv:
             script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
             paths_to_check.append(os.path.join(script_dir, json_filename))
+
+        # Standard Silis configuration paths
+        dot_silis = os.path.expanduser("~/.silis")
+        paths_to_check.extend([
+            os.path.join(dot_silis, "ssa", json_filename),
+            os.path.join(dot_silis, "pdks", json_filename),
+            os.path.join(dot_silis, "config", json_filename),
+        ])
+
+        # AppDir bundle paths
+        appdir = os.environ.get("APPDIR")
+        if appdir:
+            paths_to_check.extend([
+                os.path.join(appdir, "assets", "ssa", json_filename),
+                os.path.join(appdir, "assets", "pdk", json_filename),
+            ])
+
+        # Core repo fallback paths
+        curr_dir = os.path.dirname(os.path.abspath(__file__))
+        paths_to_check.append(os.path.join(curr_dir, json_filename))
+        repo_root = os.path.abspath(os.path.join(curr_dir, "..", "..", ".."))
+        paths_to_check.extend([
+            os.path.join(repo_root, "assets", "ssa", json_filename),
+            os.path.join(repo_root, "assets", "pdk", json_filename),
+        ])
+
         loaded = False
+        seen_paths = set()
         for path in paths_to_check:
-            if os.path.exists(path):
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            if os.path.isfile(path):
                 try:
                     with open(path, 'r') as f:
                         data = json.load(f)
                         SSAForge.ALIASES.update(data)
-                        print(f"[SSA] Loaded aliases from: {path}")
                         loaded = True
                         break
                 except Exception as e:
                     print(f"[SSA] Error parsing {path}: {e}")
-        if not loaded:
+        if not loaded and not SSAForge.ALIASES:
             print(f"[SSA] No external JSON found. Using built-in defaults.")
 
     @classmethod

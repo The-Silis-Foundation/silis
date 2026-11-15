@@ -29,7 +29,7 @@
 <tbody>
 <tr>
 <td><strong>Linux x86-64 (64-bit)</strong></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.2 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
 <td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
 <td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
 <td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.zip">zip</a></td>
@@ -77,12 +77,12 @@ Silis AppImage runs on Linux distributions with kernel >= 4.18 and GLIBC >= 2.38
 
 | File | Size | MD5 Hash | SHA-256 Checksum |
 | :--- | :--- | :--- | :--- |
-| `Silis-x86_64.AppImage` | 1.2 GB | `91174e689c7e27e1d536295ab9f41bf9` | `7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19b9` |
-| `Silis-x86_64.AppImage.zsync` | 2.4 MB | `d7eeab4540d9b01e549c03e3fe2adce7` | `19ede62afaa0739141d24462089e06d26365e14e156efe3c284e4ae372bbe623` |
+| `Silis-x86_64.AppImage` | 1.4 GB | `70bd6bb25df2f52c7c06fa1d36a8848e` | `169ea3955fc7759ca75e521905ab0cc83ad75f212103c1a89f56bacdf46ba6bd` |
+| `Silis-x86_64.AppImage.zsync` | 2.8 MB | `e4b1fdf907a31ac2a3f44e8147ad4304` | `87a5ae1aedd29e95e66ad75bc2cd9be6efab2136a01b584614a6475cd0951e88` |
 
 Verification command:
 ```bash
-sha256sum -c <<< "7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19b9  Silis-x86_64.AppImage"
+sha256sum -c <<< "169ea3955fc7759ca75e521905ab0cc83ad75f212103c1a89f56bacdf46ba6bd  Silis-x86_64.AppImage"
 ```
 
 ---
@@ -90,6 +90,11 @@ sha256sum -c <<< "7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19
 ## Changelog
 
 ### Added
+- **Zero PDK Truncation Law (ADR-012)**: Bundled 100% full, uncompressed silicon technology assets:
+  - Complete SkyWater 130nm `sky130A` and `sky130B` PDKs (1.1 GB uncompressed each) including all standard cell variants (`hd`, `hvl`, `hs`, `ms`, `ls`, `lp`, `hdll`), all PVT corners (SS, FF, TT), primitive device models (`sky130_fd_pr`), OpenRAM memory macros, and IO pad cells.
+  - Complete GlobalFoundries 180nm MCU `gf180mcu` PDK (21 MB uncompressed) with 7T and 9T libraries.
+  - Complete master configuration catalog `pdk_master.json` containing multi-corner timing definitions.
+- **SSA Configuration Completeness**: Packaged all SSA family configuration drop-in profiles (`sky130a`, `gf180mcu`, `asap7`) and `pdk_aliases.json` with deterministic search paths across AppDir and user workspace.
 - **First-Boot Setup Orchestrator**: Implemented native Qt6 onboarding progress dialog (`FirstBootSetupDialog`) and headless runner (`run_headless_setup`) in `core/setup_wizard.py` to auto-provision workspace, PDKs, and application data.
 - **Desktop Database Integration**: Added automatic registration of `silis.desktop` launcher and application icons in `~/.local/share/applications/` and `~/.local/share/icons/hicolor/256x256/apps/`.
 - **Global Terminal Symlink**: Automated deployment of `~/.local/bin/silis` symlink pointing to the active AppImage.
@@ -103,6 +108,8 @@ sha256sum -c <<< "7635c501302f2f56a90f3f1c20471affabc6a096267edd6e2af4d78a863b19
 - **Packaging Pipeline Hardening**: Switched directory staging to `rsync -a --delete --exclude='.git'` to guarantee zero residual build artifacts.
 
 ### Fixes
+- **Chromium Display Diagnostics**: Configured `QTWEBENGINE_CHROMIUM_FLAGS="--disable-logging --log-level=3 --disable-gpu-compositing"` in `AppRun` and `qt_setup.py` to eliminate GBM DRI fallback warnings on Linux desktops.
+- **SSA Alias Discovery**: Resolved `[SSA] No external JSON found.` warning by embedding `pdk_aliases.json` and multi-path fallback lookup in `SSAForge.load_aliases()`.
 - **CLI Argument Collision**: Resolved fatal unhandled `argparse.ArgumentError: conflicting option strings: --bend, --backend` in `core/cli/main.py`.
 - **REPL Package Relative Imports**: Fixed fatal module lookup failures on `cli_flow` and `cli_main` in `core/cli/tui_repl.py`.
 - **Current Working Directory Security Leak**: Patched trailing-colon in `LD_LIBRARY_PATH` and `PYTHONPATH` in `packaging/AppRun` preventing untrusted `.so` searches in `.` under clean environments.

@@ -253,7 +253,7 @@ Standalone release deliverables and manifests are published on [GitHub Releases 
 <tbody>
 <tr>
 <td><strong>Linux x86-64 (64-bit)</strong></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.2 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
 <td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
 <td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
 <td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.zip">zip</a></td>
@@ -281,8 +281,8 @@ chmod +x Silis-x86_64.AppImage
 
 | File | Size | MD5 Hash | SHA-256 Checksum |
 | :--- | :--- | :--- | :--- |
-| `Silis-x86_64.AppImage` | 1.2 GB | `44325dab58c8eec87070aa7bab420414` | `330deae0e527ec70b8087b2432cc8302acc39fe4b1d3e605264f2ce439dc7703` |
-| `Silis-x86_64.AppImage.zsync` | 2.5 MB | `810ae37f1d59084fb2a9b034ffcc40d1` | `25eeb3cb2ad1a7a31d8823efd9029c954586bb393aafb6f547393e8e458363c7` |
+| `Silis-x86_64.AppImage` | 1.4 GB | `70bd6bb25df2f52c7c06fa1d36a8848e` | `169ea3955fc7759ca75e521905ab0cc83ad75f212103c1a89f56bacdf46ba6bd` |
+| `Silis-x86_64.AppImage.zsync` | 2.8 MB | `e4b1fdf907a31ac2a3f44e8147ad4304` | `87a5ae1aedd29e95e66ad75bc2cd9be6efab2136a01b584614a6475cd0951e88` |
 
 ---
 

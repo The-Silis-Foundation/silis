@@ -57,90 +57,52 @@ if [ -d "${REPO_DIR}/examples" ]; then
     cp -a "${REPO_DIR}/examples" "${APPDIR}/examples"
 fi
 
-# 5. Stage lean Sky130 PDK assets for first-boot provisioning (SkyWater 130A & 130B with macros)
-for VARIANT in sky130A sky130B; do
-    HOST_PDK="${HOME}/.silis/pdks/${VARIANT}"
-    if [ ! -d "${HOST_PDK}" ] && [ -d "/home/econsystems/.silis_backup_audit/pdks/${VARIANT}" ]; then
-        HOST_PDK="/home/econsystems/.silis_backup_audit/pdks/${VARIANT}"
+# 5. Stage 100% Complete PDK & SSA Assets (Zero Truncation Law)
+echo "=== Staging 100% COMPLETE PDKs into AppDir (SkyWater 130A, 130B, GF180MCU) ==="
+mkdir -p "${APPDIR}/assets/pdk"
+mkdir -p "${APPDIR}/assets/ssa"
+
+for VARIANT in sky130A sky130B gf180mcu; do
+    SRC_PDK=""
+    if [ -d "/home/econsystems/.silis_backup_audit/pdks/${VARIANT}" ]; then
+        SRC_PDK="/home/econsystems/.silis_backup_audit/pdks/${VARIANT}"
+    elif [ -d "${HOME}/.silis/pdks/${VARIANT}" ]; then
+        SRC_PDK="${HOME}/.silis/pdks/${VARIANT}"
+    elif [ -d "${REPO_DIR}/assets/pdk/${VARIANT}" ]; then
+        SRC_PDK="${REPO_DIR}/assets/pdk/${VARIANT}"
     fi
 
-    if [ -d "${HOST_PDK}" ]; then
-        echo "=== Staging lean ${VARIANT} PDK assets (standard cells, SRAM macros, IO pads, power switch) ==="
-        mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/techlef"
-        mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lef"
-        mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lib"
-        
-        # Tech LEF
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/techlef/"
-        fi
-        # Standard cell LEF
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lef/"
-        fi
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd_merged.lef" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd_merged.lef" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lef/"
-        fi
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_power_switch.lef" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lef/sky130_power_switch.lef" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lef/"
-        fi
-        # Standard cell LIB (nominal TT corner)
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/lib/"
-        fi
-        # Standard cell GDS
-        if [ -f "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds" ]; then
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/gds"
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_sc_hd/gds/"
-        fi
-
-        # Power switch cell
-        mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_power_switch/lef"
-        if [ -f "${HOST_PDK}/libs.ref/sky130_power_switch/lef/power_switch.lef" ]; then
-            cp -a "${HOST_PDK}/libs.ref/sky130_power_switch/lef/power_switch.lef" \
-                  "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_power_switch/lef/"
-        fi
-
-        # SRAM memory macros
-        if [ -d "${HOST_PDK}/libs.ref/sky130_sram_macros" ]; then
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/lef"
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/lib"
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/verilog"
-            cp -a "${HOST_PDK}/libs.ref/sky130_sram_macros/lef/"*.lef "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/lef/" 2>/dev/null || true
-            cp -a "${HOST_PDK}/libs.ref/sky130_sram_macros/lib/"*.lib "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/lib/" 2>/dev/null || true
-            cp -a "${HOST_PDK}/libs.ref/sky130_sram_macros/verilog/"*.v "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_sram_macros/verilog/" 2>/dev/null || true
-        fi
-
-        # IO pad cells
-        if [ -d "${HOST_PDK}/libs.ref/sky130_fd_io" ]; then
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_io/lef"
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_io/lib"
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_io/lef/"*.lef "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_io/lef/" 2>/dev/null || true
-            cp -a "${HOST_PDK}/libs.ref/sky130_fd_io/lib/"*tt*.lib "${APPDIR}/assets/pdk/${VARIANT}/libs.ref/sky130_fd_io/lib/" 2>/dev/null || true
-        fi
-
-        # Tech files (OpenLane, KLayout, Magic)
-        if [ -d "${HOST_PDK}/libs.tech" ]; then
-            mkdir -p "${APPDIR}/assets/pdk/${VARIANT}/libs.tech"
-            for TDIR in openlane klayout magic; do
-                if [ -d "${HOST_PDK}/libs.tech/${TDIR}" ]; then
-                    cp -a "${HOST_PDK}/libs.tech/${TDIR}" "${APPDIR}/assets/pdk/${VARIANT}/libs.tech/"
-                fi
-            done
-        fi
+    if [ -n "${SRC_PDK}" ] && [ -d "${SRC_PDK}" ]; then
+        echo "=== Staging 100% complete ${VARIANT} from ${SRC_PDK} ==="
+        mkdir -p "${APPDIR}/assets/pdk/${VARIANT}"
+        rsync -a --delete "${SRC_PDK}/" "${APPDIR}/assets/pdk/${VARIANT}/"
+    else
+        echo "WARNING: Could not find source PDK for ${VARIANT}!"
     fi
 done
 
 # Stage master PDK configuration manifest into AppDir
-if [ -f "${HOME}/.silis/pdks/pdk_master.json" ]; then
-    mkdir -p "${APPDIR}/assets/pdk"
+if [ -f "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" ]; then
+    cp -a "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
+elif [ -f "${HOME}/.silis/pdks/pdk_master.json" ]; then
     cp -a "${HOME}/.silis/pdks/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
+elif [ -f "${REPO_DIR}/assets/pdk/pdk_master.json" ]; then
+    cp -a "${REPO_DIR}/assets/pdk/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
+fi
+
+# Stage all SSA drop-in configurations into AppDir
+if [ -d "/home/econsystems/.silis_backup_audit/ssa" ]; then
+    rsync -a --delete "/home/econsystems/.silis_backup_audit/ssa/" "${APPDIR}/assets/ssa/"
+elif [ -d "${REPO_DIR}/assets/ssa" ]; then
+    rsync -a --delete "${REPO_DIR}/assets/ssa/" "${APPDIR}/assets/ssa/"
+elif [ -d "${HOME}/.silis/ssa" ]; then
+    rsync -a --delete "${HOME}/.silis/ssa/" "${APPDIR}/assets/ssa/"
+fi
+
+# Stage pdk_aliases.json
+if [ -f "${REPO_DIR}/assets/ssa/pdk_aliases.json" ]; then
+    cp -a "${REPO_DIR}/assets/ssa/pdk_aliases.json" "${APPDIR}/assets/ssa/pdk_aliases.json"
+    cp -a "${REPO_DIR}/assets/ssa/pdk_aliases.json" "${APPDIR}/assets/pdk/pdk_aliases.json"
 fi
 
 # 6. Copy third-party tools & extensions if present
