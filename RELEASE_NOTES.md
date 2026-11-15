@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre"><img src="https://img.shields.io/badge/Release-v0.1.1--pre-blue.svg" alt="Release Badge"></a>
-  <a href="https://github.com/The-Silis-Foundation/silis/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
+  <a href="https://github.com/The-Silis-Foundation/silis/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License"></a>
   <a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Codespaces-Launch%20Web%20Studio-violet.svg" alt="Launch Codespace"></a>
 </p>
 
