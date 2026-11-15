@@ -30,13 +30,21 @@ from PyQt6.QtGui import QFont, QPalette, QFontDatabase
 def is_first_boot_needed() -> bool:
     """Check if the user environment has already completed first-boot provisioning."""
     marker = os.path.expanduser("~/.silis/.initialized")
-    pdk_dir = os.path.expanduser("~/.silis/pdks/sky130B")
-    tlef = os.path.join(pdk_dir, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+    pdk_a = os.path.expanduser("~/.silis/pdks/sky130A")
+    pdk_b = os.path.expanduser("~/.silis/pdks/sky130B")
+    tlef_a = os.path.join(pdk_a, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+    tlef_b = os.path.join(pdk_b, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+    sram_a = os.path.join(pdk_a, "libs.ref", "sky130_sram_macros", "lef")
+    sram_b = os.path.join(pdk_b, "libs.ref", "sky130_sram_macros", "lef")
     desktop_file = os.path.expanduser("~/.local/share/applications/silis.desktop")
     cli_bin = os.path.expanduser("~/.local/bin/silis")
     
-    # If marker and PDK and desktop integration exist, first boot is already done
-    has_pdk = os.path.isdir(pdk_dir) and (os.path.isfile(tlef) or os.path.isdir(os.path.join(pdk_dir, "libs.tech")))
+    # If marker and both PDKs (with techlef and sram macros) and desktop integration exist, first boot is already done
+    has_pdk = (
+        os.path.isdir(pdk_a) and (os.path.isfile(tlef_a) or os.path.isdir(os.path.join(pdk_a, "libs.tech")))
+        and os.path.isdir(pdk_b) and (os.path.isfile(tlef_b) or os.path.isdir(os.path.join(pdk_b, "libs.tech")))
+        and os.path.isdir(sram_a) and os.path.isdir(sram_b)
+    )
     has_desktop = os.path.isfile(desktop_file) and (os.path.isfile(cli_bin) or os.path.islink(cli_bin))
     return not (os.path.isfile(marker) and has_pdk and has_desktop)
 
@@ -72,6 +80,7 @@ class SetupWorker(QThread):
             os.path.join(dot_silis, "designs"),
             os.path.join(dot_silis, "macrocache"),
             os.path.join(dot_silis, "reports"),
+            os.path.join(dot_silis, "pdks", "sky130A"),
             os.path.join(dot_silis, "pdks", "sky130B"),
         ]
         for d in subdirs:
@@ -84,91 +93,161 @@ class SetupWorker(QThread):
         appdir = os.environ.get("APPDIR", "")
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         
-        candidates = [
-            self.source_pdk_dir,
-            os.path.join(appdir, "assets", "pdk", "sky130B") if appdir else None,
-            os.path.join(appdir, "third-party", "pdks", "sky130B") if appdir else None,
-            os.path.expanduser("~/.silis/pdks/sky130B"),
-            os.path.join(repo_root, "assets", "pdk", "sky130B"),
-        ]
+        variants = ["sky130A", "sky130B"]
+        dest_dirs = {}
 
-        found_src = None
-        for c in candidates:
-            if c and os.path.isdir(c) and os.path.isdir(os.path.join(c, "libs.ref")):
-                found_src = c
-                break
+        for v_idx, variant in enumerate(variants):
+            pct_base = 20 + v_idx * 28  # 20..48 for sky130A, 48..76 for sky130B
+            dest_var = os.path.expanduser(f"~/.silis/pdks/{variant}")
+            dest_dirs[variant] = dest_var
 
-        dest_sky130 = os.path.expanduser("~/.silis/pdks/sky130B")
+            candidates = [
+                os.path.join(self.source_pdk_dir, variant) if self.source_pdk_dir else None,
+                os.path.join(appdir, "assets", "pdk", variant) if appdir else None,
+                os.path.join(appdir, "third-party", "pdks", variant) if appdir else None,
+                os.path.join(repo_root, "assets", "pdk", variant),
+                os.path.join(repo_root, "third-party", "pdks", variant),
+                os.path.expanduser(f"~/.silis/pdks/{variant}"),
+                f"/home/econsystems/.silis_backup_audit/pdks/{variant}",
+            ]
 
-        if found_src and os.path.abspath(found_src) != os.path.abspath(dest_sky130):
-            self.progress_updated.emit(25, f"Copying Sky130 PDK from {os.path.basename(found_src)}...")
-            
-            # Count total files for fine-grained progress reporting
-            all_files = []
-            for root, _, files in os.walk(found_src):
-                for f in files:
-                    all_files.append(os.path.join(root, f))
-
-            total_files = len(all_files)
-            if total_files > 0:
-                for idx, src_file in enumerate(all_files):
-                    rel_path = os.path.relpath(src_file, found_src)
-                    dst_file = os.path.join(dest_sky130, rel_path)
-                    os.makedirs(os.path.dirname(dst_file), exist_ok=True)
-                    if not os.path.exists(dst_file) or os.path.getsize(dst_file) != os.path.getsize(src_file):
-                        shutil.copy2(src_file, dst_file)
-                    
-                    pct = 25 + int((idx / total_files) * 55)
-                    if idx % 10 == 0:
-                        self.progress_updated.emit(pct, f"Installing: {os.path.basename(rel_path)}")
-            else:
-                self.progress_updated.emit(60, "No bundled PDK files to copy.")
-        else:
-            self.progress_updated.emit(60, "PDK root verified at destination.")
-
-        # Ensure power switch cell LEF is present in the PDK
-        self.progress_updated.emit(75, "Configuring multi-voltage power switch standard cell...")
-        lef_dir = os.path.join(dest_sky130, "libs.ref", "sky130_fd_sc_hd", "lef")
-        psw_dir = os.path.join(dest_sky130, "libs.ref", "sky130_power_switch", "lef")
-        os.makedirs(lef_dir, exist_ok=True)
-        os.makedirs(psw_dir, exist_ok=True)
-        psw_lef = os.path.join(lef_dir, "sky130_power_switch.lef")
-        
-        # Look for existing power switch template in silis, OpenROAD, or AppDir
-        known_psw_paths = [
-            os.path.join(dest_sky130, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef"),
-            os.path.join(appdir, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef") if appdir else None,
-            os.path.join(repo_root, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef"),
-            os.path.join(repo_root, "core", "sky130_power_switch.lef"),
-            os.path.join(appdir, "assets", "sky130_power_switch.lef") if appdir else None,
-        ]
-        for kp in known_psw_paths:
-            if kp and os.path.isfile(kp):
-                try:
-                    shutil.copy2(kp, psw_lef)
-                    shutil.copy2(kp, os.path.join(psw_dir, "power_switch.lef"))
+            found_src = None
+            for c in candidates:
+                if c and os.path.isdir(c) and os.path.isdir(os.path.join(c, "libs.ref")):
+                    found_src = c
                     break
-                except Exception:
-                    pass
+
+            if found_src and os.path.abspath(found_src) != os.path.abspath(dest_var):
+                self.progress_updated.emit(pct_base, f"Installing {variant} from {os.path.basename(found_src)}...")
+                all_files = []
+                for root, _, files in os.walk(found_src):
+                    for f in files:
+                        all_files.append(os.path.join(root, f))
+
+                total_files = len(all_files)
+                if total_files > 0:
+                    for idx, src_file in enumerate(all_files):
+                        rel_path = os.path.relpath(src_file, found_src)
+                        dst_file = os.path.join(dest_var, rel_path)
+                        os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+                        if not os.path.exists(dst_file) or os.path.getsize(dst_file) != os.path.getsize(src_file):
+                            shutil.copy2(src_file, dst_file)
+                        if idx % 15 == 0:
+                            pct = pct_base + int((idx / total_files) * 25)
+                            self.progress_updated.emit(pct, f"Installing {variant}: {os.path.basename(rel_path)}")
+
+            # Ensure power switch cell LEF is present in each PDK variant
+            lef_dir = os.path.join(dest_var, "libs.ref", "sky130_fd_sc_hd", "lef")
+            psw_dir = os.path.join(dest_var, "libs.ref", "sky130_power_switch", "lef")
+            os.makedirs(lef_dir, exist_ok=True)
+            os.makedirs(psw_dir, exist_ok=True)
+            psw_lef = os.path.join(lef_dir, "sky130_power_switch.lef")
+
+            known_psw_paths = [
+                os.path.join(dest_var, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef"),
+                os.path.join(appdir, "assets", "pdk", variant, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef") if appdir else None,
+                os.path.join(appdir, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef") if appdir else None,
+                os.path.join(repo_root, "third-party", "OpenROAD", "src", "pdn", "test", "sky130_power_switch", "power_switch.lef"),
+                os.path.join(repo_root, "core", "sky130_power_switch.lef"),
+                os.path.join(appdir, "assets", "sky130_power_switch.lef") if appdir else None,
+                f"/home/econsystems/.silis_backup_audit/pdks/{variant}/libs.ref/sky130_power_switch/lef/power_switch.lef",
+            ]
+            for kp in known_psw_paths:
+                if kp and os.path.isfile(kp):
+                    try:
+                        shutil.copy2(kp, psw_lef)
+                        shutil.copy2(kp, os.path.join(psw_dir, "power_switch.lef"))
+                        break
+                    except Exception:
+                        pass
+
+            # Ensure SRAM memory macros are copied if available in backup/appdir/source
+            dst_sram_lef = os.path.join(dest_var, "libs.ref", "sky130_sram_macros", "lef")
+            if not os.path.isdir(dst_sram_lef) or not os.listdir(dst_sram_lef):
+                sram_candidates = [
+                    os.path.join(appdir, "assets", "pdk", variant, "libs.ref", "sky130_sram_macros") if appdir else None,
+                    f"/home/econsystems/.silis_backup_audit/pdks/{variant}/libs.ref/sky130_sram_macros",
+                    os.path.join(repo_root, "assets", "pdk", variant, "libs.ref", "sky130_sram_macros"),
+                ]
+                for sc in sram_candidates:
+                    if sc and os.path.isdir(sc):
+                        try:
+                            shutil.copytree(sc, os.path.join(dest_var, "libs.ref", "sky130_sram_macros"), dirs_exist_ok=True)
+                            break
+                        except Exception:
+                            pass
 
         # Register default PDK configuration manifest
+        self.progress_updated.emit(78, "Writing multi-variant PDK configuration registry...")
         pdk_master_json = os.path.expanduser("~/.silis/pdks/pdk_master.json")
-        if not os.path.isfile(pdk_master_json):
-            self.progress_updated.emit(80, "Writing PDK configuration registry...")
-            import json
-            manifest = {
-                "default_pdk": "sky130B",
-                "pdks": {
-                    "sky130B": {
-                        "path": dest_sky130,
-                        "type": "skywater130",
-                        "status": "installed",
-                        "standard_cells": ["sky130_fd_sc_hd"]
+        import json
+        manifest = {
+            "version": "1.0",
+            "default_pdk": "sky130A",
+            "pdks": {
+                "sky130A": {
+                    "path": dest_dirs.get("sky130A", os.path.expanduser("~/.silis/pdks/sky130A")),
+                    "type": "skywater130",
+                    "status": "installed",
+                    "standard_cells": ["sky130_fd_sc_hd"],
+                    "sram_macros": ["sky130_sram_macros"],
+                    "io_cells": ["sky130_fd_io"],
+                    "power_switches": ["sky130_power_switch"]
+                },
+                "sky130B": {
+                    "path": dest_dirs.get("sky130B", os.path.expanduser("~/.silis/pdks/sky130B")),
+                    "type": "skywater130",
+                    "status": "installed",
+                    "standard_cells": ["sky130_fd_sc_hd"],
+                    "sram_macros": ["sky130_sram_macros"],
+                    "io_cells": ["sky130_fd_io"],
+                    "power_switches": ["sky130_power_switch"]
+                }
+            },
+            "families": {
+                "sky130": {
+                    "display_name": "SkyWater 130nm",
+                    "variants": {
+                        "sky130A": {
+                            "name": "Sky130A (High Density)",
+                            "tech_lef": "sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+                            "std_cell_lef": "sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+                            "gds": "sky130A/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+                            "magic_tech": "sky130A/libs.tech/magic/sky130A.tech",
+                            "default_corner": "tt_025C_1v80",
+                            "corners": {
+                                "tt": {
+                                    "tt_025C_1v80": {
+                                        "lib": "sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                                        "temp": 25,
+                                        "volt": 1.8
+                                    }
+                                }
+                            }
+                        },
+                        "sky130B": {
+                            "name": "Sky130B (High Density)",
+                            "tech_lef": "sky130B/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef",
+                            "std_cell_lef": "sky130B/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef",
+                            "gds": "sky130B/libs.ref/sky130_fd_sc_hd/gds/sky130_fd_sc_hd.gds",
+                            "magic_tech": "sky130B/libs.tech/magic/sky130B.tech",
+                            "default_corner": "tt_025C_1v80",
+                            "corners": {
+                                "tt": {
+                                    "tt_025C_1v80": {
+                                        "lib": "sky130B/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+                                        "temp": 25,
+                                        "volt": 1.8
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            with open(pdk_master_json, "w") as f:
-                json.dump(manifest, f, indent=2)
+        }
+        with open(pdk_master_json, "w") as f:
+            json.dump(manifest, f, indent=2)
 
         # 85%: Desktop integration & System Icons
         self.progress_updated.emit(85, "Installing desktop menu shortcuts and application icons...")

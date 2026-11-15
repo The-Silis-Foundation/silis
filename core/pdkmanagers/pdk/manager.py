@@ -370,8 +370,19 @@ class PDKManager:
         """Loads PDK master JSON catalog mapping relative paths to absolute repo paths."""
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         master_path = os.path.join(repo_root, "third-party", "pdks", "pdk_master.json")
+        base_dir = repo_root
         if not os.path.exists(master_path):
-            return False
+            appdir = os.environ.get("APPDIR", "")
+            appdir_master = os.path.join(appdir, "assets", "pdk", "pdk_master.json") if appdir else ""
+            user_master = os.path.expanduser("~/.silis/pdks/pdk_master.json")
+            if appdir_master and os.path.exists(appdir_master):
+                master_path = appdir_master
+                base_dir = os.path.join(appdir, "assets", "pdk")
+            elif os.path.exists(user_master):
+                master_path = user_master
+                base_dir = os.path.expanduser("~/.silis/pdks")
+            else:
+                return False
 
         try:
             with open(master_path, 'r') as f:
@@ -392,19 +403,19 @@ class PDKManager:
 
                 tlef = var_info.get("tech_lef", "")
                 if tlef and not os.path.isabs(tlef):
-                    tlef = os.path.normpath(os.path.join(repo_root, tlef))
+                    tlef = os.path.normpath(os.path.join(base_dir, tlef))
 
                 lef = var_info.get("std_cell_lef", "")
                 if lef and not os.path.isabs(lef):
-                    lef = os.path.normpath(os.path.join(repo_root, lef))
+                    lef = os.path.normpath(os.path.join(base_dir, lef))
 
                 gds = var_info.get("gds", "")
                 if gds and not os.path.isabs(gds):
-                    gds = os.path.normpath(os.path.join(repo_root, gds))
+                    gds = os.path.normpath(os.path.join(base_dir, gds))
 
                 tech = var_info.get("magic_tech", "")
                 if tech and not os.path.isabs(tech):
-                    tech = os.path.normpath(os.path.join(repo_root, tech))
+                    tech = os.path.normpath(os.path.join(base_dir, tech))
 
                 corner_groups = var_info.get("corners", {})
                 all_corners = {}
@@ -417,7 +428,7 @@ class PDKManager:
                     for c_name, c_data in grp_corners.items():
                         c_lib = c_data.get("lib", "")
                         if c_lib and not os.path.isabs(c_lib):
-                            c_lib = os.path.normpath(os.path.join(repo_root, c_lib))
+                            c_lib = os.path.normpath(os.path.join(base_dir, c_lib))
                         all_corners[c_name] = c_lib
                         resolved_corner_groups[grp_key][c_name] = {
                             "lib": c_lib,
