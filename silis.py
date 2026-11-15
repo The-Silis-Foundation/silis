@@ -1310,9 +1310,9 @@ class SilisIDE(QMainWindow):
             ss_k = next((k for k in ['ss_100C_1v60', 'ss_n40C_1v35', 'ss_100C_1v40'] if k in pdk_corners), None)
             tt_k = next((k for k in ['tt_025C_1v80', 'tt_100C_1v80'] if k in pdk_corners), None)
             ff_k = next((k for k in ['ff_n40C_1v95', 'ff_100C_1v95', 'ff_n40C_1v65'] if k in pdk_corners), None)
-            if ss_k: mcmm_corners['ss'] = pdk_corners[ss_k]
-            if tt_k: mcmm_corners['tt'] = pdk_corners[tt_k]
-            if ff_k: mcmm_corners['ff'] = pdk_corners[ff_k]
+            if ss_k and os.path.isfile(pdk_corners[ss_k]): mcmm_corners['ss'] = pdk_corners[ss_k]
+            if tt_k and os.path.isfile(pdk_corners[tt_k]): mcmm_corners['tt'] = pdk_corners[tt_k]
+            if ff_k and os.path.isfile(pdk_corners[ff_k]): mcmm_corners['ff'] = pdk_corners[ff_k]
 
         if mcmm_corners and len(mcmm_corners) > 1:
             # --- MCMM: define corners + per-corner liberty (standard cells) ---
@@ -1383,6 +1383,9 @@ exit
                     ghdl_prefix = os.path.join(plugins_dir, "ghdl")
                     synth_env = os.environ.copy()
                     synth_env["GHDL_PREFIX"] = ghdl_prefix
+                    yosys_share = os.path.abspath(os.path.join(REPO_ROOT, "third-party", "share", "yosys"))
+                    if os.path.isdir(yosys_share):
+                        synth_env["YOSYS_DATDIR"] = yosys_share
                     curr_ld = synth_env.get("LD_LIBRARY_PATH", "")
                     synth_env["LD_LIBRARY_PATH"] = f"{plugins_dir}:{curr_ld}" if curr_ld else plugins_dir
                     log_path = os.path.join(root, "reports", "synthesis.log")

@@ -27,6 +27,9 @@ except ImportError:
 # Ensure offscreen platform is set before any Qt widget instantiation if headless
 if "QT_QPA_PLATFORM" not in os.environ:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
+if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("SILIS_HEADLESS_TEST"):
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    os.environ.setdefault("QT_OPENGL", "software")
 
 try:
     from cli.flow import HeadlessASICRunner
@@ -824,6 +827,14 @@ class Pipeline:
             "",
         ]
 
+        # UPF & Power Intent initialization
+        upf_f = self.project.get_upf_file() if hasattr(self.project, "get_upf_file") else None
+        shim_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backendflow", "shims", "openroad_upf_shim.tcl")).replace("\\", "/")
+        lines.append(f'if {{[file exists "{shim_path}"]}} {{ source "{shim_path}" }}')
+        if upf_f and os.path.isfile(upf_f):
+            upf_f_tcl = os.path.abspath(upf_f).replace("\\", "/")
+            lines.append(f'if {{[file exists "{upf_f_tcl}"]}} {{ source "{upf_f_tcl}" }}')
+
         # 1. VOLTAGE ISLAND PHYSICAL AREAS (IEEE 1801 UPF)
         lines.append("# === 1. VOLTAGE ISLAND PHYSICAL AREAS ===")
         regions = list(fp_spec.get("regions", []))
@@ -1497,6 +1508,16 @@ class Pipeline:
         switched_pds = [p for p in proj_pds if not getattr(p, "is_top", False) and getattr(p, "name", "") and p.name != "PD_TOP"]
         for spd in switched_pds:
             d_pwr = f"VDD_{spd.name}"
+            spd_area = getattr(spd, "area", None) or getattr(spd, "area_box", None) or []
+            if len(spd_area) == 4:
+                x1, y1, x2, y2 = spd_area
+                lines.extend([
+                    f'if {{[$_blk findRegion "{spd.name}"] eq "NULL"}} {{',
+                    f'    set _r [odb::dbRegion_create $_blk "{spd.name}"]',
+                    f'    set _dbu [[::ord::get_db_tech] getDbUnitsPerMicron]',
+                    f'    catch {{ odb::dbBox_create $_r [expr {{int({x1:.3f} * $_dbu)}}] [expr {{int({y1:.3f} * $_dbu)}}] [expr {{int({x2:.3f} * $_dbu)}}] [expr {{int({y2:.3f} * $_dbu)}}] }}',
+                    f'}}',
+                ])
             lines.extend([
                 f'if {{[$_blk findNet "{d_pwr}"] eq "NULL"}} {{ odb::dbNet_create $_blk "{d_pwr}" }}',
                 f'add_global_connection -net {{{d_pwr}}} -region {{{spd.name}}} -pin_pattern {{^VPWR$|^VDD$}} -power',
@@ -1556,7 +1577,7 @@ class Pipeline:
                 f'define_pdn_grid -name {{{grid_n}}} -voltage_domains {{{spd.name}}}',
                 f'add_pdn_ring -grid {{{grid_n}}} -layers "met4 met5" -widths {{2.0 2.0}} -spacings {{2.0 2.0}} -core_offsets {{2.0 2.0}}',
                 f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_bot -width {{0.48}} -followpins',
-                f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_top -width {{1.6}} -pitch {{27.2}} -offset {{13.6}} -extend_to_core_ring',
+                f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_top -width {{1.6}} -pitch {{27.2}} -offset {{13.6}}',
                 f'add_pdn_connect -grid {{{grid_n}}} -layers "$_pdn_bot $_pdn_top"',
                 f'add_pdn_connect -grid {{{grid_n}}} -layers "met4 met5"',
             ])

@@ -65,6 +65,11 @@ fi
 # Force software rendering in Chromium to eliminate GBM/Vulkan driver crashes across arbitrary Linux GPUs/VMs
 export QTWEBENGINE_CHROMIUM_FLAGS="--disable-logging --log-level=3 --disable-gpu"
 
+if [ -n "${SILIS_HEADLESS_TEST:-}" ] || [ "${QT_QPA_PLATFORM:-}" = "offscreen" ]; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export QT_OPENGL=software
+fi
+
 if [ -f "$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess" ]; then
     export QTWEBENGINEPROCESS_PATH="$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess"
     export QTWEBENGINE_RESOURCES_PATH="$PY_SITE/PyQt6/Qt6/resources"
@@ -82,6 +87,16 @@ fi
 # 6. EDA Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
 export PATH="$APPDIR/third-party/bin:$APPDIR/core/backendflow/def_viewer_cpp/build:$APPDIR/backendflow/def_viewer_cpp/build:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
 export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
+if [ -d "$APPDIR/third-party/share/yosys" ]; then
+    export YOSYS_DATDIR="$APPDIR/third-party/share/yosys"
+fi
+
+# Tcl library directory for OpenSTA and EDA scripting
+if [ -d "$APPDIR/usr/share/tcltk/tcl8.6" ]; then
+    export TCL_LIBRARY="$APPDIR/usr/share/tcltk/tcl8.6"
+elif [ -d "$APPDIR/third-party/lib/tcl8.6" ]; then
+    export TCL_LIBRARY="$APPDIR/third-party/lib/tcl8.6"
+fi
 
 # 7. Verilator compilation optimization & ccache fallback
 if ! command -v ccache &>/dev/null; then

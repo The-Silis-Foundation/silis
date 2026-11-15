@@ -514,8 +514,16 @@ class PDKManager:
                 tt_def_key = default_corner_name if default_corner_name in tt_corners else (list(tt_corners.keys())[0] if tt_corners else default_corner_name)
 
                 ss_lib = all_corners.get(ss_def_key, default_lib)
+                if not os.path.isfile(ss_lib) and os.path.isfile(default_lib):
+                    ss_lib = default_lib
+
                 ff_lib = all_corners.get(ff_def_key, default_lib)
+                if not os.path.isfile(ff_lib) and os.path.isfile(default_lib):
+                    ff_lib = default_lib
+
                 tt_lib = all_corners.get(tt_def_key, default_lib)
+                if not os.path.isfile(tt_lib) and os.path.isfile(default_lib):
+                    tt_lib = default_lib
 
                 cfg = {
                     "name": f"{var_key}_{default_corner_name}" if default_corner_name else var_key,
