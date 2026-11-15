@@ -12,17 +12,21 @@ fi
 export APPDIR
 export REPO_ROOT="$APPDIR"
 
-# 1. PDK Root resolution (prioritize host ~/.silis/pdks if populated, else bundle fallback)
+# 1. PDK Root resolution (prioritize bundled complete PDKs in AppDir, fallback to user ~/.silis/pdks)
 if [ -z "${PDK_ROOT:-}" ]; then
-    if [ -d "$HOME/.silis/pdks/sky130A" ]; then
-        export PDK_ROOT="$HOME/.silis/pdks"
-    elif [ -d "$APPDIR/assets/pdk/sky130A" ]; then
+    if [ -d "$APPDIR/assets/pdk/sky130A" ]; then
         export PDK_ROOT="$APPDIR/assets/pdk"
-    else
+    elif [ -d "$HOME/.silis/pdks/sky130A" ]; then
         export PDK_ROOT="$HOME/.silis/pdks"
+    else
+        export PDK_ROOT="$APPDIR/assets/pdk"
     fi
 fi
 mkdir -p "$HOME/.silis/pdks" 2>/dev/null || true
+
+# Disable D-Bus AT-SPI accessibility probe hangs in containers / headless
+export NO_AT_BRIDGE=1
+export QT_ACCESSIBILITY=0
 
 # 2. Standalone Python Selection & Environment Isolation
 export PYTHONNOUSERSITE=1
@@ -96,7 +100,11 @@ if [ -d "$APPDIR/usr/share/tcltk/tcl8.6" ]; then
     export TCL_LIBRARY="$APPDIR/usr/share/tcltk/tcl8.6"
 elif [ -d "$APPDIR/third-party/lib/tcl8.6" ]; then
     export TCL_LIBRARY="$APPDIR/third-party/lib/tcl8.6"
+elif [ -d "$APPDIR/opt/python/lib/tcl8.6" ]; then
+    export TCL_LIBRARY="$APPDIR/opt/python/lib/tcl8.6"
 fi
+export TCLLIBPATH="$APPDIR/opt/python/lib $APPDIR/usr/lib/tcltk $APPDIR/usr/lib/tcltk/x86_64-linux-gnu ${TCLLIBPATH:-}"
+export TCLRL_LIBRARY="$APPDIR/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8"
 
 # 7. Verilator compilation optimization & ccache fallback
 if ! command -v ccache &>/dev/null; then
@@ -120,5 +128,21 @@ fi
 if [ "${1:-}" = "-c" ]; then
     exec "$PYTHON_BIN" "$@"
 fi
+
+# Direct python script execution (.py) or -m module execution
+case "${1:-}" in
+    *.py|-m)
+        exec "$PYTHON_BIN" "$@"
+        ;;
+esac
+
+# Direct EDA binary execution passthroughs
+case "${1:-}" in
+    openroad|yosys|verilator|sta|magic|klayout)
+        cmd="$1"
+        shift
+        exec "$cmd" "$@"
+        ;;
+esac
 
 exec "$PYTHON_BIN" "$APPDIR/silis.py" "$@"

@@ -982,6 +982,15 @@ class SilisIDE(QMainWindow):
         """
         # Only ask if the backend is actually running/dirty
         if self.backend_widget.proc and self.backend_widget.proc.state() == QProcess.ProcessState.Running:
+            if getattr(self, "headless", False) or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+                try:
+                    self.backend_widget.proc.terminate()
+                    self.backend_widget.proc.waitForFinished(500)
+                except Exception:
+                    pass
+                event.accept()
+                return
+
             reply = QMessageBox.question(
                 self, 
                 'Save Session?', 
@@ -1216,17 +1225,27 @@ class SilisIDE(QMainWindow):
 
         # --- 1. YOSYS SCRIPT (With Explicit File Dumps) ---
         # Note the 'tee -o reports/area.rpt' to save area stats to a file
+        latch_techmap_cmd = ""
+        latch_map_path = os.path.join(REPO_ROOT, "core", "techmap", "sky130_latches_map.v")
+        if not os.path.isfile(latch_map_path):
+            latch_map_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core", "techmap", "sky130_latches_map.v")
+        if os.path.isfile(latch_map_path) and "sky130" in str(self.pdk_path).lower():
+            latch_techmap_cmd = f"techmap -map {latch_map_path}\n        "
+
         flatten_cmd = "flatten\n        " if getattr(self, "synth_flatten", False) else "#flatten\n        "
         ys = f"""
         read_liberty -lib {self.pdk_path}
         {macro_lib_cmds_yosys}{read_cmd}
         synth -top {base}
-        dfflibmap -liberty {self.pdk_path}
+        {latch_techmap_cmd}dfflibmap -liberty {self.pdk_path}
         abc -liberty {self.pdk_path}
         {flatten_cmd}tee -o {os.path.join(root, 'reports', 'area.rpt')} stat -liberty {self.pdk_path} -json
-        write_verilog -noattr {v_net}
+        write_verilog -noattr -noexpr -nodec {v_net}
         """
         
+        if getattr(self, "headless", False) or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+            bypass_prompt = True
+
         if not bypass_prompt:
             # --- USER CONFIRMATION DIALOG (Yosys Script + DFT Controls) ---
             dlg = QDialog(self)
@@ -1320,16 +1339,16 @@ class SilisIDE(QMainWindow):
             for c_name, c_lib in mcmm_corners.items():
                 sta_mcmm_defs += f'read_liberty -corner {c_name} "{c_lib}"\n'
 
-            # Macro libs: emit only once per unique lib path (dedup), then qualify per corner.
-            # Dedup is critical — the SRAM typically has only a TT lib, reading it 3× causes
-            # STA-1140 "library already exists" warnings and may shadow corner resolution.
+            # Macro libs: emit only once per unique lib path (dedup).
+            # Standalone OpenSTA applies global read_liberty across all active corners.
+            # Reading the same TT SRAM liberty multiple times with -corner causes STA-1140
+            # "library already exists" warnings and shadows timing models.
             seen_libs: set = set()
             for lib in macro_lib_paths:
                 if lib in seen_libs:
                     continue
                 seen_libs.add(lib)
-                for c_name in mcmm_corners:
-                    macro_lib_cmds_sta += f'read_liberty -corner {c_name} "{lib}"\n'
+                macro_lib_cmds_sta += f'read_liberty "{lib}"\n'
 
             # Standalone OpenSTA MCMM API (NOT OpenROAD -scene API):
             #   read_sdc is called once — constraints apply to all corners.
@@ -1676,16 +1695,19 @@ exit
         # Processor Allocation Dialog (ask user if not remembered in session)
         avail_cpus = os.cpu_count() or 4
         if not hasattr(self, '_allocated_sim_cpus') or not self._allocated_sim_cpus:
-            cores, ok = QInputDialog.getInt(
-                self,
-                "Simulation Processor Allocation",
-                f"Allocate parallel CPU threads for Verilator simulation/build (1 - {avail_cpus}):",
-                value=avail_cpus,
-                min=1,
-                max=avail_cpus,
-                step=1
-            )
-            self._allocated_sim_cpus = cores if ok else min(avail_cpus, 4)
+            if getattr(self, "headless", False) or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+                self._allocated_sim_cpus = min(avail_cpus, 4)
+            else:
+                cores, ok = QInputDialog.getInt(
+                    self,
+                    "Simulation Processor Allocation",
+                    f"Allocate parallel CPU threads for Verilator simulation/build (1 - {avail_cpus}):",
+                    value=avail_cpus,
+                    min=1,
+                    max=avail_cpus,
+                    step=1
+                )
+                self._allocated_sim_cpus = cores if ok else min(avail_cpus, 4)
 
         cpu_threads = self._allocated_sim_cpus
         coverage_dat = os.path.join(root, "coverage.dat")
@@ -1718,7 +1740,8 @@ exit
                 "-Wno-TIMESCALEMOD",
                 "-Wno-MODDUP",
                 "-Wno-WIDTHEXPAND",
-                "-Wno-WIDTHTRUNC"
+                "-Wno-WIDTHTRUNC",
+                "-Wno-LATCH"
             ]
             if sim_top:
                 cmd.extend(["--top-module", sim_top])
@@ -1743,7 +1766,53 @@ exit
                 v_root = os.path.abspath(os.path.join(REPO_ROOT, "third-party", "share", "verilator"))
                 if os.path.isdir(v_root):
                     sub_env["VERILATOR_ROOT"] = v_root
+
+                # Self-healing obj_dir cache validation:
+                # In Linux AppImage environments, the mount point (/tmp/.mount_silis.XXXXXX)
+                # changes on each launch. Any stale makefile or .d dependency in obj_dir
+                # pointing to an unmounted mount point causes GNU Make to fail:
+                # 'make: *** No rule to make target /tmp/.mount_silis.XXX/..., needed by verilated.o. Stop.'
+                if use_verilator:
+                    for obj_cand in [os.path.join(root, "obj_dir"), os.path.join(root, "build", "obj_dir")]:
+                        if not os.path.isdir(obj_cand):
+                            continue
+                        stale = False
+                        for fname in os.listdir(obj_cand):
+                            if fname.endswith((".mk", ".d", ".flags")):
+                                fpath = os.path.join(obj_cand, fname)
+                                try:
+                                    with open(fpath, "r", encoding="utf-8", errors="ignore") as fp:
+                                        content = fp.read()
+                                        if "/tmp/.mount_" in content:
+                                            mounts = set(re.findall(r"/tmp/\.mount_[^/ \t\n\r:]+", content))
+                                            for m in mounts:
+                                                if not os.path.exists(m) or (v_root and m not in v_root):
+                                                    stale = True
+                                                    break
+                                        if v_root and "VERILATOR_ROOT" in content:
+                                            for line in content.splitlines():
+                                                if line.startswith("VERILATOR_ROOT") and "=" in line:
+                                                    assigned = line.split("=", 1)[1].strip()
+                                                    if assigned and assigned != v_root:
+                                                        stale = True
+                                                        break
+                                except Exception:
+                                    pass
+                            if stale:
+                                break
+                        if stale:
+                            shutil.rmtree(obj_cand, ignore_errors=True)
+
                 comp = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=sub_env)
+                if comp.returncode != 0 and use_verilator:
+                    err_msg = comp.stderr.strip() or comp.stdout.strip()
+                    if ("No rule to make target" in err_msg and "/tmp/.mount_" in err_msg) or "exited with 2" in err_msg:
+                        # Stale makefile dependency detected — clean obj_dir and retry once
+                        self.queue.put(("[SYS]", "Stale AppImage mount cache detected in obj_dir. Purging and recompiling..."))
+                        shutil.rmtree(os.path.join(root, "obj_dir"), ignore_errors=True)
+                        shutil.rmtree(os.path.join(root, "build", "obj_dir"), ignore_errors=True)
+                        comp = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=sub_env)
+
                 if comp.returncode != 0:
                     err_msg = comp.stderr.strip() or comp.stdout.strip()
                     self.queue.put(("[SYS]", f"[ERR] {sim_tool_name} compilation failed:\n{err_msg}"))
@@ -3102,6 +3171,14 @@ if __name__ == "__main__":
         import PyQt6.QtWebEngineWidgets
     except Exception:
         pass
+
+    # If first argument is a python script, run it directly without starting GUI
+    if len(sys.argv) > 1 and sys.argv[1].endswith(".py") and os.path.isfile(sys.argv[1]):
+        script_path = os.path.abspath(sys.argv[1])
+        sys.argv = sys.argv[1:]
+        import runpy
+        runpy.run_path(script_path, run_name="__main__")
+        sys.exit(0)
 
     app = QApplication(sys.argv)
     

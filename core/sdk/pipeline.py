@@ -3634,11 +3634,55 @@ puts "SILIS_FILL_DONE"
             f"--threads", str(cpu_threads),
             f"-j", str(cpu_threads),
             "-Wno-fatal",
+            "-Wno-TIMESCALEMOD",
+            "-Wno-MODDUP",
+            "-Wno-WIDTHEXPAND",
+            "-Wno-WIDTHTRUNC",
+            "-Wno-LATCH",
             "-o", out_bin
         ] + cov_flags + v_inc_args + sources
 
+        # Self-healing obj_dir cache validation for AppImage / dynamic mounts
+        for obj_cand in [os.path.join(proj_root, "obj_dir"), os.path.join(proj_root, "build", "obj_dir")]:
+            if not os.path.isdir(obj_cand):
+                continue
+            stale = False
+            for fname in os.listdir(obj_cand):
+                if fname.endswith((".mk", ".d", ".flags")):
+                    fpath = os.path.join(obj_cand, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8", errors="ignore") as fp:
+                            content = fp.read()
+                            if "/tmp/.mount_" in content:
+                                mounts = set(re.findall(r"/tmp/\.mount_[^/ \t\n\r:]+", content))
+                                for m in mounts:
+                                    if not os.path.exists(m) or (v_root and m not in v_root):
+                                        stale = True
+                                        break
+                            if v_root and "VERILATOR_ROOT" in content:
+                                for line in content.splitlines():
+                                    if line.startswith("VERILATOR_ROOT") and "=" in line:
+                                        assigned = line.split("=", 1)[1].strip()
+                                        if assigned and assigned != v_root:
+                                            stale = True
+                                            break
+                    except Exception:
+                        pass
+                if stale:
+                    break
+            if stale:
+                shutil.rmtree(obj_cand, ignore_errors=True)
+
         # 1. Compile
         comp = subprocess.run(cmd, cwd=proj_root, capture_output=True, text=True, env=sub_env)
+        if comp.returncode != 0:
+            err_msg = comp.stderr.strip() or comp.stdout.strip()
+            if ("No rule to make target" in err_msg and "/tmp/.mount_" in err_msg) or "exited with 2" in err_msg:
+                # Stale makefile dependency detected — clean obj_dir and retry once
+                shutil.rmtree(os.path.join(proj_root, "obj_dir"), ignore_errors=True)
+                shutil.rmtree(os.path.join(proj_root, "build", "obj_dir"), ignore_errors=True)
+                comp = subprocess.run(cmd, cwd=proj_root, capture_output=True, text=True, env=sub_env)
+
         if comp.returncode != 0:
             err_msg = comp.stderr.strip() or comp.stdout.strip()
             raise RuntimeError(f"Verilator compilation failed:\n{err_msg}")

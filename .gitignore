@@ -73,6 +73,11 @@ node_modules/
 
 # Third-party precompiled binaries
 third-party/bin/
+third-party/share/
+
+# Built AppImages
+*.AppImage
+squashfs-root/
 
 # AppImage staging directory
 build_appimage/
