@@ -38,7 +38,7 @@ from editor.editor import CommandPalette, FileSearchPalette, VSCodeEditorTabs, S
 from terminal.terminal import VSCodeTerminalWidget
 from pdkmanagers.pdk.manager import SSAForge, PDKManager, PDKSelector
 from pdkmanagers.volare import VolareManagerWidget
-from backendflow.siliconpeeker.peeker import DEFParser, FastSiliconPeeker
+from backendflow.siliconpeeker.peeker import DEFParser, FastSiliconPeeker, SiliconPeeker
 from signalpeeker.code import SignalPeeker
 from schematicviewer.graphiccanvas import SchematicTab
 from synthesisscripts.synthesisthread import SynthesisTab

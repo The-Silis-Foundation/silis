@@ -38,7 +38,9 @@ class SharedWebEngineManager:
     """
     _instance = None
     _view = None
+    _page = None
     _current_owner = None
+    _handlers = []
 
     @classmethod
     def get_instance(cls):
@@ -54,14 +56,23 @@ class SharedWebEngineManager:
         if not _WEBENGINE_AVAILABLE:
             return None
         if self._view is None:
-            self._view = QWebEngineView()
-            self._page = SilisWebEnginePage(self._view)
-            self._view.setPage(self._page)
+            try:
+                self._view = QWebEngineView()
+                self._page = SilisWebEnginePage(self._view)
+                for h in getattr(self, '_handlers', []):
+                    if h not in self._page.message_handlers:
+                        self._page.message_handlers.append(h)
+                self._view.setPage(self._page)
+            except Exception as e:
+                self._view = None
         return self._view
 
     def add_console_handler(self, handler):
-        self.get_view()
-        if hasattr(self, '_page') and self._page and handler not in self._page.message_handlers:
+        if not hasattr(self, '_handlers'):
+            self._handlers = []
+        if handler not in self._handlers:
+            self._handlers.append(handler)
+        if getattr(self, '_page', None) and handler not in self._page.message_handlers:
             self._page.message_handlers.append(handler)
 
     def attach_to(self, target_widget, owner_id):

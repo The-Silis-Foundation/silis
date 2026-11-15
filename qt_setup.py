@@ -143,14 +143,16 @@ def setup_qt_webengine():
 
 setup_qt_webengine()
 
-# 5. Enable context sharing and OpenGL RHI if PyQt6 is available
+# 5. Enable context sharing if PyQt6 is available and not in offscreen/headless mode
 try:
     from PyQt6.QtCore import QCoreApplication, Qt
-    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-    try:
-        from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
-        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
-    except Exception:
-        pass
+    if os.environ.get("QT_QPA_PLATFORM") != "offscreen" and os.environ.get("SILIS_HEADLESS_TEST") != "1":
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+        try:
+            from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
+            if hasattr(QSGRendererInterface.GraphicsApi, "OpenGLRhi"):
+                QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
+        except Exception:
+            pass
 except Exception:
     pass

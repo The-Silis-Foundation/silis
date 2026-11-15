@@ -282,7 +282,10 @@ set_isolation iso_lowp -domain PD_LOWP -clamp_value 0 -applies_to outputs
     print("  [PASS] SilisIDE initialized in offscreen mode.")
 
     # Test SiliconPeeker / DEFParser on generated DEF
-    from silis import DEFParser, SiliconPeeker
+    try:
+        from silis import DEFParser, SiliconPeeker
+    except ImportError:
+        from backendflow.siliconpeeker.peeker import DEFParser, SiliconPeeker
     def_path = proj.get_def()
     if def_path and os.path.isfile(def_path):
         parser = DEFParser(def_path)
