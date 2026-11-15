@@ -54,8 +54,8 @@ else
 fi
 
 # 5. Qt6 & QtWebEngine Discovery
-# Suppress Chromium diagnostic fallbacks (e.g. GBM DRI fallback to Vulkan on Linux systems without direct GBM buffers)
-export QTWEBENGINE_CHROMIUM_FLAGS="--disable-logging --log-level=3 --disable-gpu-sandbox"
+# Force software rendering in Chromium to eliminate GBM/Vulkan driver crashes across arbitrary Linux GPUs/VMs
+export QTWEBENGINE_CHROMIUM_FLAGS="--disable-logging --log-level=3 --disable-gpu"
 
 if [ -f "$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess" ]; then
     export QTWEBENGINEPROCESS_PATH="$PY_SITE/PyQt6/Qt6/libexec/QtWebEngineProcess"

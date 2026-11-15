@@ -467,7 +467,7 @@ class SettingsDialog(QDialog):
         self.cb_editor_backend = QComboBox()
         self.cb_editor_backend.addItem("QScintilla (Fast, Native)", "qscintilla")
         self.cb_editor_backend.addItem("Monaco (WebEngine, VS Code)", "monaco")
-        curr_backend = USER_SETTINGS.get("editor_backend", "monaco").lower()
+        curr_backend = USER_SETTINGS.get("editor_backend", "qscintilla").lower()
         idx_backend = 0 if curr_backend == "qscintilla" else 1
         self.cb_editor_backend.setCurrentIndex(idx_backend)
         form_app.addRow("Editor Engine:", self.cb_editor_backend)
@@ -2097,7 +2097,7 @@ exit
 
         act_ed_qsci = QAction("QScintilla (Native C++)", self)
         act_ed_qsci.setCheckable(True)
-        act_ed_qsci.setChecked(USER_SETTINGS.get("editor_backend", "monaco").lower() == "qscintilla")
+        act_ed_qsci.setChecked(USER_SETTINGS.get("editor_backend", "qscintilla").lower() == "qscintilla")
         act_ed_qsci.triggered.connect(lambda: self.set_editor_backend("qscintilla"))
         menu_editor_sel.addAction(act_ed_qsci)
 

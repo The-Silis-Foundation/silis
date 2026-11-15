@@ -70,7 +70,7 @@ def load_user_settings():
         "font_size": 11,
         "theme_name": "Catppuccin Mocha",
         "custom_theme": {},
-        "editor_backend": "monaco",
+        "editor_backend": "qscintilla",
         "radix_preference": "hex"
     }
 
@@ -96,7 +96,7 @@ def load_editor_config():
     return {
         "font_family": USER_SETTINGS.get("font_family", "Consolas"),
         "font_size": USER_SETTINGS.get("font_size", 11),
-        "editor_backend": USER_SETTINGS.get("editor_backend", "monaco"),
+        "editor_backend": USER_SETTINGS.get("editor_backend", "qscintilla"),
         "line_numbers": True
     }
 
@@ -113,7 +113,7 @@ EDITOR_CONFIG = load_editor_config()
 # Ensure USER_SETTINGS stays synchronized
 USER_SETTINGS["font_size"] = EDITOR_CONFIG.get("font_size", USER_SETTINGS.get("font_size", 11))
 USER_SETTINGS["font_family"] = EDITOR_CONFIG.get("font_family", USER_SETTINGS.get("font_family", "Consolas"))
-USER_SETTINGS["editor_backend"] = EDITOR_CONFIG.get("editor_backend", USER_SETTINGS.get("editor_backend", "monaco"))
+USER_SETTINGS["editor_backend"] = EDITOR_CONFIG.get("editor_backend", USER_SETTINGS.get("editor_backend", "qscintilla"))
 
 def load_themes():
     # 1. Base built-in themes
