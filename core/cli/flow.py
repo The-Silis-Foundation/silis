@@ -154,7 +154,7 @@ class HeadlessASICRunner:
             selected_pdk = candidates_with_gds[0]
         elif candidates:
             selected_pdk = candidates[0]
-        elif self.ide.pdk_mgr.configs:
+        elif self.ide.pdk_mgr.configs and pdk_name.lower() in ("sky130", "sky130a", "sky130b", "default", ""):
             selected_pdk = self.ide.pdk_mgr.configs[0]
         else:
             selected_pdk = None

@@ -1,0 +1,38 @@
+{
+  "pdk": "freepdk45",
+  "display_name": "NCSU FreePDK 45nm (FreePDK45)",
+  "aliases_pdk": ["freepdk45", "freepdk_45nm", "freepdk", "NCSU45"],
+  "paths": {
+    "pdk_root": "~/.silis/pdks/FreePDK45",
+    "tech_lef": "lef/freepdk45_tech.tlef",
+    "std_cell_lef": "lef/freepdk45_cells.lef",
+    "liberty": "lib/freepdk45_tt.lib",
+    "extra_lefs": []
+  },
+  "site": {
+    "name": "CoreSite",
+    "height_um": 1.40,
+    "width_um": 0.19,
+    "double_height_site": "CoreSiteDouble",
+    "double_height_um": 2.80
+  },
+  "cells": {
+    "tapcells": {
+      "default": "FILLCELL_X1",
+      "tap1": "FILLCELL_X1"
+    },
+    "power_switches": {
+      "default": "HEADER_SW_45",
+      "sw1": "HEADER_SW_45"
+    },
+    "clock_tree": {
+      "root": "CLKBUF_X3",
+      "leaf": "CLKBUF_X1"
+    }
+  },
+  "interconnect": {
+    "min_layer": "metal1",
+    "max_layer": "metal10",
+    "rail_layer": "metal1"
+  }
+}

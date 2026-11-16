@@ -365,11 +365,15 @@ class PDKManager:
         self.load_ssa_configs()
 
     def load_ssa_configs(self):
-        """Discovers and registers SSA configurations (e.g. ~/.silis/ssa/*/config.json)."""
+        """Discovers and registers SSA configurations (e.g. ~/.silis/ssa/*/config.json, assets/ssa)."""
         ssa_dirs = [
             os.path.expanduser("~/.silis/ssa"),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "ssa")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "third-party", "pdks", "ssa"))
         ]
+        appdir = os.environ.get("APPDIR")
+        if appdir:
+            ssa_dirs.append(os.path.join(appdir, "assets", "ssa"))
         for sdir in ssa_dirs:
             if not os.path.isdir(sdir):
                 continue

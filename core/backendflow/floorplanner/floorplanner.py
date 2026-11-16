@@ -1484,6 +1484,35 @@ class InteractiveFloorplannerWidget(QDialog):
             base = "design"
         return proj_root, base
 
+    def _find_design_netlist(self):
+        """Discovers authoritative synthesized Verilog netlist or source RTL."""
+        proj_root, base = self._get_project_context()
+        if not proj_root:
+            return None
+        candidates = [
+            os.path.join(proj_root, "netlist", f"{base}_netlist.v"),
+            os.path.join(proj_root, "netlist", f"{base}.v"),
+            os.path.join(proj_root, "rtl", f"{base}.v"),
+            os.path.join(proj_root, "rtl", f"{base}.sv"),
+            os.path.join(proj_root, "source", f"{base}.v"),
+            os.path.join(proj_root, "source", f"{base}.sv"),
+            os.path.join(proj_root, f"{base}.v"),
+            os.path.join(proj_root, f"{base}_netlist.v"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        for sdir in ["netlist", "rtl", "source"]:
+            folder = os.path.join(proj_root, sdir)
+            if os.path.isdir(folder):
+                matches = sorted(glob.glob(os.path.join(folder, "*.v")) + glob.glob(os.path.join(folder, "*.sv")))
+                non_tb = [m for m in matches if not any(x in os.path.basename(m).lower() for x in ["tb_", "_tb", "test_"])]
+                if non_tb:
+                    return non_tb[0]
+                elif matches:
+                    return matches[0]
+        return None
+
     def __init__(self, project_config=None, pdk_mgr=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Silis Floorplan & Power Studio (FPS)")
@@ -1953,7 +1982,7 @@ class InteractiveFloorplannerWidget(QDialog):
         self.is_dirty = True
         self._autosave_timer.start()
 
-    def _do_transactional_autosave(self):
+    def _do_transactional_autosave(self) -> bool:
         try:
             proj_root, base = self._get_project_context()
             save_path = os.path.join(proj_root, ".silis_fp_session.json").replace("\\", "/")
@@ -1963,8 +1992,10 @@ class InteractiveFloorplannerWidget(QDialog):
                 json.dump(state, f, indent=2)
             os.replace(tmp_path, save_path)
             self.is_dirty = False
+            return True
         except Exception as e:
-            pass
+            print(f"[FPS] Transactional autosave failed: {e}")
+            return False
 
     def _serialize_session_state(self):
         is_pad_mode = getattr(self, "pad_ring_enabled", False) or (hasattr(self, "rb_chip") and self.rb_chip.isChecked())
@@ -1999,8 +2030,13 @@ class InteractiveFloorplannerWidget(QDialog):
                 "targeted_bridges": self.chk_targeted_bridges.isChecked() if hasattr(self, "chk_targeted_bridges") else True,
             },
         }
+        valid_instances = set(self.macro_instances.keys()) if getattr(self, "macro_instances", None) else None
         for it in self.scene.items():
             if isinstance(it, MacroItem):
+                if valid_instances is not None and len(valid_instances) > 0:
+                    if it.inst_name not in valid_instances and not is_io_pad_cell(it.inst_name, it.name):
+                        print(f"[FPS AUDIT WARNING] Excluding stale synthetic macro '{it.inst_name}' ({it.name}) from session persistence.")
+                        continue
                 state["macros"].append({
                     "name": it.name, "inst_name": it.inst_name,
                     "x": it.pos().x(), "y": it.pos().y(),
@@ -2036,17 +2072,24 @@ class InteractiveFloorplannerWidget(QDialog):
                 })
         return state
 
-    def save_session(self):
-        self._do_transactional_autosave()
-        QMessageBox.information(self, "Session Saved", "Silis FP Studio session successfully saved to .silis_fp_session.json")
+    def save_session(self) -> bool:
+        success = self._do_transactional_autosave()
+        if not self._is_headless():
+            if success:
+                QMessageBox.information(self, "Session Saved", "Silis FP Studio session successfully saved to .silis_fp_session.json")
+            else:
+                QMessageBox.warning(self, "Session Save Failed", "Failed to write .silis_fp_session.json to disk.")
+        return success
 
     def save_snapshot_as(self):
         proj_root, base = self._get_project_context()
         path, _ = QFileDialog.getSaveFileName(self, "Save Revision Snapshot", proj_root, "JSON Files (*.json)")
         if path:
             state = self._serialize_session_state()
-            with open(path, "w") as f:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(state, f, indent=2)
+            os.replace(tmp_path, path)
 
     def load_session(self):
         proj_root, base = self._get_project_context()
@@ -2061,22 +2104,22 @@ class InteractiveFloorplannerWidget(QDialog):
                 # Check if netlist checksum changed compared to saved session
                 saved_checksum = state.get("netlist_checksum", "")
                 if saved_checksum:
-                    netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
-                    if not os.path.isfile(netlist_path):
-                        netlist_path = os.path.join(proj_root, "source", f"{base}.v")
-                    if os.path.isfile(netlist_path):
+                    netlist_path = self._find_design_netlist()
+                    if netlist_path and os.path.isfile(netlist_path):
                         with open(netlist_path, "rb") as nf:
                             cur_sha = hashlib.sha256(nf.read()).hexdigest()
                         if cur_sha != saved_checksum:
                             print(f"[FPS ALERT] Netlist checksum mismatch on session load! Saved: {saved_checksum[:16]}..., Current: {cur_sha[:16]}...")
-                            QMessageBox.warning(
-                                self,
-                                "Netlist Modified Warning",
-                                f"Warning: Gate-level netlist has changed since this floorplan session was saved!\n\n"
-                                f"Saved Checksum:   {saved_checksum[:16]}...\n"
-                                f"Current Checksum: {cur_sha[:16]}...\n\n"
-                                f"Existing macro and region coordinates may be invalid or out of sync with new module ports."
-                            )
+                            self.netlist_checksum_mismatch = True
+                            if not self._is_headless():
+                                QMessageBox.warning(
+                                    self,
+                                    "Netlist Modified Warning",
+                                    f"Warning: Gate-level netlist has changed since this floorplan session was saved!\n\n"
+                                    f"Saved Checksum:   {saved_checksum[:16]}...\n"
+                                    f"Current Checksum: {cur_sha[:16]}...\n\n"
+                                    f"Existing macro and region coordinates may be invalid or out of sync with new module ports."
+                                )
 
                 self.load_state(state)
             except Exception as e:
@@ -2094,25 +2137,27 @@ class InteractiveFloorplannerWidget(QDialog):
         if res == QMessageBox.StandardButton.Yes:
             self.load_session()
 
-    def verify_netlist_integrity(self):
-        proj_root, base = self._get_project_context()
-        netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
-        if not os.path.isfile(netlist_path):
-            netlist_path = os.path.join(proj_root, "source", f"{base}.v")
-        if not os.path.isfile(netlist_path):
-            QMessageBox.information(self, "Netlist Check", "No verilog netlist found in project directories.")
-            return
+    def verify_netlist_integrity(self) -> bool:
+        netlist_path = self._find_design_netlist()
+        if not netlist_path or not os.path.isfile(netlist_path):
+            if not self._is_headless():
+                QMessageBox.information(self, "Netlist Check", "No verilog netlist found in project directories.")
+            return False
         with open(netlist_path, "rb") as f:
             cur_sha = hashlib.sha256(f.read()).hexdigest()
         if self.netlist_checksum and self.netlist_checksum != cur_sha:
             print(f"[FPS ALERT] Netlist integrity alert: SHA-256 changed from {self.netlist_checksum[:16]}... to {cur_sha[:16]}...")
-            QMessageBox.warning(
-                self, "Checksum Mismatch Detected",
-                f"Netlist SHA-256 has changed since session creation!\n\nSaved:   {self.netlist_checksum[:16]}...\nCurrent: {cur_sha[:16]}...\n\nPlease review your region modules."
-            )
+            if not self._is_headless():
+                QMessageBox.warning(
+                    self, "Checksum Mismatch Detected",
+                    f"Netlist SHA-256 has changed since session creation!\n\nSaved:   {self.netlist_checksum[:16]}...\nCurrent: {cur_sha[:16]}...\n\nPlease review your region modules."
+                )
+            return False
         else:
             self.netlist_checksum = cur_sha
-            QMessageBox.information(self, "Netlist Verified", f"Netlist verified cleanly.\nSHA-256: {cur_sha}")
+            if not self._is_headless():
+                QMessageBox.information(self, "Netlist Verified", f"Netlist verified cleanly.\nSHA-256: {cur_sha}")
+            return True
 
     def on_reset_from_netlist(self):
         res = QMessageBox.warning(
@@ -2213,10 +2258,8 @@ class InteractiveFloorplannerWidget(QDialog):
 
     def _load_netlist_and_pdk_context(self):
         proj_root, base = self._get_project_context()
-        netlist_path = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
-        if not os.path.isfile(netlist_path):
-            netlist_path = os.path.join(proj_root, "source", f"{base}.v")
-        if os.path.isfile(netlist_path):
+        netlist_path = self._find_design_netlist()
+        if netlist_path and os.path.isfile(netlist_path):
             with open(netlist_path, "rb") as f:
                 self.netlist_checksum = hashlib.sha256(f.read()).hexdigest()
 
@@ -3232,6 +3275,41 @@ class InteractiveFloorplannerWidget(QDialog):
         self.pins_data[name]["x"] = x
         self.pins_data[name]["y"] = y
 
+    def check_corner_collisions(self, corner_width: float = 200.0, corner_height: float = 204.0) -> bool:
+        """
+        Validates that no placed items collide with corner cell keepout zones (200 x 204 um).
+        """
+        if not self.die_rect or self.die_rect.width() <= 0:
+            return True
+        w = self.die_rect.width()
+        h = self.die_rect.height()
+        corners = [
+            (0.0, 0.0, corner_width, corner_height),
+            (w - corner_width, 0.0, w, corner_height),
+            (0.0, h - corner_height, corner_width, h),
+            (w - corner_width, h - corner_height, w, h),
+        ]
+        for name, pdata in getattr(self, "pins_data", {}).items():
+            px = pdata.get("x", -1.0)
+            py = pdata.get("y", -1.0)
+            pw = pdata.get("w", 80.0)
+            ph = pdata.get("h", 80.0)
+            if px >= 0 and py >= 0:
+                bx1, by1, bx2, by2 = px - pw/2, py - ph/2, px + pw/2, py + ph/2
+                for cx1, cy1, cx2, cy2 in corners:
+                    if not (bx2 <= cx1 or bx1 >= cx2 or by2 <= cy1 or by1 >= cy2):
+                        return False
+        # Also validate placed macros against corner keepouts
+        if hasattr(self, "scene") and self.scene:
+            for it in self.scene.items():
+                if isinstance(it, MacroItem):
+                    r = it.sceneBoundingRect()
+                    bx1, by1, bx2, by2 = r.left(), r.top(), r.right(), r.bottom()
+                    for cx1, cy1, cx2, cy2 in corners:
+                        if not (bx2 <= cx1 or bx1 >= cx2 or by2 <= cy1 or by1 >= cy2):
+                            return False
+        return True
+
     def auto_distribute_pads(self, reset_edges=False):
         """
         Distributes I/O pads or macro boundary ports along the die perimeter and renders PinItem objects.
@@ -3254,7 +3332,7 @@ class InteractiveFloorplannerWidget(QDialog):
 
         w = self.die_rect.width()
         h = self.die_rect.height()
-        is_pad = hasattr(self, "rb_chip") and self.rb_chip.isChecked()
+        is_pad = (hasattr(self, "rb_chip") and self.rb_chip.isChecked()) or getattr(self, "pad_strategy", "") in ("single", "staggered")
         pin_w = 80.0 if is_pad else 4.0
         pin_h = 80.0 if is_pad else 4.0
 
@@ -3360,6 +3438,8 @@ class InteractiveFloorplannerWidget(QDialog):
                     row_max = max(row_min, span - 240.0 - 80.0)
                     max_span = max(0.0, row_max - row_min)
                     step = (max_span / (n - 1)) if n > 1 else 0.0
+                    if n > 1 and step < 85.0:
+                        step = 85.0
                     start = row_min if n > 1 else (row_min + max_span / 2.0)
 
                     for i, name in enumerate(edge_list):
@@ -3400,6 +3480,8 @@ class InteractiveFloorplannerWidget(QDialog):
                     row_len = max(0.0, row_end - row_start)
                     max_span = max(0.0, row_len - 80.0)
                     step = (max_span / (n - 1)) if n > 1 else 0.0
+                    if n > 1 and step < 85.0:
+                        step = 85.0
                     start = row_start if n > 1 else (row_start + max_span / 2.0)
 
                     for i, name in enumerate(edge_list):
@@ -5156,18 +5238,27 @@ class InteractiveFloorplannerWidget(QDialog):
             self.load_state(state)
 
     def load_state(self, state):
+        if not isinstance(state, dict):
+            print("[FPS] Error loading session: state is not a dictionary.")
+            return
         self.is_undoing = True
         try:
             self.scene.clear()
 
-            if 'die' in state:
+            if 'die' in state and isinstance(state['die'], dict):
                 d = state['die']
-                w = float(d.get('w', 1500.0))
-                h = float(d.get('h', 1500.0))
-                ml = float(d.get('ml', 20.0))
-                mr = float(d.get('mr', 20.0))
-                mt = float(d.get('mt', 20.0))
-                mb = float(d.get('mb', 20.0))
+                try: w = float(d.get('w', 1500.0))
+                except (ValueError, TypeError): w = 1500.0
+                try: h = float(d.get('h', 1500.0))
+                except (ValueError, TypeError): h = 1500.0
+                try: ml = float(d.get('ml', 20.0))
+                except (ValueError, TypeError): ml = 20.0
+                try: mr = float(d.get('mr', 20.0))
+                except (ValueError, TypeError): mr = 20.0
+                try: mt = float(d.get('mt', 20.0))
+                except (ValueError, TypeError): mt = 20.0
+                try: mb = float(d.get('mb', 20.0))
+                except (ValueError, TypeError): mb = 20.0
                 self.die_rect = QRectF(0, 0, w, h)
                 self.core_rect = QRectF(ml, mb, max(1.0, w - ml - mr), max(1.0, h - mt - mb))
                 if hasattr(self, 'sp_die_w'):
@@ -5216,19 +5307,25 @@ class InteractiveFloorplannerWidget(QDialog):
 
             # Restore tapcell distance if present
             if 'tap_distance' in state and hasattr(self, 'sp_tap_distance'):
-                self.sp_tap_distance.setValue(float(state['tap_distance']))
+                try:
+                    self.sp_tap_distance.setValue(float(state['tap_distance']))
+                except (ValueError, TypeError):
+                    pass
 
             # Restore PDN ring and trunk bridge settings if present
-            if 'pdn_config' in state:
+            if 'pdn_config' in state and isinstance(state['pdn_config'], dict):
                 pdn_cfg = state['pdn_config']
                 if 'enable_ring' in pdn_cfg and hasattr(self, 'chk_enable_ring'):
                     self.chk_enable_ring.setChecked(bool(pdn_cfg['enable_ring']))
                 if 'ring_width' in pdn_cfg and hasattr(self, 'sp_ring_width'):
-                    self.sp_ring_width.setValue(float(pdn_cfg['ring_width']))
+                    try: self.sp_ring_width.setValue(float(pdn_cfg['ring_width']))
+                    except (ValueError, TypeError): pass
                 if 'ring_spacing' in pdn_cfg and hasattr(self, 'sp_ring_spacing'):
-                    self.sp_ring_spacing.setValue(float(pdn_cfg['ring_spacing']))
+                    try: self.sp_ring_spacing.setValue(float(pdn_cfg['ring_spacing']))
+                    except (ValueError, TypeError): pass
                 if 'ring_offset' in pdn_cfg and hasattr(self, 'sp_ring_offset'):
-                    self.sp_ring_offset.setValue(float(pdn_cfg['ring_offset']))
+                    try: self.sp_ring_offset.setValue(float(pdn_cfg['ring_offset']))
+                    except (ValueError, TypeError): pass
                 if 'ring_h_layer' in pdn_cfg and hasattr(self, 'cmb_ring_h_layer'):
                     self.cmb_ring_h_layer.setCurrentText(str(pdn_cfg['ring_h_layer']))
                 if 'ring_v_layer' in pdn_cfg and hasattr(self, 'cmb_ring_v_layer'):
@@ -5238,7 +5335,8 @@ class InteractiveFloorplannerWidget(QDialog):
                 if 'trunk_layer' in pdn_cfg and hasattr(self, 'cmb_trunk_layer'):
                     self.cmb_trunk_layer.setCurrentText(str(pdn_cfg['trunk_layer']))
                 if 'trunk_width' in pdn_cfg and hasattr(self, 'sp_trunk_width'):
-                    self.sp_trunk_width.setValue(float(pdn_cfg['trunk_width']))
+                    try: self.sp_trunk_width.setValue(float(pdn_cfg['trunk_width']))
+                    except (ValueError, TypeError): pass
                 if 'targeted_bridges' in pdn_cfg and hasattr(self, 'chk_targeted_bridges'):
                     self.chk_targeted_bridges.setChecked(bool(pdn_cfg['targeted_bridges']))
 
@@ -5273,48 +5371,82 @@ class InteractiveFloorplannerWidget(QDialog):
 
             # Load blockages and regions
             raw_blockages = state.get('blockages', [])
-            for b in raw_blockages:
-                if b.get('is_region'):
-                    r_item = RegionItem(b['x'], b['y'], b['w'], b['h'], b['module_name'], b['is_fence'], b.get('density', 0.60), core_rect=self.core_rect)
-                    if 'halo' in b:
-                        r_item.update_halo(*b['halo'])
-                    if 'locked' in b:
-                        r_item.set_locked(b['locked'])
-                    if 'multi_boxes' in b:
-                        r_item.multi_boxes = b['multi_boxes']
-                    self.scene.addItem(r_item)
-                else:
-                    b_item = BlockageItem(b['x'], b['y'], b['w'], b['h'], b.get('btype', 'Hard'), b.get('pct', 40))
-                    self.scene.addItem(b_item)
+            if isinstance(raw_blockages, list):
+                for b in raw_blockages:
+                    if not isinstance(b, dict): continue
+                    try:
+                        bx = float(b.get('x', 0.0))
+                        by = float(b.get('y', 0.0))
+                        bw = float(b.get('w', 50.0))
+                        bh = float(b.get('h', 50.0))
+                    except (ValueError, TypeError):
+                        continue
+                    if b.get('is_region'):
+                        mod_name = str(b.get('module_name', 'core'))
+                        r_item = RegionItem(bx, by, bw, bh, mod_name, b.get('is_fence', False), b.get('density', 0.60), core_rect=self.core_rect)
+                        if 'halo' in b:
+                            r_item.update_halo(*b['halo'])
+                        if 'locked' in b:
+                            r_item.set_locked(b['locked'])
+                        if 'multi_boxes' in b:
+                            r_item.multi_boxes = b['multi_boxes']
+                        self.scene.addItem(r_item)
+                    else:
+                        b_item = BlockageItem(bx, by, bw, bh, b.get('btype', 'Hard'), b.get('pct', 40))
+                        self.scene.addItem(b_item)
 
             # Support sessions serialized with separate "regions" key
             raw_regions = state.get('regions', [])
-            for r in raw_regions:
-                r_item = RegionItem(
-                    r['x'], r['y'], r['w'], r['h'],
-                    r['module_name'], is_fence=r.get('is_fence', False),
-                    density=r.get('density', 0.60), core_rect=self.core_rect
-                )
-                if 'halo' in r:
-                    r_item.update_halo(*r['halo'])
-                if 'locked' in r:
-                    r_item.set_locked(r['locked'])
-                if 'multi_boxes' in r:
-                    r_item.multi_boxes = r['multi_boxes']
-                self.scene.addItem(r_item)
+            if isinstance(raw_regions, list):
+                for r in raw_regions:
+                    if not isinstance(r, dict): continue
+                    try:
+                        rx = float(r.get('x', 0.0))
+                        ry = float(r.get('y', 0.0))
+                        rw = float(r.get('w', 50.0))
+                        rh = float(r.get('h', 50.0))
+                    except (ValueError, TypeError):
+                        continue
+                    mod_name = str(r.get('module_name', 'core'))
+                    r_item = RegionItem(
+                        rx, ry, rw, rh,
+                        mod_name, is_fence=r.get('is_fence', False),
+                        density=r.get('density', 0.60), core_rect=self.core_rect
+                    )
+                    if 'halo' in r:
+                        r_item.update_halo(*r['halo'])
+                    if 'locked' in r:
+                        r_item.set_locked(r['locked'])
+                    if 'multi_boxes' in r:
+                        r_item.multi_boxes = r['multi_boxes']
+                    self.scene.addItem(r_item)
                 
             loaded_insts = set()
+            valid_instances = set(self.macro_instances.keys()) if getattr(self, "macro_instances", None) else None
             for m in state.get('macros', []):
+                if not isinstance(m, dict):
+                    continue
                 inst = m.get('inst_name', '')
+                master_name = m.get('name', '')
                 # Skip duplicate instances or synthetic fallbacks if actual instances exist
                 if not inst or inst in loaded_insts:
                     continue
-                w, h = self.macro_sizes.get(m['name'], (100.0, 100.0))
-                m_item = MacroItem(m['name'], w, h, self.core_rect, self)
+                # Audit and reject stale synthetic macro instances not in netlist (GEMINI.md Section 4.3)
+                if valid_instances is not None and len(valid_instances) > 0:
+                    if inst not in valid_instances and not is_io_pad_cell(inst, master_name):
+                        print(f"[FPS AUDIT WARNING] Stale synthetic macro instance '{inst}' ({master_name}) not found in netlist; audited and rejected.")
+                        continue
+                w, h = self.macro_sizes.get(master_name, (100.0, 100.0))
+                m_item = MacroItem(master_name, w, h, self.core_rect, self)
                 m_item.set_inst_name(inst)
                 m_item.set_orientation(m.get('orientation', 'R0'))
                 m_item.update_halo(*m.get('halo', [0, 0, 0, 0]))
-                m_item.setPos(m.get('x', 0), m.get('y', 0))
+                try:
+                    mx = float(m.get('x', 0.0))
+                    my = float(m.get('y', 0.0))
+                except (ValueError, TypeError):
+                    mx, my = 0.0, 0.0
+                m_item.setPos(mx, my)
                 self.scene.addItem(m_item)
                 loaded_insts.add(inst)
                 
@@ -5325,7 +5457,7 @@ class InteractiveFloorplannerWidget(QDialog):
                     matched = False
                     if target_text and base_text == target_text.replace(" [PLACED]", ""):
                         matched = True
-                    elif base_text == m['name'] or it.data(Qt.ItemDataRole.UserRole) == f"{m['name']}|{m.get('inst_name', '')}":
+                    elif base_text == master_name or it.data(Qt.ItemDataRole.UserRole) == f"{master_name}|{m.get('inst_name', '')}":
                         matched = True
                     if matched:
                         it.setText(f"{base_text} [PLACED]")
@@ -5334,24 +5466,36 @@ class InteractiveFloorplannerWidget(QDialog):
                         m_item.list_item = it
                         break
 
-            for pd_entry in state.get('power_domains', []):
-                vi_item = VoltageIslandItem(
-                    pd_entry['x'], pd_entry['y'], pd_entry['w'], pd_entry['h'],
-                    pd_entry['domain_name'], pd_entry.get('voltage', 1.8),
-                    pd_entry.get('elements', []), core_rect=self.core_rect,
-                    halo=pd_entry.get('halo', (15.0, 15.0, 15.0, 15.0))
-                )
-                if 'tapcell_type' in pd_entry:
-                    vi_item.set_tapcell_type(pd_entry['tapcell_type'])
-                self.scene.addItem(vi_item)
-                if hasattr(self, "pdm") and self.pdm:
-                    cur_pd = self.pdm.domains.get(pd_entry['domain_name'])
-                    if cur_pd:
-                        cur_pd.area = (pd_entry['x'], pd_entry['y'], pd_entry['x'] + pd_entry['w'], pd_entry['y'] + pd_entry['h'])
-                        if 'tapcell_type' in pd_entry:
-                            cur_pd.tapcell_type = pd_entry['tapcell_type']
-                        if 'domain_type' in pd_entry:
-                            cur_pd.domain_type = pd_entry['domain_type']
+            raw_pds = state.get('power_domains', [])
+            if isinstance(raw_pds, list):
+                for pd_entry in raw_pds:
+                    if not isinstance(pd_entry, dict): continue
+                    try:
+                        pdx = float(pd_entry.get('x', 0.0))
+                        pdy = float(pd_entry.get('y', 0.0))
+                        pdw = float(pd_entry.get('w', 100.0))
+                        pdh = float(pd_entry.get('h', 100.0))
+                        pvolt = float(pd_entry.get('voltage', 1.8))
+                    except (ValueError, TypeError):
+                        continue
+                    dom_name = str(pd_entry.get('domain_name', 'PD_CORE'))
+                    vi_item = VoltageIslandItem(
+                        pdx, pdy, pdw, pdh,
+                        dom_name, pvolt,
+                        pd_entry.get('elements', []), core_rect=self.core_rect,
+                        halo=pd_entry.get('halo', (15.0, 15.0, 15.0, 15.0))
+                    )
+                    if 'tapcell_type' in pd_entry:
+                        vi_item.set_tapcell_type(pd_entry['tapcell_type'])
+                    self.scene.addItem(vi_item)
+                    if hasattr(self, "pdm") and self.pdm:
+                        cur_pd = self.pdm.domains.get(dom_name)
+                        if cur_pd:
+                            cur_pd.area = (pdx, pdy, pdx + pdw, pdy + pdh)
+                            if 'tapcell_type' in pd_entry:
+                                cur_pd.tapcell_type = pd_entry['tapcell_type']
+                            if 'domain_type' in pd_entry:
+                                cur_pd.domain_type = pd_entry['domain_type']
 
             # Render I/O perimeter pads if present
             if hasattr(self, "pins_data") and self.pins_data:
@@ -5389,8 +5533,12 @@ class InteractiveFloorplannerWidget(QDialog):
                  'die': {'w': self.sp_die_w.value(), 'h': self.sp_die_h.value(),
                          'mt': self.sp_marg_t.value(), 'mb': self.sp_marg_b.value(),
                          'ml': self.sp_marg_l.value(), 'mr': self.sp_marg_r.value()}}
+        valid_instances = set(self.macro_instances.keys()) if getattr(self, "macro_instances", None) else None
         for item in self.scene.items():
             if isinstance(item, MacroItem):
+                if valid_instances is not None and len(valid_instances) > 0:
+                    if item.inst_name not in valid_instances and not is_io_pad_cell(item.inst_name, item.name):
+                        continue
                 state['macros'].append({
                     'name': item.name, 'inst_name': item.inst_name,
                     'x': item.pos().x(), 'y': item.pos().y(),
@@ -5437,8 +5585,10 @@ class InteractiveFloorplannerWidget(QDialog):
         try:
             proj_root, base = self._get_project_context()
             save_path = os.path.join(proj_root, "reports", f"{base}_floorplan_save.json").replace("\\", "/")
-            with open(save_path, 'w') as f:
+            tmp_save_path = save_path + ".tmp"
+            with open(tmp_save_path, 'w') as f:
                 json.dump(state, f, indent=2)
+            os.replace(tmp_save_path, save_path)
 
             # Export OpenROAD domain_areas.tcl script into project power/ directory
             active_pds = getattr(self, "power_domains", [])
@@ -7623,7 +7773,16 @@ def compute_peripheral_macro_placement(macros, die_w=1400.0, die_h=1400.0, margi
     else:
         ml = mr = mb = mt = 20.0
         
-    pad = 20.0
+    min_margin = min(ml, mr, mb, mt)
+    is_full_chip = (die_w >= 1200.0 and die_h >= 1200.0 and min_margin < 200.0)
+    pad = 250.0 if is_full_chip else 20.0
+    corner_w, corner_h = 200.0, 204.0
+    corners = [
+        (0.0, 0.0, corner_w, corner_h),
+        (die_w - corner_w, 0.0, die_w, corner_h),
+        (0.0, die_h - corner_h, corner_w, die_h),
+        (die_w - corner_w, die_h - corner_h, die_w, die_h),
+    ]
     macro_sizes = macro_sizes or {}
 
     core_x1 = ml
@@ -7646,6 +7805,10 @@ def compute_peripheral_macro_placement(macros, die_w=1400.0, die_h=1400.0, margi
         for ox1, oy1, ox2, oy2 in placed_boxes:
             if not (bx2 <= ox1 or bx1 >= ox2 or by2 <= oy1 or by1 >= oy2):
                 return True
+        if not is_full_chip:
+            for cx1_c, cy1_c, cx2_c, cy2_c in corners:
+                if not (bx2 <= cx1_c or bx1 >= cx2_c or by2 <= cy1_c or by1 >= cy2_c):
+                    return True
         return False
 
     # Candidate perimeter slots
@@ -7667,15 +7830,20 @@ def compute_peripheral_macro_placement(macros, die_w=1400.0, die_h=1400.0, margi
         total_h = eff_h + hb + ht
 
         # 4 Priority corners first:
-        # Slot 0: Bottom-Left
-        # Slot 1: Bottom-Right
-        # Slot 2: Top-Left
-        # Slot 3: Top-Right
+        bl_x = max(core_x1 + pad + hl, corner_w + hl + 10.0 if not is_full_chip else 0.0)
+        bl_y = max(core_y1 + pad + hb, corner_h + hb + 10.0 if not is_full_chip else 0.0)
+        br_x = min(core_x2 - pad - eff_w - hr, die_w - corner_w - eff_w - hr - 10.0 if not is_full_chip else die_w)
+        br_y = bl_y
+        tl_x = bl_x
+        tl_y = min(core_y2 - pad - eff_h - ht, die_h - corner_h - eff_h - ht - 10.0 if not is_full_chip else die_h)
+        tr_x = br_x
+        tr_y = tl_y
+
         candidate_coords = [
-            (core_x1 + pad + hl, core_y1 + pad + hb),
-            (core_x2 - pad - eff_w - hr, core_y1 + pad + hb),
-            (core_x1 + pad + hl, core_y2 - pad - eff_h - ht),
-            (core_x2 - pad - eff_w - hr, core_y2 - pad - eff_h - ht),
+            (bl_x, bl_y),
+            (br_x, br_y),
+            (tl_x, tl_y),
+            (tr_x, tr_y),
         ]
 
         assigned_x = None
@@ -7749,11 +7917,29 @@ def compute_peripheral_macro_placement(macros, die_w=1400.0, die_h=1400.0, margi
 
         # Fallback grid slot if all edges packed
         if assigned_x is None:
-            assigned_x = core_x1 + pad + hl + ((i % 3) * (total_w + 20.0))
-            assigned_y = core_y1 + pad + hb + ((i // 3) * (total_h + 20.0))
+            step_w = total_w + 20.0
+            step_h = total_h + 20.0
+            gx = core_x1 + pad + hl
+            found = False
+            while gx + eff_w + hr <= core_x2 - pad:
+                gy = core_y1 + pad + hb
+                while gy + eff_h + ht <= core_y2 - pad:
+                    bx1 = gx - hl
+                    by1 = gy - hb
+                    bx2 = gx + eff_w + hr
+                    by2 = gy + eff_h + ht
+                    if not _collides(bx1, by1, bx2, by2):
+                        assigned_x = gx
+                        assigned_y = gy
+                        found = True
+                        break
+                    gy += step_h
+                if found:
+                    break
+                gx += step_w
 
-        assigned_x = max(core_x1 + hl, min(core_x2 - eff_w - hr, assigned_x))
-        assigned_y = max(core_y1 + hb, min(core_y2 - eff_h - ht, assigned_y))
+            if assigned_x is None:
+                raise ValueError(f"Placement capacity overflow: macro '{inst}' cannot fit in core cavity without overlap")
 
         assigned_x = round(round(assigned_x / 0.005) * 0.005, 3)
         assigned_y = round(round(assigned_y / 2.72) * 2.72, 3)

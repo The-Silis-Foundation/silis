@@ -12,9 +12,6 @@ import subprocess
 import re
 from typing import Dict, List, Optional, Tuple, Any, Union
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QCoreApplication, Qt, QProcess
-
 # Bootstrap qt_setup environment attributes before QApplication instantiation
 try:
     import qt_setup
@@ -23,6 +20,21 @@ except ImportError:
         from core import qt_setup
     except ImportError:
         pass
+
+from PyQt6.QtCore import QCoreApplication, Qt, QProcess
+try:
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
+    if hasattr(QSGRendererInterface.GraphicsApi, "OpenGLRhi"):
+        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
+except Exception:
+    pass
+try:
+    import PyQt6.QtWebEngineWidgets
+except Exception:
+    pass
+
+from PyQt6.QtWidgets import QApplication
 
 # Ensure offscreen platform is set before any Qt widget instantiation if headless
 if "QT_QPA_PLATFORM" not in os.environ:
@@ -3029,7 +3041,7 @@ if {{$_n > 0}} {{
         set _bname [$_b getName]
         set _safe_name [regsub -all {{[^A-Za-z0-9_]}} $_bname "_"]
         set _pad_inst "pad_${{_safe_name}}"
-        set _loc [expr {{$_row_min + $_idx * $_step}}]
+        set _loc [expr {{round(($_row_min + $_idx * $_step) / 0.005) * 0.005}}]
         if {{$_loc > $_row_max}} {{ set _loc $_row_max }}
 
         place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row {row_name} -location $_loc $_pad_inst
@@ -4343,6 +4355,10 @@ prep -top {self.project.top_module}
         required to fit the given number of peripheral I/O pads without overlapping.
         """
         # Default Sky130 I/O pad metrics
+        if min_pitch is not None and min_pitch <= 0.0:
+            raise ValueError(f"min_pitch must be strictly positive, got {min_pitch}")
+        if num_pads < 0:
+            raise ValueError(f"num_pads must be non-negative, got {num_pads}")
         pad_w = 80.0
         pad_h = 200.0
         pitch = min_pitch if min_pitch is not None else 100.0
@@ -4353,10 +4369,25 @@ prep -top {self.project.top_module}
             ratio_h = core_h / (core_w + core_h)
             pads_h_side = max(1, int(round((num_pads / 2.0) * ratio_w)))
             pads_v_side = max(1, int(round((num_pads / 2.0) * ratio_h)))
+            base_pads = num_pads // 4
+            rem_pads = num_pads % 4
+            pads_per_edge = {
+                "south": base_pads + (1 if rem_pads > 0 else 0),
+                "east": base_pads + (1 if rem_pads > 1 else 0),
+                "north": base_pads + (1 if rem_pads > 2 else 0),
+                "west": base_pads,
+            }
         else:
-            pads_per_side = int(num_pads / 4.0 + 0.999)
-            pads_h_side = pads_per_side
-            pads_v_side = pads_per_side
+            base_pads = num_pads // 4
+            rem_pads = num_pads % 4
+            pads_per_edge = {
+                "south": base_pads + (1 if rem_pads > 0 else 0),
+                "east": base_pads + (1 if rem_pads > 1 else 0),
+                "north": base_pads + (1 if rem_pads > 2 else 0),
+                "west": base_pads,
+            }
+            pads_h_side = max(pads_per_edge["north"], pads_per_edge["south"])
+            pads_v_side = max(pads_per_edge["east"], pads_per_edge["west"])
 
         req_edge_w = 2.0 * corner_gap + pads_h_side * pitch
         req_edge_h = 2.0 * corner_gap + pads_v_side * pitch
@@ -4385,12 +4416,7 @@ prep -top {self.project.top_module}
             "core_w": float(core_w),
             "core_h": float(core_h),
             "pad_margin": float(pad_margin),
-            "pads_per_edge": {
-                "north": pads_h_side,
-                "south": pads_h_side,
-                "east": pads_v_side,
-                "west": pads_v_side,
-            },
+            "pads_per_edge": pads_per_edge,
             "pad_pitch": float(pitch),
             "strategy": strategy,
         }

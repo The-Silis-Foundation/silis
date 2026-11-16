@@ -2633,15 +2633,16 @@ class IOPlacerDialog(QDialog):
                     for i, name in enumerate(edge_list):
                         is_inner = (i % 2 == 1)
                         if is_inner:
-                            coord = start2 + idx2 * step2
+                            coord = min(row_max2, start2 + idx2 * step2)
                             curr_inset = 210.0
                             tier_label = "Inner (Ring 2)"
                             idx2 += 1
                         else:
-                            coord = start1 + idx1 * step1
+                            coord = min(row_max1, start1 + idx1 * step1)
                             curr_inset = 0.0
                             tier_label = "Outer (Ring 1)"
                             idx1 += 1
+                        coord = min(span - 80.0, max(0.0, coord))
 
                         self.pins_data[name]["tier"] = tier_label
                         if edge_name == "bottom":
@@ -2709,6 +2710,9 @@ class IOPlacerDialog(QDialog):
         self.fit_view()
 
     def _place_pin_item(self, name, edge, x, y, pw, ph):
+        if hasattr(self, "die_rect"):
+            x = max(0.0, min(self.die_rect.width(), x))
+            y = max(0.0, min(self.die_rect.height(), y))
         pdir = self.pins_data[name]["dir"]
         p_item = PinItem(name, pdir, pw, ph, self)
         p_item.edge = edge

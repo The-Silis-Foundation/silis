@@ -43,11 +43,14 @@ from .exceptions import (
     PowerGridSynthesisError,
     RoutingOverflowError,
     PipelineStateError,
+    PipelineExecutionError,
+    OverlappingHaloError,
+    IllegalVoltageError,
 )
 from .project import Project
 SilisProject = Project
 from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, legalize_coord
-from .power import PowerNetwork, PowerDomain, IsolationRule, LevelShifterRule
+from .power import PowerNetwork, PowerDomain, IsolationRule, LevelShifterRule, PowerSwitch, PowerStateTable
 from .timing import TimingGraph, TimingPin
 from .layout import Layout, LayoutNet
 from .pipeline import (

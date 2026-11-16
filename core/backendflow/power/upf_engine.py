@@ -2,6 +2,7 @@
 UPF & CPF Low-Power Intent Engine for Silis.
 Provides parsing, generation, and voltage domain models for multi-voltage / power-gated designs.
 All public SDK functions and models use all-lowercase naming per convention.
+Zero emojis.
 """
 
 import os
@@ -20,7 +21,7 @@ class power_domain:
     elements: List[str] = field(default_factory=list)
     voltage: float = 1.80
     gated: bool = False
-    area: Optional[Tuple[float, float, float, float]] = None # (llx, lly, urx, ury) in um
+    area: Optional[Tuple[float, float, float, float]] = None  # (llx, lly, urx, ury) in um
     power_switch_master: Optional[str] = None
     isolation_clamp: int = 0
     is_top: bool = False
@@ -39,11 +40,23 @@ class power_domain:
         return "#2aa198"      # Muted teal (Ultra-low voltage island)
 
 
+def _atomic_write_file(path: str, content: str) -> None:
+    """Writes content to path transactionally using a temp file and atomic os.replace."""
+    dir_name = os.path.dirname(os.path.abspath(path))
+    os.makedirs(dir_name, exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
 def create_default_upf(output_path: str, top_module: str = "top") -> str:
     """
     Generates a default IEEE 1801 UPF template file with a baseline PD_TOP domain.
+    Uses transactional atomic persistence.
     """
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     content = f"""# Silis Power Intent Specification (IEEE 1801 UPF)
 # Project Top Module: {top_module}
 # Auto-generated baseline configuration
@@ -57,15 +70,8 @@ create_supply_port VSS -direction in
 create_supply_net VDD -domain PD_TOP
 create_supply_net VSS -domain PD_TOP
 set_domain_supply_net PD_TOP -primary_power_net VDD -primary_ground_net VSS
-
-# --- Example Power-Gated Domain Configuration ---
-# create_power_domain PD_GATED -elements {{u_gated_block}}
-# create_supply_net VDD_GATED -domain PD_GATED
-# set_domain_supply_net PD_GATED -primary_power_net VDD_GATED -primary_ground_net VSS
-# set_isolation iso_gated -domain PD_GATED -applies_to outputs -clamp_value 0
 """
-    with open(output_path, "w") as f:
-        f.write(content)
+    _atomic_write_file(output_path, content)
     return output_path
 
 
@@ -139,7 +145,6 @@ def parse_upf(upf_path: str) -> List[power_domain]:
         # Match voltage levels or supply nets if specified
         elif cmd.startswith("set_domain_supply_net") or cmd.startswith("set_voltage"):
             m_dom = re.search(r'([A-Za-z0-9_]+)', cmd.replace("set_domain_supply_net", ""))
-            # Check for explicit voltage declaration like -voltage 0.95 or 1.8
             m_v = re.search(r'-voltage\s+([0-9.]+)', cmd)
             m_pwr = re.search(r'-primary_power_net\s+([A-Za-z0-9_]+)', cmd)
             if m_dom:
@@ -178,18 +183,18 @@ def parse_upf(upf_path: str) -> List[power_domain]:
     return list(domains.values())
 
 
-def generate_upf(domains: List[power_domain], output_path: str) -> str:
+def generate_upf(domains: List[Any], output_path: str, psts: Optional[List[Any]] = None) -> str:
     """
-    Serializes a list of power_domain instances into a valid IEEE 1801 UPF file.
+    Serializes a list of power_domain or SDK PowerDomain instances into a valid IEEE 1801 UPF file.
+    Uses transactional atomic persistence.
     """
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     lines = [
         "# Silis Power Intent Specification (IEEE 1801 UPF)",
         "# Programmatically generated via Silis Power Engine",
         ""
     ]
 
-    # Ports
+    # Primary Ports
     lines.extend([
         "create_supply_port VDD -direction in",
         "create_supply_port VSS -direction in",
@@ -197,45 +202,104 @@ def generate_upf(domains: List[power_domain], output_path: str) -> str:
     ])
 
     for dom in domains:
-        if dom.is_top:
-            lines.append(f"create_power_domain {dom.name} -include_scope")
-            lines.append(f"create_supply_net VDD -domain {dom.name}")
-            lines.append(f"create_supply_net VSS -domain {dom.name}")
-            lines.append(f"set_domain_supply_net {dom.name} -primary_power_net VDD -primary_ground_net VSS -voltage {dom.voltage:.2f}")
+        raw_name = getattr(dom, "name", "PD_ANON")
+        dom_name = re.sub(r'[^A-Za-z0-9_]', '_', raw_name)
+        is_top = getattr(dom, "is_top", False) or dom_name in ("PD_TOP", "TOP", "pd_top") or "." in getattr(dom, "elements", [])
+        v_level = getattr(dom, "voltage", getattr(dom, "primary_voltage", 1.80))
+        elems = getattr(dom, "elements", [])
+
+        if is_top:
+            lines.append(f"create_power_domain {dom_name} -include_scope")
+            lines.append(f"create_supply_net VDD -domain {dom_name}")
+            lines.append(f"create_supply_net VSS -domain {dom_name}")
+            lines.append(f"set_domain_supply_net {dom_name} -primary_power_net VDD -primary_ground_net VSS -voltage {v_level:.2f}")
         else:
-            elem_str = " ".join(dom.elements)
-            lines.append(f"create_power_domain {dom.name} -elements {{{elem_str}}}")
-            vnet = f"VDD_{dom.name}"
-            lines.append(f"create_supply_net {vnet} -domain {dom.name}")
-            lines.append(f"create_supply_net VSS -domain {dom.name}")
-            lines.append(f"set_domain_supply_net {dom.name} -primary_power_net {vnet} -primary_ground_net VSS -voltage {dom.voltage:.2f}")
-            if dom.power_switch_master:
-                lines.append(f"create_power_switch pwr_sw_{dom.name} -domain {dom.name} -output_supply_port {vnet}")
-            lines.append(f"set_isolation iso_{dom.name} -domain {dom.name} -applies_to outputs -clamp_value {dom.isolation_clamp}")
+            elem_str = " ".join(elems)
+            lines.append(f"create_power_domain {dom_name} -elements {{{elem_str}}}")
+            vnet = f"VDD_{dom_name}"
+            lines.append(f"create_supply_net {vnet} -domain {dom_name}")
+            lines.append(f"create_supply_net VSS -domain {dom_name}")
+            lines.append(f"set_domain_supply_net {dom_name} -primary_power_net {vnet} -primary_ground_net VSS -voltage {v_level:.2f}")
+
+            # Power switches (including daisy-chain stages)
+            switches = getattr(dom, "get_power_switches", lambda: getattr(dom, "power_switches", []))()
+            if switches:
+                for sw in switches:
+                    sw_cmd = (
+                        f"create_power_switch {sw.name} -domain {dom_name} "
+                        f"-input_supply_port {sw.input_supply_port} "
+                        f"-output_supply_port {sw.output_supply_net} "
+                        f"-control_port {sw.control_net}"
+                    )
+                    if getattr(sw, "ack_port", None) and getattr(sw, "ack_net", None):
+                        sw_cmd += f" -ack_port {sw.ack_net}"
+                    if getattr(sw, "on_state", None):
+                        sw_cmd += f" -on_state {{{sw.on_state}}}"
+                    lines.append(sw_cmd)
+            else:
+                sw_master = getattr(dom, "power_switch_master", getattr(dom, "power_switch_cell", None))
+                if sw_master:
+                    sw_ctrl = getattr(dom, "power_switch_ctrl", "sleep") or "sleep"
+                    lines.append(
+                        f"create_power_switch pwr_sw_{dom_name} -domain {dom_name} "
+                        f"-input_supply_port VDD -output_supply_port {vnet} -control_port {sw_ctrl}"
+                    )
+
+            # Isolation rules
+            iso_rules = getattr(dom, "get_isolation_rules", lambda: getattr(dom, "isolation_rules", []))()
+            if iso_rules:
+                for iso in iso_rules:
+                    lines.append(
+                        f"set_isolation {iso.name} -domain {dom_name} -applies_to {iso.applies_to} -clamp_value {iso.clamp_value}"
+                    )
+            else:
+                clamp = getattr(dom, "isolation_clamp", 0)
+                if clamp is None:
+                    clamp = 0
+                lines.append(f"set_isolation iso_{dom_name} -domain {dom_name} -applies_to outputs -clamp_value {clamp}")
+
+            # Level shifter rules
+            l_shifters = getattr(dom, "get_level_shifters", lambda: getattr(dom, "level_shifters", []))()
+            for ls in l_shifters:
+                ls_name = getattr(ls, "name", f"ls_{dom_name}")
+                ls_dir = getattr(ls, "direction", "both")
+                ls_rule_type = getattr(ls, "rule_type", None)
+                ls_cmd = f"set_level_shifter {ls_name} -domain {dom_name} -applies_to {ls_dir}"
+                if ls_rule_type and ls_rule_type != "both":
+                    ls_cmd += f" -rule {ls_rule_type}"
+                lines.append(ls_cmd)
+
         lines.append("")
 
-    with open(output_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    # PST emission
+    if psts:
+        lines.append("# --- Power State Tables (PST) ---")
+        for pst in psts:
+            lines.extend(pst.export_upf_commands())
+            lines.append("")
 
+    _atomic_write_file(output_path, "\n".join(lines) + "\n")
     return output_path
 
 
-def generate_domain_areas_tcl(domains: List[power_domain], output_path: str) -> str:
+def generate_domain_areas_tcl(domains: List[Any], output_path: str) -> str:
     """
     Writes physical domain placement bounding boxes into OpenROAD TCL commands (set_domain_area).
+    Uses transactional atomic persistence.
     """
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     lines = [
         "# OpenROAD Power Domain Physical Areas",
         "# Auto-generated by Silis Floorplanner / SDK",
         ""
     ]
     for dom in domains:
-        if not dom.is_top and dom.area and len(dom.area) == 4:
-            x1, y1, x2, y2 = dom.area
-            lines.append(f"set_domain_area {dom.name} -area {{{x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f}}}")
+        is_top = getattr(dom, "is_top", False) or getattr(dom, "name", "") in ("PD_TOP", "TOP", "pd_top")
+        if not is_top:
+            area = getattr(dom, "area", None) or getattr(dom, "area_box", None)
+            if area and len(area) == 4:
+                x1, y1, x2, y2 = area
+                dom_name = re.sub(r'[^A-Za-z0-9_]', '_', dom.name)
+                lines.append(f"set_domain_area {dom_name} -area {{{x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f}}}")
 
-    with open(output_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
+    _atomic_write_file(output_path, "\n".join(lines) + "\n")
     return output_path

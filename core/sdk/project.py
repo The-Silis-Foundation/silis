@@ -407,7 +407,7 @@ class Project:
             return candidates_with_gds[0]
         elif candidates:
             return candidates[0]
-        elif pdk_mgr.configs:
+        elif pdk_name in ("sky130", "sky130a", "sky130b", "default", "") and pdk_mgr.configs:
             return pdk_mgr.configs[0]
         return None
 
@@ -854,8 +854,10 @@ class Project:
                         pd["domain_type"] = supply_type
                         updated = True
                 if updated:
-                    with open(session_file, "w") as f:
+                    tmp_file = session_file + ".tmp"
+                    with open(tmp_file, "w") as f:
                         json.dump(sdata, f, indent=2)
+                    os.replace(tmp_file, session_file)
             except Exception:
                 pass
 
