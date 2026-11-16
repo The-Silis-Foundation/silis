@@ -45,6 +45,7 @@ from .exceptions import (
     PipelineStateError,
 )
 from .project import Project
+SilisProject = Project
 from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, legalize_coord
 from .power import PowerNetwork, PowerDomain, IsolationRule, LevelShifterRule
 from .timing import TimingGraph, TimingPin

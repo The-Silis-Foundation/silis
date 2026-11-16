@@ -39,28 +39,59 @@ def install_host_sdk_bridge(appimage_path=None, force=False):
     target_site = get_user_site_packages()
     os.makedirs(target_site, exist_ok=True)
 
+    # If executing from inside an AppImage mount, deploy a persistent copy to ~/.silis/sdk
+    is_appimage_mount = bool(os.environ.get("APPIMAGE")) or bool(os.environ.get("APPDIR")) or "/tmp/.mount_" in silis_root
+    if is_appimage_mount:
+        permanent_sdk = os.path.expanduser("~/.silis/sdk")
+        os.makedirs(permanent_sdk, exist_ok=True)
+        for item in ["silis.py", "__init__.py"]:
+            src = os.path.join(silis_root, item)
+            dst = os.path.join(permanent_sdk, item)
+            if os.path.isfile(src):
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
+        core_src = os.path.join(silis_root, "core")
+        core_dst = os.path.join(permanent_sdk, "core")
+        if os.path.isdir(core_src):
+            try:
+                if os.path.exists(core_dst):
+                    shutil.rmtree(core_dst)
+                shutil.copytree(core_src, core_dst)
+            except Exception:
+                pass
+        effective_root = permanent_sdk
+    else:
+        effective_root = silis_root
+
     # 1. Install silis.pth pointing to silis parent and silis itself
-    silis_parent = os.path.abspath(os.path.join(silis_root, ".."))
+    silis_parent = os.path.abspath(os.path.join(effective_root, ".."))
     pth_file = os.path.join(target_site, "silis.pth")
     try:
         with open(pth_file, "w") as f:
             f.write(f"{silis_parent}\n")
-            f.write(f"{silis_root}\n")
-            f.write(f"{os.path.join(silis_root, 'core')}\n")
+            f.write(f"{effective_root}\n")
+            f.write(f"{os.path.join(effective_root, 'core')}\n")
     except Exception as e:
         print(f"[WARN] Could not write silis.pth: {e}")
 
     # 2. Ensure site-packages/silis doesn't overshadow the repository
     silis_pkg_dir = os.path.join(target_site, "silis")
-    if os.path.isdir(silis_pkg_dir):
-        # Remove or symlink
+    if os.path.isdir(silis_pkg_dir) or os.path.islink(silis_pkg_dir):
         try:
             if os.path.islink(silis_pkg_dir):
                 os.unlink(silis_pkg_dir)
             else:
                 shutil.rmtree(silis_pkg_dir)
-            os.symlink(silis_root, silis_pkg_dir)
-            print(f"[SUCCESS] Linked {silis_pkg_dir} -> {silis_root}")
+            os.symlink(effective_root, silis_pkg_dir)
+            print(f"[SUCCESS] Linked {silis_pkg_dir} -> {effective_root}")
+        except Exception:
+            pass
+    elif not os.path.exists(silis_pkg_dir):
+        try:
+            os.symlink(effective_root, silis_pkg_dir)
+            print(f"[SUCCESS] Linked {silis_pkg_dir} -> {effective_root}")
         except Exception:
             pass
 
@@ -69,7 +100,7 @@ def install_host_sdk_bridge(appimage_path=None, force=False):
     os.makedirs(local_bin, exist_ok=True)
     cli_symlink = os.path.join(local_bin, "silis")
 
-    cli_script = os.path.join(silis_root, "core", "cli", "cli.py")
+    cli_script = os.path.join(effective_root, "core", "cli", "cli.py")
     if appimage_bin and os.path.isfile(appimage_bin):
         cli_target = appimage_bin
     else:

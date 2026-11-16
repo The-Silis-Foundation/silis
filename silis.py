@@ -11,6 +11,19 @@ for _p in [_REPO_ROOT, _CORE_DIR, _CLI_DIR]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Enable package hierarchy and SDK symbol re-export
+__path__ = [_REPO_ROOT, _CORE_DIR]
+try:
+    import core as _core_mod
+    sys.modules["silis.core"] = _core_mod
+    import core.sdk as _sdk_mod
+    sys.modules["silis.core.sdk"] = _sdk_mod
+    for _k, _v in _sdk_mod.__dict__.items():
+        if not _k.startswith("_"):
+            globals()[_k] = _v
+except Exception:
+    pass
+
 
 import qt_setup
 REPO_ROOT = qt_setup.REPO_ROOT
@@ -3180,7 +3193,19 @@ if __name__ == "__main__":
         runpy.run_path(script_path, run_name="__main__")
         sys.exit(0)
 
-    app = QApplication(sys.argv)
+    # Ensure headless/offscreen platform fallback if no display is accessible
+    if "QT_QPA_PLATFORM" not in os.environ:
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+    try:
+        app = QApplication(sys.argv)
+    except Exception as _e_app:
+        if "offscreen" not in os.environ.get("QT_QPA_PLATFORM", ""):
+            os.environ["QT_QPA_PLATFORM"] = "offscreen"
+            app = QApplication(sys.argv)
+        else:
+            raise
     
     # 0. First-boot onboarding & SDK host bridge registration
     try:

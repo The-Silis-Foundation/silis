@@ -113,8 +113,17 @@ class HeadlessASICRunner:
         import project_registry
         project_registry.register_project(self.proj_file)
 
-        # Set headless platform before any QApplication creation
+        # Set headless platform and QtWebEngine OpenGL sharing attribute before any QApplication creation
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        try:
+            from PyQt6.QtCore import Qt
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+        except Exception:
+            pass
+        try:
+            import PyQt6.QtWebEngineWidgets
+        except Exception:
+            pass
         self.app = QApplication.instance()
         if not self.app:
             self.app = QApplication(["silis", "-platform", "offscreen"])

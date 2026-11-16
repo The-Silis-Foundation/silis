@@ -3620,6 +3620,19 @@ class IOPlacerDialog(QDialog):
                 if not init_cmds:
                     init_tcl = os.path.join(proj_root, "init_pdk.tcl").replace("\\", "/")
                     if os.path.isfile(init_tcl):
+                        try:
+                            with open(init_tcl, "r", encoding="utf-8", errors="replace") as _f:
+                                _c = _f.read()
+                            _dms = set(re.findall(r'/tmp/\.mount_[sS]ilis[a-zA-Z0-9_\-\.]*', _c))
+                            _cur_app = os.environ.get("APPDIR", "")
+                            if any(not os.path.exists(_dm) for _dm in _dms) and _cur_app:
+                                for _dm in _dms:
+                                    if not os.path.exists(_dm):
+                                        _c = _c.replace(_dm, _cur_app)
+                                with open(init_tcl, "w", encoding="utf-8") as _f:
+                                    _f.write(_c)
+                        except Exception:
+                            pass
                         init_cmds = [f'source "{init_tcl}"']
 
                 # Order: init_pdk (network/LEF/linking) -> floorplan/tap/pdn -> IO pins -> place/cts/route

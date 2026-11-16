@@ -35,6 +35,7 @@ from sdk import (
     RoutingOverflowError,
     PipelineStateError,
     Project,
+    SilisProject,
     Pipeline,
     Floorplan,
     MacroInstance,

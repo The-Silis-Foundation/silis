@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 import shutil
@@ -573,6 +574,52 @@ class BackendWidget(QWidget):
                 self.reset_backend()
             self.term_log.append(f"[INIT] Loaded OpenDB database: {os.path.basename(f)}")
 
+    def _sanitize_init_pdk_file(self, init_tcl_path: str):
+        """Auto-heals stale /tmp/.mount_silis.* paths in legacy init_pdk.tcl from prior AppImage runs."""
+        if not init_tcl_path or not os.path.isfile(init_tcl_path):
+            return
+        try:
+            with open(init_tcl_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            
+            has_mount = bool(re.search(r'/tmp/\.mount_[sS]ilis[a-zA-Z0-9_\-\.]*', content))
+            if has_mount:
+                header = (
+                    'if {[info exists ::env(APPDIR)] && [file exists "$::env(APPDIR)/assets/pdk/third-party/pdks"]} {\n'
+                    '    set silis_pdk_root "$::env(APPDIR)/assets/pdk/third-party/pdks"\n'
+                    '} elseif {[info exists ::env(PDK_ROOT)] && [file exists "$::env(PDK_ROOT)"]} {\n'
+                    '    set silis_pdk_root "$::env(PDK_ROOT)"\n'
+                    '}\n'
+                )
+                if "set silis_pdk_root" not in content:
+                    content = header + content
+                
+                content = re.sub(
+                    r'/tmp/\.mount_[sS]ilis[a-zA-Z0-9_\-\.]*/assets/pdk/third-party/pdks',
+                    r'$silis_pdk_root',
+                    content
+                )
+                
+                with open(init_tcl_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                if hasattr(self, "term_log"):
+                    self.term_log.append("[SYS] Auto-healed stale AppImage mount paths in init_pdk.tcl to dynamic $silis_pdk_root")
+        except Exception:
+            pass
+
+    def _make_portable_pdk_path(self, path: str) -> str:
+        """Converts an absolute PDK file path into a dynamic $silis_pdk_root reference."""
+        if not path:
+            return ""
+        norm = path.replace("\\", "/")
+        m = re.search(r'(/tmp/\.mount_[sS]ilis[a-zA-Z0-9_\-\.]*/assets/pdk/third-party/pdks|.*?/assets/pdk/third-party/pdks)', norm)
+        if m:
+            return norm.replace(m.group(1), "$silis_pdk_root")
+        pdk_root = os.environ.get("PDK_ROOT", "").replace("\\", "/")
+        if pdk_root and norm.startswith(pdk_root):
+            return norm.replace(pdk_root, "$silis_pdk_root")
+        return norm
+
     def load_custom_def(self):
         f, _ = QFileDialog.getOpenFileName(self, "Load DEF Layout", self.ide.cwd, "Design Exchange Format (*.def);;All Files (*)")
         if f and os.path.isfile(f):
@@ -581,6 +628,7 @@ class BackendWidget(QWidget):
             init_tcl = os.path.join(proj_root, "init_pdk.tcl")
             cmds = []
             if os.path.isfile(init_tcl):
+                self._sanitize_init_pdk_file(init_tcl)
                 cmds.append(f'source "{init_tcl.replace(chr(92), "/")}"')
             cmds.append(f'read_def "{norm}"')
             cmd_str = "\n".join(cmds)
@@ -950,6 +998,16 @@ class BackendWidget(QWidget):
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self.read_stdout)
+
+        penv = QProcessEnvironment.systemEnvironment()
+        tcllib = os.environ.get("TCLLIBPATH", "")
+        if tcllib:
+            penv.insert("TCLLIBPATH", tcllib)
+        tclrl = os.environ.get("TCLRL_LIBRARY", "")
+        if tclrl:
+            penv.insert("TCLRL_LIBRARY", tclrl)
+        self.proc.setProcessEnvironment(penv)
+
         if shutil.which("openroad"): self.proc.start("openroad")
         else: self.term_log.append("[ERR] OpenROAD binary not found.")
 
@@ -1514,11 +1572,21 @@ ________________________________________________________________________________
                 sdc_path = os.path.join(proj_root, "constr", f"{ctx}.sdc") if os.path.isdir(os.path.join(proj_root, "constr")) else os.path.join(proj_root, "source", f"{ctx}.sdc")
                 os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
                 with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs -no_clocks]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
-            tcl_content = f"""set_thread_count [exec nproc]\nread_lef "{self.active_pdk['tlef']}"\nread_lef "{self.active_pdk['lef']}"\n"""
+            tcl_content = f"""set_thread_count [exec nproc]
+if {{[info exists ::env(APPDIR)] && [file exists "$::env(APPDIR)/assets/pdk/third-party/pdks"]}} {{
+    set silis_pdk_root "$::env(APPDIR)/assets/pdk/third-party/pdks"
+}} elseif {{[info exists ::env(PDK_ROOT)] && [file exists "$::env(PDK_ROOT)"]}} {{
+    set silis_pdk_root "$::env(PDK_ROOT)"
+}} else {{
+    set silis_pdk_root "{self.active_pdk.get('root', '')}"
+}}
+read_lef "{self._make_portable_pdk_path(self.active_pdk['tlef'])}"
+read_lef "{self._make_portable_pdk_path(self.active_pdk['lef'])}"
+"""
             for io_lef in self._get_io_lefs():
-                tcl_content += f"""read_lef "{io_lef}"\n"""
+                tcl_content += f"""read_lef "{self._make_portable_pdk_path(io_lef)}"\n"""
             for lef in self._get_macro_files("lef"):
-                tcl_content += f"""read_lef "{lef}"\n"""
+                tcl_content += f"""read_lef "{self._make_portable_pdk_path(lef)}"\n"""
 
             # Multi-Corner Multi-Mode Liberty Loading
             target_corners = getattr(self, 'selected_mcmm_corners', {})
@@ -1540,14 +1608,14 @@ ________________________________________________________________________________
                 tcl_content += "suppress_message STA 1140\n"
                 tcl_content += f"define_corners {' '.join(corner_names)}\n"
                 for c_name, lib_path in target_corners.items():
-                    tcl_content += f'read_liberty -corner {c_name} "{lib_path}"\n'
+                    tcl_content += f'read_liberty -corner {c_name} "{self._make_portable_pdk_path(lib_path)}"\n'
                 for lib in macro_libs:
                     for c_name in corner_names:
-                        tcl_content += f'read_liberty -corner {c_name} "{lib}"\n'
+                        tcl_content += f'read_liberty -corner {c_name} "{self._make_portable_pdk_path(lib)}"\n'
             else:
-                tcl_content += f"""read_liberty "{self.active_pdk['lib']}\"\n"""
+                tcl_content += f"""read_liberty "{self._make_portable_pdk_path(self.active_pdk['lib'])}"\n"""
                 for lib in macro_libs:
-                    tcl_content += f"""read_liberty "{lib}"\n"""
+                    tcl_content += f"""read_liberty "{self._make_portable_pdk_path(lib)}"\n"""
                         
             if getattr(self, 'resume_def', None):
                 tcl_content += (
@@ -1914,6 +1982,8 @@ foreach net [$blk getNets] {
         data = self.proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
         self.term_log.append(data.strip())
         self.term_log.verticalScrollBar().setValue(self.term_log.verticalScrollBar().maximum())
+        if "STA-0164" in data:
+            self.term_log.append("[DIAGNOSTIC] Netlist syntax error STA-0164 detected. Please re-run Synthesis from the toolbar to auto-map behavioral latches with Sky130 cells.")
         if self.pending_init and ("OpenROAD" in data or "openroad>" in data): self.send_command_internal(self.pending_init); self.pending_init = None
         if self.cmd_active and "openroad>" in data: 
             self.cmd_active = False

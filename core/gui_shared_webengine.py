@@ -6,27 +6,38 @@ try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
     from PyQt6.QtWebEngineCore import QWebEnginePage
     _WEBENGINE_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     _WEBENGINE_AVAILABLE = False
+    QWebEngineView = None
+    QWebEnginePage = None
 
 
-class SilisWebEnginePage(QWebEnginePage):
-    """
-    Custom WebEnginePage that forwards JavaScript console messages
-    to registered message handlers (e.g. for ROHD Flutter bridge).
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.message_handlers = []
+if _WEBENGINE_AVAILABLE and QWebEnginePage is not None:
+    class SilisWebEnginePage(QWebEnginePage):
+        """
+        Custom WebEnginePage that forwards JavaScript console messages
+        to registered message handlers (e.g. for ROHD Flutter bridge).
+        """
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.message_handlers = []
 
-    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        if message:
-            for handler in self.message_handlers:
-                try:
-                    handler(message)
-                except Exception as e:
-                    print(f"[SILIS WebEngine] Handler exception: {e}")
-        super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+        def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+            if message:
+                for handler in self.message_handlers:
+                    try:
+                        handler(message)
+                    except Exception as e:
+                        print(f"[SILIS WebEngine] Handler exception: {e}")
+            super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+else:
+    class SilisWebEnginePage:
+        """Fallback when QtWebEngine is unavailable."""
+        def __init__(self, parent=None):
+            self.message_handlers = []
+
+        def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+            pass
 
 
 class SharedWebEngineManager:

@@ -69,6 +69,10 @@ fi
 # Force software rendering in Chromium to eliminate GBM/Vulkan driver crashes across arbitrary Linux GPUs/VMs
 export QTWEBENGINE_CHROMIUM_FLAGS="--disable-logging --log-level=3 --disable-gpu"
 
+if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    export QT_QPA_PLATFORM="offscreen"
+fi
+
 if [ -n "${SILIS_HEADLESS_TEST:-}" ] || [ "${QT_QPA_PLATFORM:-}" = "offscreen" ]; then
     export LIBGL_ALWAYS_SOFTWARE=1
     export QT_OPENGL=software
@@ -103,8 +107,12 @@ elif [ -d "$APPDIR/third-party/lib/tcl8.6" ]; then
 elif [ -d "$APPDIR/opt/python/lib/tcl8.6" ]; then
     export TCL_LIBRARY="$APPDIR/opt/python/lib/tcl8.6"
 fi
-export TCLLIBPATH="$APPDIR/opt/python/lib $APPDIR/usr/lib/tcltk $APPDIR/usr/lib/tcltk/x86_64-linux-gnu ${TCLLIBPATH:-}"
-export TCLRL_LIBRARY="$APPDIR/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8"
+export TCLLIBPATH="$APPDIR/third-party/tcl $APPDIR/opt/python/lib $APPDIR/usr/lib/tcltk $APPDIR/usr/lib/tcltk/x86_64-linux-gnu ${TCLLIBPATH:-}"
+if [ -d "$APPDIR/third-party/tcl/tclreadline2.3.8" ]; then
+    export TCLRL_LIBRARY="$APPDIR/third-party/tcl/tclreadline2.3.8"
+elif [ -d "$APPDIR/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8" ]; then
+    export TCLRL_LIBRARY="$APPDIR/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8"
+fi
 
 # 7. Verilator compilation optimization & ccache fallback
 if ! command -v ccache &>/dev/null; then

@@ -78,6 +78,33 @@ cur_path = os.environ.get("PATH", "")
 if THIRD_PARTY_BIN not in cur_path:
     os.environ["PATH"] = f"{THIRD_PARTY_BIN}:{cur_path}"
 
+# 1c. Automated Tcl & tclreadline discovery for OpenROAD / OpenSTA
+THIRD_PARTY_TCL = os.path.join(REPO_ROOT, "third-party", "tcl")
+appdir = os.environ.get("APPDIR")
+tcl_candidates = [
+    THIRD_PARTY_TCL,
+    os.path.join(appdir, "third-party", "tcl") if appdir else "",
+    os.path.join(appdir, "usr", "lib", "tcltk", "x86_64-linux-gnu") if appdir else "",
+    os.path.join(appdir, "usr", "lib", "tcltk") if appdir else "",
+    os.path.join(appdir, "opt", "python", "lib") if appdir else "",
+    "/usr/lib/tcltk/x86_64-linux-gnu",
+    "/usr/lib/tcltk",
+    "/usr/share/tcltk",
+]
+valid_tcl_dirs = [d for d in tcl_candidates if d and os.path.isdir(d)]
+cur_tcllib = os.environ.get("TCLLIBPATH", "")
+for d in valid_tcl_dirs:
+    if d not in cur_tcllib:
+        cur_tcllib = f"{d} {cur_tcllib}".strip()
+if cur_tcllib:
+    os.environ["TCLLIBPATH"] = cur_tcllib
+
+for d in valid_tcl_dirs:
+    rl_cand = os.path.join(d, "tclreadline2.3.8")
+    if os.path.isdir(rl_cand):
+        os.environ["TCLRL_LIBRARY"] = rl_cand
+        break
+
 # 2. Ensure REPO_ROOT is first on sys.path
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
