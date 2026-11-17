@@ -29,6 +29,8 @@
 #include <cstdlib>              // exit
 #include <filesystem>
 #include <string_view>
+#include <vector>
+#include <unistd.h>
 #include <tcl.h>
 
 #ifdef BAZEL_BUILD
@@ -133,10 +135,37 @@ staTclAppInit(int argc,
   if (Tclreadline_Init(interp) == TCL_ERROR)
     return TCL_ERROR;
   Tcl_StaticPackage(interp, "tclreadline", Tclreadline_Init, Tclreadline_SafeInit);
-  if (Tcl_EvalFile(interp, TCLRL_LIBRARY "/tclreadlineInit.tcl") != TCL_OK)
-    printf("Failed to load tclreadline.tcl\n");
-  else
-    has_readline = true;
+
+  std::vector<std::string> tclrl_candidates;
+  const char *env_tclrl = getenv("TCLRL_LIBRARY");
+  if (env_tclrl && env_tclrl[0] != '\0') {
+    tclrl_candidates.push_back(std::string(env_tclrl) + "/tclreadlineInit.tcl");
+  }
+  const char *appdir = getenv("APPDIR");
+  if (appdir && appdir[0] != '\0') {
+    tclrl_candidates.push_back(std::string(appdir) + "/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8/tclreadlineInit.tcl");
+    tclrl_candidates.push_back(std::string(appdir) + "/third-party/tcl/tclreadline2.3.8/tclreadlineInit.tcl");
+    tclrl_candidates.push_back(std::string(appdir) + "/opt/python/lib/tclreadline2.3.8/tclreadlineInit.tcl");
+  }
+  tclrl_candidates.push_back(TCLRL_LIBRARY "/tclreadlineInit.tcl");
+  tclrl_candidates.push_back("/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.3.8/tclreadlineInit.tcl");
+  tclrl_candidates.push_back("/usr/lib/tcltk/tclreadline2.3.8/tclreadlineInit.tcl");
+  tclrl_candidates.push_back("/usr/share/tcltk/tclreadline2.3.8/tclreadlineInit.tcl");
+
+  bool loaded_tclrl = false;
+  for (const auto &path : tclrl_candidates) {
+    if (access(path.c_str(), R_OK) == 0) {
+      if (Tcl_EvalFile(interp, path.c_str()) == TCL_OK) {
+        has_readline = true;
+        loaded_tclrl = true;
+        break;
+      }
+    }
+  }
+  if (!loaded_tclrl) {
+    if (isatty(fileno(stdin)) && !findCmdLineFlag(argc, argv, "-exit"))
+      printf("Failed to load tclreadline.tcl\n");
+  }
 #endif
 
   initStaApp(argc, argv, interp);

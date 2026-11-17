@@ -1029,8 +1029,6 @@ class SilisIDE(QMainWindow):
                 self.backend_widget.send_command_internal("exit")
                 self.backend_widget.proc.waitForFinished(2000)
 
-        import os
-        import subprocess
         try:
             pid = os.getpid()
             # Clean up any remaining child processes
