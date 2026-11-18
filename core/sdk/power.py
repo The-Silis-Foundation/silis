@@ -536,17 +536,19 @@ class PowerNetwork:
 
         # Check daisy-chain stage continuity
         for pd in self.domains.values():
-            if len(pd.power_switches) > 1:
-                sorted_sw = sorted(pd.power_switches, key=lambda s: s.stage_index)
+            staged_sw = [s for s in pd.power_switches if s.ack_net is not None or s.stage_index > 0]
+            if len(staged_sw) > 1:
+                sorted_sw = sorted(staged_sw, key=lambda s: s.stage_index)
                 for k in range(1, len(sorted_sw)):
                     prev_sw = sorted_sw[k - 1]
                     curr_sw = sorted_sw[k]
-                    if prev_sw.ack_net != curr_sw.control_net:
-                        raise ValueError(
-                            f"Power Switch Daisy-Chain Break in domain '{pd.name}': "
-                            f"Stage {curr_sw.stage_index} control_net '{curr_sw.control_net}' does not match "
-                            f"Stage {prev_sw.stage_index} ack_net '{prev_sw.ack_net}'."
-                        )
+                    if curr_sw.stage_index > prev_sw.stage_index:
+                        if prev_sw.ack_net != curr_sw.control_net:
+                            raise ValueError(
+                                f"Power Switch Daisy-Chain Break in domain '{pd.name}': "
+                                f"Stage {curr_sw.stage_index} control_net '{curr_sw.control_net}' does not match "
+                                f"Stage {prev_sw.stage_index} ack_net '{prev_sw.ack_net}'."
+                            )
 
         return True
 

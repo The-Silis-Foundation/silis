@@ -257,6 +257,10 @@ class HeadlessASICRunner:
 
         script_file = os.path.join(self.proj_dir, f"run_{step_name}.tcl").replace("\\", "/")
         fp_helper = os.path.join(REPO_ROOT, "backendflow", "floorplanner", "silis_fp.tcl").replace("\\", "/")
+        if not os.path.exists(fp_helper):
+            cand = os.path.join(os.path.dirname(REPO_ROOT), "backendflow", "floorplanner", "silis_fp.tcl").replace("\\", "/")
+            if os.path.exists(cand):
+                fp_helper = cand
         with open(script_file, 'w') as f:
             # Provide safe built-in fallback procs for banners and unified flow steps
             procs = """if {[info procs create_fence] eq "" && [file exists "@@FP_HELPER@@"]} { source "@@FP_HELPER@@" }
@@ -318,6 +322,16 @@ if {[info commands gds] eq ""} {
             self.app.processEvents()
             if self.backend.proc.waitForReadyRead(100):
                 t0 = time.time()  # Reset timeout watchdog whenever OpenROAD outputs progress
+            else:
+                # If idle and prompt returned or error encountered
+                if getattr(self, "_current_step_marker", None) and not getattr(self, "_marker_seen", False):
+                    cmd_start = getattr(self, "_cmd_start_time", 0)
+                    if time.time() - cmd_start > 0.5:
+                        term_txt = self.backend.term_log.toPlainText() if hasattr(self.backend.term_log, "toPlainText") else str(self.backend.term_log)
+                        if self._had_error or "openroad>" in term_txt[-100:]:
+                            self._had_error = True
+                            self.backend.cmd_active = False
+                            break
             if self.backend.proc.state() != QProcess.ProcessState.Running:
                 break
 

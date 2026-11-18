@@ -331,3 +331,13 @@ except Exception:
                         })
 
         return markers
+
+
+# Canonical and agentic aliases
+AgenticIntrospectionEngine = PhysicalDesignIntrospector
+
+__all__ = [
+    "PhysicalDesignIntrospector",
+    "AgenticIntrospectionEngine",
+]
+

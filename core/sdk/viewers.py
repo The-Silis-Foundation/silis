@@ -51,6 +51,10 @@ def _ensure_desktop_env():
     Auto-detects and configures X11 DISPLAY and XAUTHORITY so GUI windows
     always appear on the user's active desktop without any manual environment setup.
     """
+    if os.environ.get("SILIS_HEADLESS_TEST") == "1":
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        return
+
     if "DISPLAY" not in os.environ or not os.environ["DISPLAY"]:
         if os.path.exists("/tmp/.X11-unix"):
             sockets = sorted([s for s in os.listdir("/tmp/.X11-unix") if s.startswith("X")])
@@ -70,7 +74,7 @@ def _ensure_desktop_env():
                 break
 
     # If QT_QPA_PLATFORM was offscreen, clear it for visible desktop rendering
-    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen" and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         del os.environ["QT_QPA_PLATFORM"]
 
 
@@ -80,7 +84,12 @@ def _ensure_app() -> QApplication:
     _ensure_desktop_env()
     app = QApplication.instance()
     if not app:
-        _APP_INSTANCE = QApplication(["silis", "-platform", "xcb"])
+        is_headless = (
+            os.environ.get("SILIS_HEADLESS_TEST") == "1"
+            or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+        )
+        platform_arg = "offscreen" if is_headless else "xcb"
+        _APP_INSTANCE = QApplication(["silis", "-platform", platform_arg])
         app = _APP_INSTANCE
     else:
         _APP_INSTANCE = app
@@ -371,7 +380,8 @@ def view_gds3d(
     # In headless offscreen test environments without a hardware OpenGL context,
     # avoid native OpenGL draw calls to prevent driver segfaults.
     is_offscreen = (
-        QGuiApplication.platformName() == "offscreen"
+        os.environ.get("SILIS_HEADLESS_TEST") == "1"
+        or (QGuiApplication.instance() and QGuiApplication.platformName() == "offscreen")
         or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
     )
 
@@ -384,7 +394,7 @@ def view_gds3d(
         except Exception as e:
             print(f"[GDS3D Warning] Failed to render 3D GDS: {e}")
 
-    if show:
+    if show and not is_offscreen:
         win.show()
     return win
 
@@ -429,12 +439,19 @@ def view_waveforms(
     peeker = SignalPeeker(dummy_ide)
     win.setCentralWidget(peeker)
 
-    if os.path.isfile(abs_vcd):
+    from PyQt6.QtGui import QGuiApplication
+    is_offscreen = (
+        os.environ.get("SILIS_HEADLESS_TEST") == "1"
+        or (QGuiApplication.instance() and QGuiApplication.platformName() == "offscreen")
+        or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+    )
+
+    if os.path.isfile(abs_vcd) and not is_offscreen:
         peeker.load_file(abs_vcd)
 
     win.signal_peeker = peeker
 
-    if show:
+    if show and not is_offscreen:
         win.show()
     return win
 
@@ -483,7 +500,14 @@ def view_schematic(
 
     win.setCentralWidget(schem)
 
-    if os.path.isfile(abs_path):
+    from PyQt6.QtGui import QGuiApplication
+    is_offscreen = (
+        os.environ.get("SILIS_HEADLESS_TEST") == "1"
+        or (QGuiApplication.instance() and QGuiApplication.platformName() == "offscreen")
+        or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+    )
+
+    if os.path.isfile(abs_path) and not is_offscreen:
         if abs_path.endswith(".json"):
             schem.load_json(abs_path, "top", "block")
         elif abs_path.endswith(".svg"):
@@ -491,7 +515,7 @@ def view_schematic(
 
     win.schem_widget = schem
 
-    if show:
+    if show and not is_offscreen:
         win.show()
     return win
 
@@ -503,6 +527,7 @@ def open_gui(
     project_path: Optional[str] = None,
     target_tab: Optional[str] = None,
     exec_loop: bool = False,
+    show: bool = True,
 ) -> QMainWindow:
     """
     Launches the full interactive SilisIDE window.
@@ -546,9 +571,10 @@ def open_gui(
             window.switch_world(1)
             window.backend_widget.viz_tabs.setCurrentIndex(0)
 
-    window.show()
+    if show and os.environ.get("SILIS_HEADLESS_TEST") != "1":
+        window.show()
 
-    if exec_loop:
+    if exec_loop and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         app.exec()
     return window
 
@@ -556,6 +582,7 @@ def open_gui(
 def open_floorplanner(
     project_path: Optional[str] = None,
     exec_loop: bool = True,
+    show: bool = True,
 ) -> QDialog:
     """
     Launches the Interactive Floorplanner Studio dialog directly via the Python SDK.
@@ -578,9 +605,10 @@ def open_floorplanner(
 
     p_cfg = proj.config if proj else {}
     dialog = InteractiveFloorplannerWidget(p_cfg, pdk_mgr)
-    dialog.show()
+    if show and os.environ.get("SILIS_HEADLESS_TEST") != "1":
+        dialog.show()
 
-    if exec_loop:
+    if exec_loop and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         app.exec()
     return dialog
 
@@ -588,6 +616,7 @@ def open_floorplanner(
 def open_ioplacer(
     project_path: Optional[str] = None,
     exec_loop: bool = True,
+    show: bool = True,
 ) -> QDialog:
     """
     Launches the Silis I/O Placer Studio dialog directly via the Python SDK.
@@ -610,9 +639,10 @@ def open_ioplacer(
 
     p_cfg = proj.config if proj else {}
     dialog = IOPlacerDialog(p_cfg, pdk_mgr)
-    dialog.show()
+    if show and os.environ.get("SILIS_HEADLESS_TEST") != "1":
+        dialog.show()
 
-    if exec_loop:
+    if exec_loop and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         app.exec()
     return dialog
 
@@ -620,10 +650,12 @@ def open_ioplacer(
 # ------------------------------------------------------------------------------
 # 6. Third-Party EDA Viewers (Magic, KLayout, GTKWave, OpenROAD GUI)
 # ------------------------------------------------------------------------------
-def view_magic(gds_path: str, tech_path: Optional[str] = None) -> Optional[subprocess.Popen]:
+def view_magic(gds_path: str, tech_path: Optional[str] = None, launch: bool = True) -> Optional[subprocess.Popen]:
     """
     Launches Magic VLSI layout GUI in an independent window displaying the given GDS.
     """
+    if not launch or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+        return None
     _ensure_desktop_env()
     abs_gds = os.path.abspath(gds_path)
     if not os.path.isfile(abs_gds):
@@ -662,10 +694,12 @@ def view_magic(gds_path: str, tech_path: Optional[str] = None) -> Optional[subpr
     return proc
 
 
-def view_gtkwave(vcd_path: str) -> Optional[subprocess.Popen]:
+def view_gtkwave(vcd_path: str, launch: bool = True) -> Optional[subprocess.Popen]:
     """
     Launches GTKWave in an independent window displaying the given VCD simulation dump.
     """
+    if not launch or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+        return None
     _ensure_desktop_env()
     abs_vcd = os.path.abspath(vcd_path)
     if not os.path.isfile(abs_vcd):
@@ -681,10 +715,12 @@ def view_gtkwave(vcd_path: str) -> Optional[subprocess.Popen]:
     return proc
 
 
-def view_openroad_gui(def_or_odb_path: str) -> Optional[subprocess.Popen]:
+def view_openroad_gui(def_or_odb_path: str, launch: bool = True) -> Optional[subprocess.Popen]:
     """
     Launches native OpenROAD GUI in an independent window displaying the routed DEF/ODB.
     """
+    if not launch or os.environ.get("SILIS_HEADLESS_TEST") == "1":
+        return None
     _ensure_desktop_env()
     abs_file = os.path.abspath(def_or_odb_path)
     if not os.path.isfile(abs_file):

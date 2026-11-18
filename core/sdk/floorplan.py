@@ -6,7 +6,7 @@ specified in Section 3 & 4 of the Silis Master Architectural Specification.
 """
 
 import math
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 from enum import Enum
 
 from .exceptions import DRCViolationError, OverlappingHaloError
@@ -109,6 +109,10 @@ class CoreArea:
     def height(self) -> float:
         return legalize_coord(self.top - self.bottom)
 
+    @property
+    def area(self) -> float:
+        return round(self.width * self.height, 3)
+
     def as_tuple(self) -> Tuple[float, float, float, float]:
         return (self.left, self.bottom, self.right, self.top)
 
@@ -194,8 +198,31 @@ class MacroInstance:
         if self.parent_floorplan:
             self.parent_floorplan._notify_physical_mutation()
 
-    def set_halo(self, left: float, right: float, top: float, bottom: float) -> None:
-        self.halo = Halo(left=left, bottom=bottom, right=right, top=top)
+    def set_halo(
+        self,
+        left: float = 0.0,
+        bottom: Optional[float] = None,
+        right: Optional[float] = None,
+        top: Optional[float] = None,
+        **kwargs
+    ) -> None:
+        """Sets physical keepout halo margins around the macro body."""
+        if "bottom" in kwargs or "right" in kwargs or "top" in kwargs:
+            b_val = kwargs.get("bottom", bottom if bottom is not None else 0.0)
+            r_val = kwargs.get("right", right if right is not None else 0.0)
+            t_val = kwargs.get("top", top if top is not None else 0.0)
+            l_val = left
+        elif bottom is not None and right is not None and top is not None:
+            b_val = bottom
+            r_val = right
+            t_val = top
+            l_val = left
+        else:
+            b_val = float(bottom if bottom is not None else left)
+            r_val = float(right if right is not None else left)
+            t_val = float(top if top is not None else left)
+            l_val = float(left)
+        self.halo = Halo(left=l_val, bottom=b_val, right=r_val, top=t_val)
         if self.parent_floorplan:
             self.parent_floorplan._notify_physical_mutation()
 
@@ -230,11 +257,27 @@ class Floorplan:
     Authoritative physical floorplan representation:
     Die boundary, core rectangle, manufacturing grid quantization, and macro arrangement.
     """
-    def __init__(self, project=None):
-        self.project = project
-        self.die_width: float = 1000.0
-        self.die_height: float = 1000.0
-        self.margins: Margins = Margins(20.0, 20.0, 20.0, 20.0)
+    def __init__(
+        self,
+        project=None,
+        die_width: Optional[float] = None,
+        die_height: Optional[float] = None,
+        margins: Optional[Margins] = None,
+    ):
+        if isinstance(project, (int, float)):
+            actual_w = float(project)
+            actual_h = float(die_width) if die_width is not None else actual_w
+            self.project = None
+            self.die_width = legalize_coord(actual_w)
+            self.die_height = legalize_coord(actual_h)
+        else:
+            self.project = project
+            self.die_width = legalize_coord(float(die_width)) if die_width is not None else 1000.0
+            self.die_height = legalize_coord(float(die_height)) if die_height is not None else 1000.0
+        if margins is not None:
+            self.margins = margins if isinstance(margins, Margins) else Margins(*margins)
+        else:
+            self.margins = Margins(20.0, 20.0, 20.0, 20.0)
         self.macros: Dict[str, MacroInstance] = {}
         self.site_row_height: float = self._resolve_site_row_height()
         self.manufacturing_grid: float = self._resolve_mfg_grid()
@@ -340,12 +383,45 @@ class Floorplan:
         master: str,
         x: float,
         y: float,
-        width: float,
-        height: float,
+        *args,
         orientation: Orientation = Orientation.R0,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
         halo: Optional[Halo] = None,
+        **kwargs,
     ) -> MacroInstance:
         """Adds a macro instance to the physical floorplan context with dynamic site row snapping."""
+        actual_orient = orientation
+        actual_width = width
+        actual_height = height
+        actual_halo = halo or kwargs.get("halo")
+
+        if len(args) == 1:
+            if isinstance(args[0], (Orientation, str)):
+                actual_orient = args[0]
+            elif isinstance(args[0], (int, float)):
+                actual_width = float(args[0])
+        elif len(args) == 2:
+            if isinstance(args[0], (int, float)) and isinstance(args[1], (int, float)):
+                actual_width = float(args[0])
+                actual_height = float(args[1])
+            elif isinstance(args[0], (Orientation, str)):
+                actual_orient = args[0]
+                actual_halo = args[1]
+        elif len(args) >= 3:
+            actual_width = float(args[0])
+            actual_height = float(args[1])
+            actual_orient = args[2]
+            if len(args) >= 4:
+                actual_halo = args[3]
+
+        if actual_width is None:
+            actual_width = float(kwargs.get("width", 100.0))
+        if actual_height is None:
+            actual_height = float(kwargs.get("height", 100.0))
+        if not isinstance(actual_orient, Orientation):
+            actual_orient = Orientation(str(actual_orient))
+
         rh = self.site_row_height or self._resolve_site_row_height()
         snapped_y = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y)
         inst = MacroInstance(
@@ -353,10 +429,10 @@ class Floorplan:
             master=master,
             x=legalize_coord(x),
             y=snapped_y,
-            width=width,
-            height=height,
-            orientation=orientation,
-            halo=halo,
+            width=actual_width,
+            height=actual_height,
+            orientation=actual_orient,
+            halo=actual_halo,
             parent_floorplan=self,
         )
         self.macros[name] = inst
@@ -876,7 +952,7 @@ class Floorplan:
             mr = float(d.get("mr", self.margins.right))
             mt = float(d.get("mt", self.margins.top))
             mb = float(d.get("mb", self.margins.bottom))
-            self.set_die_dimensions(w, h, Margins(ml, mr, mt, mb))
+            self.set_die_dimensions(w, h, Margins(left=ml, bottom=mb, right=mr, top=mt))
 
         # Restore macros with stale instance rejection
         valid_instances = None
@@ -908,7 +984,7 @@ class Floorplan:
                 orient = Orientation.R0
             macro = self.add_macro(inst_name, master, x, y, 100.0, 100.0, orient)
             if "halo" in m and isinstance(m["halo"], (list, tuple)) and len(m["halo"]) == 4:
-                macro.set_halo(*m["halo"])
+                macro.set_halo(left=m["halo"][0], bottom=m["halo"][1], right=m["halo"][2], top=m["halo"][3])
 
         self._notify_physical_mutation()
         return state

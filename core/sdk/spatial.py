@@ -691,3 +691,13 @@ class SpatialReasoningEngine:
         }
         self._lef_cache[master_name] = fallback
         return fallback
+
+
+# Spatial and collision aliases
+SpatialGrid = SpatialReasoningEngine
+
+__all__ = [
+    "SpatialReasoningEngine",
+    "SpatialGrid",
+]
+

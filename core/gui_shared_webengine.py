@@ -66,6 +66,14 @@ class SharedWebEngineManager:
     def get_view(self):
         if not _WEBENGINE_AVAILABLE:
             return None
+        from PyQt6.QtGui import QGuiApplication
+        is_offscreen = (
+            os.environ.get("SILIS_HEADLESS_TEST") == "1"
+            or (QGuiApplication.instance() and QGuiApplication.platformName() == "offscreen")
+            or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+        )
+        if is_offscreen:
+            return None
         if self._view is None:
             try:
                 self._view = QWebEngineView()

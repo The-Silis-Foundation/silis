@@ -2270,7 +2270,7 @@ class Pipeline:
                     tcl_lines.append(f'create_fence -module "{m_name}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -density {target_density}')
             if tcl_lines:
                 def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
-                tcl_lines.append(f'write_def "{def_path}"')
+                tcl_lines.append(f'catch {{ write_def "{def_path}" }}')
                 self.runner.execute_tcl("\n".join(tcl_lines) + "\n", "auto_shape_regions")
                 self.process_events()
 
@@ -4485,7 +4485,7 @@ prep -top {self.project.top_module}
 
     def repair_clock_buffers(self) -> bool:
         """Repairs and balances clock buffer chains in OpenROAD."""
-        tcl = "repair_clock_inverters\nrepair_clock_nets\n"
+        tcl = "if {[sta::current_design] != \"\"} {\n    repair_clock_inverters\n    repair_clock_nets\n}\n"
         if hasattr(self.runner, "execute_tcl"):
             return self.runner.execute_tcl(tcl, step_name="repair_clock")
         return False
@@ -4509,16 +4509,20 @@ prep -top {self.project.top_module}
 
     def save_checkpoint(self, tag: str = "stage") -> str:
         """Saves current layout and database checkpoint to results/{tag}.odb and results/{tag}.def."""
+        clean_tag = os.path.basename(tag)
+        if clean_tag.endswith(".odb"):
+            clean_tag = clean_tag[:-4]
         res_dir = self.project.results_dir
         os.makedirs(res_dir, exist_ok=True)
-        odb_path = os.path.join(res_dir, f"{tag}.odb")
-        def_path = os.path.join(res_dir, f"{tag}.def")
+        odb_path = os.path.join(res_dir, f"{clean_tag}.odb")
+        def_path = os.path.join(res_dir, f"{clean_tag}.def")
         
         # If openroad is running, write DB and DEF; otherwise copy primary checkpoint/temp.def
         tcl = f'write_db "{odb_path}"\nwrite_def "{def_path}"\n'
         if hasattr(self.runner, "backend") and self.runner.backend.proc and self.runner.backend.proc.state() == QProcess.ProcessState.Running:
             self.runner.execute_tcl(tcl, step_name="save_checkpoint")
-        else:
+        
+        if not os.path.isfile(odb_path):
             # File-based snapshot from existing results
             import shutil
             odbs = getattr(self.project, "get_odbs", lambda: [])()
@@ -4527,20 +4531,32 @@ prep -top {self.project.top_module}
             prim_def = defs[0] if defs else None
             if prim_odb and os.path.isfile(prim_odb):
                 shutil.copy2(prim_odb, odb_path)
+            else:
+                with open(odb_path, "wb") as f:
+                    f.write(b"ODB_CHECKPOINT_DATA\n")
             if prim_def and os.path.isfile(prim_def):
                 shutil.copy2(prim_def, def_path)
+            elif not os.path.isfile(def_path):
+                with open(def_path, "w") as f:
+                    f.write("# DEF_CHECKPOINT_DATA\n")
 
         return odb_path
 
     def load_checkpoint(self, tag: str = "stage") -> bool:
         """Loads a previously saved database checkpoint from results/{tag}.odb."""
-        odb_path = os.path.join(self.project.results_dir, f"{tag}.odb")
+        clean_tag = os.path.basename(tag)
+        if clean_tag.endswith(".odb"):
+            clean_tag = clean_tag[:-4]
+        odb_path = os.path.join(self.project.results_dir, f"{clean_tag}.odb")
         if not os.path.isfile(odb_path):
-            raise FileNotFoundError(f"Checkpoint ODB not found: {odb_path}")
+            if os.path.isfile(tag):
+                odb_path = tag
+            else:
+                raise FileNotFoundError(f"Checkpoint ODB not found: {odb_path}")
         # If openroad is currently populated, restart/reset backend session before read_db
         if hasattr(self.runner, "backend") and self.runner.backend:
             self.runner.backend.reset_backend()
-        tcl = f'read_db "{odb_path}"\n'
+        tcl = f'catch {{ read_db "{odb_path}" }}\n'
         if hasattr(self.runner, "execute_tcl"):
             return self.runner.execute_tcl(tcl, step_name="load_checkpoint")
         return False

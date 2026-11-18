@@ -40,18 +40,31 @@ class SilisSchematic(QWidget):
         self.layout.addWidget(self.stack)
 
     def ensure_engine(self):
+        from PyQt6.QtGui import QGuiApplication
+        is_offscreen = (
+            os.environ.get("SILIS_HEADLESS_TEST") == "1"
+            or (QGuiApplication.instance() and QGuiApplication.platformName() == "offscreen")
+            or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+        )
+        if is_offscreen:
+            return None
         if self.fast_view is not None:
             return self.fast_view
         if schematic_engine:
-            self.fast_view = schematic_engine.SchematicViewerCore()
-            import os
-            html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "digitaljs.html"))
-            self.fast_view.init_url(html_path)
-            ptr = self.fast_view.get_ptr()
-            self.native_fast_view = sip.wrapinstance(ptr, QWebEngineView)
-            self.native_fast_view.installEventFilter(self)
-            self.native_fast_view.titleChanged.connect(self._on_title_changed)
-            self.stack.addWidget(self.native_fast_view)
+            try:
+                self.fast_view = schematic_engine.SchematicViewerCore()
+                import os
+                html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "digitaljs.html"))
+                self.fast_view.init_url(html_path)
+                ptr = self.fast_view.get_ptr()
+                self.native_fast_view = sip.wrapinstance(ptr, QWebEngineView)
+                self.native_fast_view.installEventFilter(self)
+                self.native_fast_view.titleChanged.connect(self._on_title_changed)
+                self.stack.addWidget(self.native_fast_view)
+            except Exception as e:
+                self.fast_view = None
+                self.native_fast_view = QLabel(f"Schematic Engine offline: {e}")
+                self.stack.addWidget(self.native_fast_view)
         else:
             self.fast_view = None
             self.native_fast_view = QLabel("Failed to load C++ Schematic Engine. Please recompile.")

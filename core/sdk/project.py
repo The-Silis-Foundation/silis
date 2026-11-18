@@ -520,7 +520,9 @@ class Project:
         total_std_cell_area = float(sizes.get("total_std_cell_area", 0.0))
 
         mod_key = module.strip() if module else ""
-        if mod_key.lower() in ("core", "top", "all", ""):
+        top_name = getattr(self, "top_module", "").lower()
+        proj_name = getattr(self, "name", "").lower()
+        if mod_key.lower() in ("core", "top", "all", "", top_name, proj_name):
             return total_std_cell_area
 
         modules = sizes.get("modules", {})
@@ -933,16 +935,20 @@ class Project:
         tb: Optional[List[str]] = None,
         sdc: Optional[List[str]] = None,
         macros: Optional[List[str]] = None,
+        top_module: Optional[str] = None,
+        location: Optional[str] = None,
     ) -> "Project":
         """
         Creates a new Silis ASIC project workspace with standard directory layout
         and silis.silisproj metadata.
         """
+        resolved_top = top or top_module
+        resolved_loc = loc or location
         proj_file = run_cli_init(
             name=name,
-            top=top,
+            top=resolved_top,
             pdk=pdk,
-            loc=loc,
+            loc=resolved_loc,
             rtl=rtl,
             tb=tb,
             sdc=sdc,

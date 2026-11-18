@@ -177,11 +177,14 @@ class SDCBuilder:
         from_pins: Optional[Union[str, List[str]]] = None,
         to_pins: Optional[Union[str, List[str]]] = None,
         through: Optional[Union[str, List[str]]] = None,
+        **kwargs,
     ) -> "SDCBuilder":
         """Defines a false path timing exception."""
+        f_pins = from_pins if from_pins is not None else kwargs.get("from_pin")
+        t_pins = to_pins if to_pins is not None else kwargs.get("to_pin")
         self.false_paths.append({
-            "from": [from_pins] if isinstance(from_pins, str) else from_pins,
-            "to": [to_pins] if isinstance(to_pins, str) else to_pins,
+            "from": [f_pins] if isinstance(f_pins, str) else f_pins,
+            "to": [t_pins] if isinstance(t_pins, str) else t_pins,
             "through": [through] if isinstance(through, str) else through,
         })
         return self
@@ -193,12 +196,15 @@ class SDCBuilder:
         to_pins: Optional[Union[str, List[str]]] = None,
         setup: bool = True,
         hold: bool = False,
+        **kwargs,
     ) -> "SDCBuilder":
         """Defines a multicycle path timing exception."""
+        f_pins = from_pins if from_pins is not None else kwargs.get("from_pin")
+        t_pins = to_pins if to_pins is not None else kwargs.get("to_pin")
         self.multicycle_paths.append({
             "cycles": int(cycles),
-            "from": [from_pins] if isinstance(from_pins, str) else from_pins,
-            "to": [to_pins] if isinstance(to_pins, str) else to_pins,
+            "from": [f_pins] if isinstance(f_pins, str) else f_pins,
+            "to": [t_pins] if isinstance(t_pins, str) else t_pins,
             "setup": setup,
             "hold": hold,
         })

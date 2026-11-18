@@ -93,8 +93,16 @@ proc create_region {args} {
     }
 
     set block [::ord::get_db_block]
+    if {$block eq "NULL" || $block eq ""} {
+        puts "\[WARN\] No active block in OpenROAD to create region for $mod."
+        return
+    }
     set tech [::ord::get_db_tech]
-    set dbu [$tech getDbUnitsPerMicron]
+    if {$tech eq "NULL" || $tech eq ""} {
+        set dbu 1000
+    } else {
+        set dbu [$tech getDbUnitsPerMicron]
+    }
 
     set clean_mod [string map {"/" "_"} $mod]
     # If the module name already begins with 'region_' or is a UPF power domain name like 'PD_*', preserve it
@@ -256,6 +264,9 @@ proc place_macro {args} {
         set hb [lindex $halo 2]; set ht [lindex $halo 3]
         if {$hl > 0 || $hr > 0 || $hb > 0 || $ht > 0} {
             set block [::ord::get_db_block]
+            if {$block eq "NULL" || $block eq ""} {
+                return
+            }
             set inst_obj [$block findInst $inst]
             if {$inst_obj ne "NULL" && $inst_obj ne ""} {
                 set bbox [$inst_obj getBBox]

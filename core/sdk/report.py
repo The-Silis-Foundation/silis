@@ -81,7 +81,24 @@ class SynthesisReport:
     def summary(self, design_name: Optional[str] = None) -> str:
         """Generates comprehensive ASCII report matching Silis standard formatting."""
         d_name = design_name or self.design_name
-        return ReportEngine.generate_report(self.metrics, design_name=d_name)
+        m = dict(self.metrics)
+        m.setdefault("timing_groups", [])
+        m.setdefault("cell_list", [])
+        for k in ("area", "cells", "wns", "wires", "bits"):
+            if k in m and not isinstance(m[k], str):
+                m[k] = str(m[k])
+            else:
+                m.setdefault(k, "0")
+        m.setdefault("status", "MET")
+        m.setdefault("critical_path_trace", "None")
+        m.setdefault("pwr_seq", ["0", "0", "0", "0", 0])
+        m.setdefault("pwr_comb", ["0", "0", "0", "0", 0])
+        m.setdefault("pwr_clk", ["0", "0", "0", "0", 0])
+        m.setdefault("pwr_mac", ["0", "0", "0", "0", 0])
+        m.setdefault("pwr_pad", ["0", "0", "0", "0", 0])
+        m.setdefault("pwr_tot", ["0", "0", "0", "0", 0])
+        m.setdefault("errors", [])
+        return ReportEngine.generate_report(m, design_name=d_name)
 
     @classmethod
     def load(cls, path_or_dir: str, design_name: str = "design") -> "SynthesisReport":

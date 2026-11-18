@@ -53,6 +53,9 @@ from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, leg
 from .power import PowerNetwork, PowerDomain, IsolationRule, LevelShifterRule, PowerSwitch, PowerStateTable
 from .timing import TimingGraph, TimingPin
 from .layout import Layout, LayoutNet
+from .introspection import PhysicalDesignIntrospector, AgenticIntrospectionEngine
+from .spatial import SpatialReasoningEngine, SpatialGrid
+from .opendb_bridge import OpenDBBridge, OpenDBInstance, OpenDBPin
 from .sdc import (
     SDCBuilder,
     extract_netlist_clock_ports,
@@ -170,6 +173,14 @@ __all__ = [
     "GLSSignoffReport",
     "LVSSignoffReport",
     "TapeoutManifestReport",
+    "AntennaSignoffReport",
+    "PhysicalDesignIntrospector",
+    "AgenticIntrospectionEngine",
+    "SpatialReasoningEngine",
+    "SpatialGrid",
+    "OpenDBBridge",
+    "OpenDBInstance",
+    "OpenDBPin",
     "load_project",
     "create_project",
     "get_utilization",
@@ -183,6 +194,8 @@ __all__ = [
     "view_waveforms",
     "view_schematic",
     "open_gui",
+    "open_floorplanner",
+    "open_ioplacer",
     "view_magic",
     "view_gtkwave",
     "view_openroad_gui",

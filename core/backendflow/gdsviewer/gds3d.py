@@ -3,7 +3,10 @@ import sys
 import subprocess
 import time
 import hashlib
-import gdstk
+try:
+    import gdstk
+except ImportError:
+    gdstk = None
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
