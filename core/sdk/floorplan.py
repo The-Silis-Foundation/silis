@@ -50,23 +50,6 @@ class Orientation(str, Enum):
         return self in (Orientation.R90, Orientation.R270, Orientation.MY90, Orientation.MX90)
 
 
-class Margins:
-    """Die-to-core perimeter margin specifications in micrometers."""
-    def __init__(self, left: float = 20.0, bottom: float = 20.0, right: float = 20.0, top: float = 20.0):
-        if float(left) < 0.0 or float(bottom) < 0.0 or float(right) < 0.0 or float(top) < 0.0:
-            raise ValueError(f"Margins must be non-negative: L={left}, B={bottom}, R={right}, T={top}")
-        self.left = float(left)
-        self.bottom = float(bottom)
-        self.right = float(right)
-        self.top = float(top)
-
-    def as_tuple(self) -> Tuple[float, float, float, float]:
-        return (self.left, self.bottom, self.right, self.top)
-
-    def __repr__(self):
-        return f"<Margins L={self.left:.3f} B={self.bottom:.3f} R={self.right:.3f} T={self.top:.3f}>"
-
-
 def legalize_coord(val: float, grid: float = 0.005) -> float:
     """
     Quantizes a floating-point coordinate to manufacturing grid steps (default 5 DBU = 0.005 um in Sky130).
@@ -82,9 +65,61 @@ def snap_to_site_row(y: float, row_height: float) -> float:
     Quantizes a y-coordinate to legal standard cell site rows.
     Satisfies: (y mod row_height) == 0.
     """
+    if math.isnan(y) or math.isinf(y):
+        raise ValueError(f"Invalid coordinate value: {y}")
     if row_height <= 0.0:
         return legalize_coord(y)
     return round(round(y / row_height) * row_height, 3)
+
+
+class Margins:
+    """Die-to-core perimeter margin specifications in micrometers."""
+    def __init__(self, left: float = 20.0, bottom: float = 20.0, right: float = 20.0, top: float = 20.0):
+        for val, name in [(left, "left"), (bottom, "bottom"), (right, "right"), (top, "top")]:
+            fval = float(val)
+            if math.isnan(fval) or math.isinf(fval):
+                raise ValueError(f"Margin '{name}' cannot be NaN or Inf, got {val}")
+            if fval < 0.0:
+                raise ValueError(f"Margins must be non-negative: L={left}, B={bottom}, R={right}, T={top}")
+        self.left = legalize_coord(float(left))
+        self.bottom = legalize_coord(float(bottom))
+        self.right = legalize_coord(float(right))
+        self.top = legalize_coord(float(top))
+
+    def as_tuple(self) -> Tuple[float, float, float, float]:
+        return (self.left, self.bottom, self.right, self.top)
+
+    def __repr__(self):
+        return f"<Margins L={self.left:.3f} B={self.bottom:.3f} R={self.right:.3f} T={self.top:.3f}>"
+
+
+class CoreArea:
+    """Legalized core rectangle with exact boundaries and dimensions."""
+    def __init__(self, left: float, bottom: float, right: float, top: float):
+        self.left = legalize_coord(left)
+        self.bottom = legalize_coord(bottom)
+        self.right = legalize_coord(right)
+        self.top = legalize_coord(top)
+
+    @property
+    def width(self) -> float:
+        return legalize_coord(self.right - self.left)
+
+    @property
+    def height(self) -> float:
+        return legalize_coord(self.top - self.bottom)
+
+    def as_tuple(self) -> Tuple[float, float, float, float]:
+        return (self.left, self.bottom, self.right, self.top)
+
+    def __iter__(self):
+        return iter(self.as_tuple())
+
+    def __getitem__(self, idx):
+        return self.as_tuple()[idx]
+
+    def __repr__(self):
+        return f"<CoreArea L={self.left:.3f} B={self.bottom:.3f} R={self.right:.3f} T={self.top:.3f}>"
 
 
 class Halo:
@@ -218,8 +253,14 @@ class Floorplan:
             return self.project.db.mfg_grid
         return 0.005
 
-    def set_die_dimensions(self, width: float, height: float, margins: Optional[Margins] = None) -> None:
-        """Sets die bounds with defensive dimension assertions."""
+    def set_die_dimensions(
+        self,
+        width: float,
+        height: float,
+        margins: Optional[Margins] = None,
+        auto_heal: bool = False,
+    ) -> None:
+        """Sets die bounds with defensive dimension assertions and optional self-healing."""
         width = legalize_coord(width, self.manufacturing_grid)
         height = legalize_coord(height, self.manufacturing_grid)
         if width <= 0 or height <= 0:
@@ -233,7 +274,12 @@ class Floorplan:
         # Verify core bounds > 0
         cw, ch = self.get_core_dimensions()
         if cw <= 0 or ch <= 0:
-            raise ValueError(f"Core margins exceed die bounds! Core size: ({cw}, {ch})")
+            if auto_heal:
+                # Self-healing logic according to GEMINI.md Section 4.1
+                self.die_width = legalize_coord(max(self.die_width, self.margins.left + self.margins.right + 50.0), self.manufacturing_grid)
+                self.die_height = legalize_coord(max(self.die_height, self.margins.bottom + self.margins.top + 50.0), self.manufacturing_grid)
+            else:
+                raise ValueError(f"Core margins exceed die bounds! Core size: ({cw}, {ch})")
 
         self._notify_physical_mutation()
 
@@ -247,6 +293,12 @@ class Floorplan:
             self.die_width - self.margins.right,
             self.die_height - self.margins.top,
         )
+
+    @property
+    def core(self) -> CoreArea:
+        """Returns the CoreArea object with legal quantized bounds (left, bottom, right, top)."""
+        x1, y1, x2, y2 = self.get_core_bbox()
+        return CoreArea(x1, y1, x2, y2)
 
     def get_core_dimensions(self) -> Tuple[float, float]:
         x1, y1, x2, y2 = self.get_core_bbox()

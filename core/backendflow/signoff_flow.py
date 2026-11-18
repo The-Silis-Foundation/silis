@@ -272,9 +272,40 @@ class SignoffRunnerWorker(QThread):
         sdc_file = os.path.join(self.project_root, "source", f"{self.top_module}.sdc")
         if not os.path.isfile(sdc_file):
             c_sdc = glob.glob(os.path.join(self.project_root, "**", "*.sdc"), recursive=True)
-            if c_sdc: sdc_file = c_sdc[0]
+            if c_sdc:
+                sdc_file = c_sdc[0]
+            else:
+                clk_port = "clk"
+                try:
+                    from silis.core.sdk.sdc import extract_netlist_clock_ports
+                    cand_v = os.path.join(self.project_root, "netlist", f"{self.top_module}_netlist.v")
+                    if not os.path.isfile(cand_v):
+                        cand_v = os.path.join(self.project_root, "source", f"{self.top_module}.v")
+                    if os.path.isfile(cand_v):
+                        cand_clks = extract_netlist_clock_ports(cand_v, self.top_module)
+                        if cand_clks:
+                            clk_port = cand_clks[0]
+                except Exception:
+                    pass
+                os.makedirs(os.path.dirname(sdc_file), exist_ok=True)
+                with open(sdc_file, "w") as f:
+                    f.write(
+                        f"# Auto-generated SDC constraint matching netlist clock port\n"
+                        f"create_clock -name {clk_port} -period 10.0 [get_ports {{{clk_port}}}]\n"
+                        f"set_input_delay 2.0 -clock {clk_port} [all_inputs -no_clocks]\n"
+                        f"set_output_delay 2.0 -clock {clk_port} [all_outputs]\n"
+                    )
 
         io_lefs = self.flow._get_io_lefs() if hasattr(self.flow, '_get_io_lefs') else []
+        macro_lefs = self.flow._get_macro_files("lef") if hasattr(self.flow, '_get_macro_files') else []
+        macro_libs = []
+        seen_mlibs = set()
+        raw_mlibs = self.flow._get_macro_files("lib") if hasattr(self.flow, '_get_macro_files') else []
+        for ml in raw_mlibs:
+            if ml not in seen_mlibs:
+                seen_mlibs.add(ml)
+                macro_libs.append(ml)
+
         tcl_lines = [
             "set_thread_count [exec nproc]",
             f'read_lef "{self.pdk["tlef"]}"',
@@ -282,20 +313,56 @@ class SignoffRunnerWorker(QThread):
         ]
         for i_l in io_lefs:
             tcl_lines.append(f'read_lef "{i_l}"')
+        for m_l in macro_lefs:
+            tcl_lines.append(f'read_lef "{m_l}"')
         tcl_lines.extend([
             "catch { make_fake_io_site -name IO_SITE -width 1 -height 200 }",
             "catch { make_fake_io_site -name IO_CSITE -width 200 -height 204 }",
-            f'read_def "{def_file}"',
-            "define_corners default",
-            f'read_liberty -corner default "{self.pdk.get("lib", "")}"',
-            f'read_sdc "{sdc_file}"',
-            "puts \"PAT_POWER_START\"",
-            "report_power",
-            "puts \"PAT_POWER_END\"",
-            "puts \"PAT_CORNER_START: default\"",
-            "report_checks -path_delay max -fields {slew cap input_pins nets fanout} -corner default",
-            "puts \"PAT_CORNER_END: default\""
+            f'read_def "{def_file}"'
         ])
+
+        target_corners = getattr(self.flow, 'selected_mcmm_corners', {}) if hasattr(self, 'flow') else {}
+        if not target_corners and self.pdk:
+            target_corners = self.pdk.get('corners', {})
+
+        if target_corners and len(target_corners) > 1:
+            corner_names = list(target_corners.keys())
+            tcl_lines.append("catch { suppress_message STA 1140 }")
+            tcl_lines.append("define_corners " + " ".join(corner_names))
+            for c_name, lib_path in target_corners.items():
+                tcl_lines.append(f'read_liberty -corner {c_name} "{lib_path}"')
+            for lib in macro_libs:
+                for c_name in corner_names:
+                    tcl_lines.append(f'read_liberty -corner {c_name} "{lib}"')
+            rpt_corner = "tt" if "tt" in corner_names else corner_names[0]
+            tcl_lines.extend([
+                f'read_sdc "{sdc_file}"',
+                'puts "PAT_POWER_START"',
+                f'report_power -corner {rpt_corner}',
+                'puts "PAT_POWER_END"'
+            ])
+            for c_name in corner_names:
+                tcl_lines.extend([
+                    f'puts "PAT_CORNER_START: {c_name}"',
+                    f'report_checks -path_delay max -fields {{slew cap input_pins nets fanout}} -corner {c_name}',
+                    f'catch {{ report_power -corner {c_name} }}',
+                    f'puts "PAT_CORNER_END: {c_name}"'
+                ])
+        else:
+            tcl_lines.append("catch { suppress_message STA 1140 }")
+            tcl_lines.append("define_corners default")
+            tcl_lines.append(f'read_liberty -corner default "{self.pdk.get("lib", "")}"')
+            for lib in macro_libs:
+                tcl_lines.append(f'read_liberty -corner default "{lib}"')
+            tcl_lines.extend([
+                f'read_sdc "{sdc_file}"',
+                'puts "PAT_POWER_START"',
+                'report_power -corner default',
+                'puts "PAT_POWER_END"',
+                'puts "PAT_CORNER_START: default"',
+                'report_checks -path_delay max -fields {slew cap input_pins nets fanout} -corner default',
+                'puts "PAT_CORNER_END: default"'
+            ])
         with open(pat_tcl, "w") as f:
             f.write("\n".join(tcl_lines) + "\n")
 

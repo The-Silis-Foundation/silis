@@ -16,6 +16,9 @@ except ImportError:
 
 
 class DEFParser:
+    _global_comp_sizes = {}
+    _global_comp_classes = {}
+
     def __init__(self, def_path, ide=None):
         self.path = def_path
         self.ide = ide
@@ -45,6 +48,14 @@ class DEFParser:
     def parse_macro_sizes(self):
         try:
             import os, glob, re, json
+            if DEFParser._global_comp_sizes and (not self.ide or not getattr(self.ide, 'current_project_dir', None)):
+                cand_check = None
+                if self.path:
+                    cand_check = os.path.dirname(os.path.abspath(self.path))
+                if not cand_check or cand_check in ["/", "/tmp", "/var", "/home", "/usr", "/etc"] or cand_check.startswith("/tmp/"):
+                    self.comp_sizes.update(DEFParser._global_comp_sizes)
+                    self.comp_classes.update(DEFParser._global_comp_classes)
+                    return
             search_dirs = []
             proj_d = None
             if self.ide and getattr(self.ide, 'current_project_dir', None):
@@ -117,6 +128,10 @@ class DEFParser:
                                         self.comp_classes[m_name] = cls_m.group(1).upper()
                             except:
                                 pass
+            if self.comp_sizes:
+                DEFParser._global_comp_sizes.update(self.comp_sizes)
+            if self.comp_classes:
+                DEFParser._global_comp_classes.update(self.comp_classes)
         except:
             pass
 
@@ -195,16 +210,16 @@ class DEFParser:
                             is_macro = False
                             x, y = 0, 0
                     
-                        if "PLACED" in line or "FIXED" in line or "COVER" in line:
-                            coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*([A-Za-z0-9_]+)?', line)
-                            if coord_match:
-                                x = int(coord_match.group(1))
-                                y = int(coord_match.group(2))
-                                orient = coord_match.group(3) if coord_match.group(3) else "N"
-                                is_placed = True
+                    if current_comp_name and ("PLACED" in line or "FIXED" in line or "COVER" in line):
+                        coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*([A-Za-z0-9_]+)?', line)
+                        if coord_match:
+                            x = int(coord_match.group(1))
+                            y = int(coord_match.group(2))
+                            orient = coord_match.group(3) if coord_match.group(3) else "N"
+                            is_placed = True
                         
                         w, h = std_w, std_h
-                        if current_comp_model in self.comp_sizes:
+                        if current_comp_model and current_comp_model in self.comp_sizes:
                             w = self.comp_sizes[current_comp_model][0] * self.dbu
                             h = self.comp_sizes[current_comp_model][1] * self.dbu
                             
@@ -219,7 +234,7 @@ class DEFParser:
                                 
                             self.comps_map[current_comp_name] = QRectF(bb_x, bb_y, bb_w, bb_h)
                             
-                            model_lower = current_comp_model.lower()
+                            model_lower = current_comp_model.lower() if current_comp_model else ""
                             # Classification order:
                             # 1. Fillers & Decaps (Physical filling / decoupling capacitors - must not be classified as tap)
                             is_fill_or_decap = ("fill" in model_lower or "decap" in model_lower)
@@ -236,7 +251,7 @@ class DEFParser:
                             is_clock = not is_fill_or_decap and ("clk" in model_lower or "clock" in model_lower) and not current_comp_name.startswith("_")
 
                             # Check LEF class and model traits
-                            lef_class = self.comp_classes.get(current_comp_model, "")
+                            lef_class = self.comp_classes.get(current_comp_model, "") if current_comp_model else ""
                             is_lef_macro = any(k in lef_class for k in ["PAD", "RING", "BLOCK", "COVER"])
                             is_pad_model = ("_io" in model_lower or "pad" in model_lower or "corner" in model_lower or "slice" in model_lower)
 
@@ -257,12 +272,14 @@ class DEFParser:
                                 self.comp_types[current_comp_name] = "STD"
                                 self.std_coords_flat.extend([bb_x, bb_y, bb_w, bb_h])
                             
-                            self.comp_masters[current_comp_name] = current_comp_model
+                            self.comp_masters[current_comp_name] = current_comp_model or ""
                             self.comp_orients[current_comp_name] = orient
                             self.module_map[current_comp_name] = "STD_LOGIC" 
                             self.component_count += 1
-                        
-                        if ";" in line: current_comp_name = None
+                    
+                    if ";" in line:
+                        current_comp_name = None
+                        current_comp_model = None
 
                 # --- PINS ---
                 elif current_section == "PINS":
@@ -276,7 +293,9 @@ class DEFParser:
                         layer_box = re.search(r'LAYER\s+\S+\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
                         if layer_box:
                             lx1, ly1, lx2, ly2 = map(int, layer_box.groups())
-                            current_pin_port_rect = (lx1, ly1, lx2 - lx1, ly2 - ly1)
+                            min_x, max_x = min(lx1, lx2), max(lx1, lx2)
+                            min_y, max_y = min(ly1, ly2), max(ly1, ly2)
+                            current_pin_port_rect = (min_x, min_y, max_x - min_x, max_y - min_y)
 
                     if current_pin_name and ("PLACED" in line or "FIXED" in line):
                         coord_match = re.search(r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', line)
@@ -293,6 +312,10 @@ class DEFParser:
                                 self.pins.append((QRectF(x - pin_sz/2, y - pin_sz/2, pin_sz, pin_sz), current_pin_name))
                             current_pin_name = None
                             current_pin_port_rect = None 
+
+                    if ";" in line:
+                        current_pin_name = None
+                        current_pin_port_rect = None 
 
                 # --- REGIONS ---
                 elif current_section == "REGIONS":

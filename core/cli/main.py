@@ -209,6 +209,10 @@ def handle_cli(args_list):
 
     if args.help:
         parser.print_help()
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
         return True
 
     import project_registry
@@ -409,6 +413,12 @@ def handle_cli(args_list):
             step_success = runner.run_step(active_step, tcl_arg=args.tcl)
     finally:
         runner.close()
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
 
     if not step_success:
         sys.exit(1)

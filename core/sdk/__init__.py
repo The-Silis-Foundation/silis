@@ -49,10 +49,16 @@ from .exceptions import (
 )
 from .project import Project
 SilisProject = Project
-from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, legalize_coord
+from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, legalize_coord, snap_to_site_row, CoreArea
 from .power import PowerNetwork, PowerDomain, IsolationRule, LevelShifterRule, PowerSwitch, PowerStateTable
 from .timing import TimingGraph, TimingPin
 from .layout import Layout, LayoutNet
+from .sdc import (
+    SDCBuilder,
+    extract_netlist_clock_ports,
+    parse_sdc_clocks,
+    validate_sdc_clocks_against_netlist,
+)
 from .pipeline import (
     Pipeline,
     FloorplanCollisionError,
@@ -131,17 +137,24 @@ __all__ = [
     "RoutingOverflowError",
     "PipelineStateError",
     "Project",
+    "SilisProject",
     "Pipeline",
     "Floorplan",
     "MacroInstance",
     "Margins",
+    "CoreArea",
     "Orientation",
     "Halo",
     "legalize_coord",
+    "snap_to_site_row",
     "PowerNetwork",
     "PowerDomain",
     "IsolationRule",
     "LevelShifterRule",
+    "SDCBuilder",
+    "extract_netlist_clock_ports",
+    "parse_sdc_clocks",
+    "validate_sdc_clocks_against_netlist",
     "TimingGraph",
     "TimingPin",
     "Layout",

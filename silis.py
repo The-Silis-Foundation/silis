@@ -1332,6 +1332,26 @@ class SilisIDE(QMainWindow):
         # Redirects output (>) to timing.rpt and power.rpt
         sdc_files = glob.glob(os.path.join(root, "constr", "*.sdc")) + glob.glob(os.path.join(root, "source", "*.sdc"))
         abs_sdc = sdc_files[0] if sdc_files else (os.path.join(root, "constr", f"{base}.sdc") if os.path.isdir(os.path.join(root, "constr")) else os.path.join(root, "source", f"{base}.sdc"))
+
+        # Ensure SDC exists and clock definitions match netlist clock port names
+        if not os.path.isfile(abs_sdc):
+            clk_port = "clk"
+            try:
+                from silis.core.sdk.sdc import extract_netlist_clock_ports
+                if os.path.isfile(v_net):
+                    cand_clks = extract_netlist_clock_ports(v_net, base)
+                    if cand_clks:
+                        clk_port = cand_clks[0]
+            except Exception:
+                pass
+            os.makedirs(os.path.dirname(abs_sdc), exist_ok=True)
+            with open(abs_sdc, "w") as f_sdc:
+                f_sdc.write(
+                    f"# Auto-generated SDC constraint matching netlist clock port\n"
+                    f"create_clock -name {clk_port} -period 10.000 [get_ports {{{clk_port}}}]\n"
+                    f"set_input_delay 2.000 -clock [get_clocks {clk_port}] [all_inputs -no_clocks]\n"
+                    f"set_output_delay 2.000 -clock [get_clocks {clk_port}] [all_outputs]\n"
+                )
         
         # Discover and configure multi-corner scenarios
         mcmm_corners = {}
@@ -1346,20 +1366,21 @@ class SilisIDE(QMainWindow):
 
         if mcmm_corners and len(mcmm_corners) > 1:
             # --- MCMM: define corners + per-corner liberty (standard cells) ---
-            sta_mcmm_defs = f"define_corners {' '.join(mcmm_corners.keys())}\n"
+            sta_mcmm_defs = "catch { suppress_msg 1140 }\n"
+            sta_mcmm_defs += f"define_corners {' '.join(mcmm_corners.keys())}\n"
             for c_name, c_lib in mcmm_corners.items():
                 sta_mcmm_defs += f'read_liberty -corner {c_name} "{c_lib}"\n'
 
-            # Macro libs: emit only once per unique lib path (dedup).
-            # Standalone OpenSTA applies global read_liberty across all active corners.
-            # Reading the same TT SRAM liberty multiple times with -corner causes STA-1140
-            # "library already exists" warnings and shadows timing models.
+            # In multi-corner mode, OpenSTA enforces -corner on all read_liberty commands (Error 103).
+            # When mapping a typical/TT macro library across multiple corners, read for each corner
+            # while suppressing duplicate library warning 1140.
             seen_libs: set = set()
             for lib in macro_lib_paths:
                 if lib in seen_libs:
                     continue
                 seen_libs.add(lib)
-                macro_lib_cmds_sta += f'read_liberty "{lib}"\n'
+                for c_name in mcmm_corners.keys():
+                    macro_lib_cmds_sta += f'read_liberty -corner {c_name} "{lib}"\n'
 
             # Standalone OpenSTA MCMM API (NOT OpenROAD -scene API):
             #   read_sdc is called once — constraints apply to all corners.
@@ -3174,7 +3195,12 @@ if __name__ == "__main__":
     import sys
     from core.cli.main import handle_cli
     if handle_cli(sys.argv[1:]):
-        sys.exit(0)
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
 
     # Enable OpenGL context sharing & pre-import WebEngine before QApplication
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)

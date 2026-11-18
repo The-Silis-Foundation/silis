@@ -84,7 +84,9 @@ class Project:
         self.constr_dir = os.path.join(self.root_dir, "constr")
         self.power_dir = os.path.join(self.root_dir, "power")
         self.io_dir = os.path.join(self.root_dir, "io")
-        self.source_dir = self.rtl_dir if os.path.isdir(self.rtl_dir) else os.path.join(self.root_dir, "source")
+        self.legacy_source_dir = os.path.join(self.root_dir, "source")
+        has_rtl_files = os.path.isdir(self.rtl_dir) and any(os.scandir(self.rtl_dir))
+        self.source_dir = self.rtl_dir if has_rtl_files else (self.legacy_source_dir if os.path.isdir(self.legacy_source_dir) else self.rtl_dir)
         self.netlist_dir = os.path.join(self.root_dir, "netlist")
         self.reports_dir = os.path.join(self.root_dir, "reports")
         self.results_dir = os.path.join(self.root_dir, "results")
@@ -178,7 +180,7 @@ class Project:
         existing = [p for p in self.rtl_files if os.path.isfile(p)]
         if not existing:
             existing_set = set(existing)
-            search_dirs = [d for d in [self.rtl_dir, self.source_dir] if os.path.isdir(d)]
+            search_dirs = [d for d in [self.rtl_dir, self.source_dir, os.path.join(self.root_dir, "source")] if os.path.isdir(d)]
             for sdir in search_dirs:
                 for pat in ("*.v", "*.sv", "*.vhd", "*.vhdl"):
                     for f in glob.glob(os.path.join(sdir, pat)):

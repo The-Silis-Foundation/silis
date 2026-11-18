@@ -474,11 +474,51 @@ if {[info commands gds] eq ""} {
 
         if os.path.isfile(def_path):
             print(f"\n[ASIC BACKEND] Resuming design checkpoint: {def_path}")
+            if not os.path.isfile(sdc_path):
+                clk_port = "clk"
+                try:
+                    from silis.core.sdk.sdc import extract_netlist_clock_ports
+                    cand_v = os.path.join(root, "netlist", f"{base}_netlist.v")
+                    if not os.path.isfile(cand_v):
+                        cand_v = os.path.join(root, "source", f"{base}.v")
+                    if os.path.isfile(cand_v):
+                        cand_clks = extract_netlist_clock_ports(cand_v, base)
+                        if cand_clks:
+                            clk_port = cand_clks[0]
+                except Exception:
+                    pass
+                os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
+                with open(sdc_path, "w") as f_sdc:
+                    f_sdc.write(
+                        f"# Auto-generated SDC constraint matching netlist clock port\n"
+                        f"create_clock -name {clk_port} -period 10.0 [get_ports {{{clk_port}}}]\n"
+                        f"set_input_delay 2.0 -clock {clk_port} [all_inputs -no_clocks]\n"
+                        f"set_output_delay 2.0 -clock {clk_port} [all_outputs]\n"
+                    )
+
             m_lefs, m_libs = self._get_macro_lefs_and_libs()
             io_lefs = self._get_io_lefs()
             io_lef_cmd = "".join(f'read_lef "{l}"\n' for l in io_lefs)
             macro_lef_cmd = "".join(f'read_lef "{l}"\n' for l in m_lefs)
-            macro_lib_cmd = "".join(f'read_liberty "{l}"\n' for l in m_libs)
+
+            target_corners = getattr(self.ide, 'selected_mcmm_corners', {}) if hasattr(self, 'ide') else {}
+            if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk:
+                target_corners = self.ide.active_pdk.get('corners', {})
+
+            if target_corners and len(target_corners) > 1:
+                corner_names = list(target_corners.keys())
+                lib_cmd = "catch { suppress_message STA 1140 }\n"
+                lib_cmd += f"define_corners {' '.join(corner_names)}\n"
+                for c_name, lib_path in target_corners.items():
+                    lib_cmd += f'read_liberty -corner {c_name} "{lib_path}"\n'
+                for lib in m_libs:
+                    for c_name in corner_names:
+                        lib_cmd += f'read_liberty -corner {c_name} "{lib}"\n'
+            else:
+                lib_cmd = f'read_liberty "{self.ide.active_pdk["lib"]}"\n'
+                for lib in m_libs:
+                    lib_cmd += f'read_liberty "{lib}"\n'
+
             upf_file = os.path.join(root, "power", "design.upf").replace("\\", "/")
             if not os.path.isfile(upf_file):
                 upf_file = os.path.join(root, "design.upf").replace("\\", "/")
@@ -491,8 +531,7 @@ if {{[file exists "{upf_file}"]}} {{ read_upf -file "{upf_file}" }}
             tcl = f"""set_thread_count [exec nproc]
 read_lef "{self.ide.active_pdk['tlef']}"
 read_lef "{self.ide.active_pdk['lef']}"
-{io_lef_cmd}{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
-{macro_lib_cmd}make_fake_io_site -name IO_SITE -width 1 -height 200
+{io_lef_cmd}{macro_lef_cmd}{lib_cmd}make_fake_io_site -name IO_SITE -width 1 -height 200
 make_fake_io_site -name IO_CSITE -width 200 -height 204
 read_def "{def_path}"
 read_sdc "{sdc_path}"
@@ -522,13 +561,48 @@ read_sdc "{sdc_path}"
         io_lefs = self._get_io_lefs()
         io_lef_cmd = "".join(f'read_lef "{l}"\n' for l in io_lefs)
         macro_lef_cmd = "".join(f'read_lef "{l}"\n' for l in m_lefs)
-        macro_lib_cmd = "".join(f'read_liberty "{l}"\n' for l in m_libs)
+
+        if not os.path.isfile(sdc):
+            clk_port = "clk"
+            try:
+                from silis.core.sdk.sdc import extract_netlist_clock_ports
+                if os.path.isfile(netlist):
+                    cand_clks = extract_netlist_clock_ports(netlist, base)
+                    if cand_clks:
+                        clk_port = cand_clks[0]
+            except Exception:
+                pass
+            os.makedirs(os.path.dirname(sdc), exist_ok=True)
+            with open(sdc, "w") as f_sdc:
+                f_sdc.write(
+                    f"# Auto-generated SDC constraint matching netlist clock port\n"
+                    f"create_clock -name {clk_port} -period 10.0 [get_ports {{{clk_port}}}]\n"
+                    f"set_input_delay 2.0 -clock {clk_port} [all_inputs -no_clocks]\n"
+                    f"set_output_delay 2.0 -clock {clk_port} [all_outputs]\n"
+                )
+
+        target_corners = getattr(self.ide, 'selected_mcmm_corners', {}) if hasattr(self, 'ide') else {}
+        if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk:
+            target_corners = self.ide.active_pdk.get('corners', {})
+
+        if target_corners and len(target_corners) > 1:
+            corner_names = list(target_corners.keys())
+            lib_cmd = "catch { suppress_message STA 1140 }\n"
+            lib_cmd += f"define_corners {' '.join(corner_names)}\n"
+            for c_name, lib_path in target_corners.items():
+                lib_cmd += f'read_liberty -corner {c_name} "{lib_path}"\n'
+            for lib in m_libs:
+                for c_name in corner_names:
+                    lib_cmd += f'read_liberty -corner {c_name} "{lib}"\n'
+        else:
+            lib_cmd = f'read_liberty "{self.ide.active_pdk["lib"]}"\n'
+            for lib in m_libs:
+                lib_cmd += f'read_liberty "{lib}"\n'
 
         init_tcl = f"""set_thread_count [exec nproc]
 read_lef "{self.ide.active_pdk['tlef']}"
 read_lef "{self.ide.active_pdk['lef']}"
-{io_lef_cmd}{macro_lef_cmd}read_liberty "{self.ide.active_pdk['lib']}"
-{macro_lib_cmd}read_verilog "{netlist}"
+{io_lef_cmd}{macro_lef_cmd}{lib_cmd}read_verilog "{netlist}"
 link_design {base}
 read_sdc "{sdc}"
 
@@ -896,6 +970,17 @@ close $fp
             while self.backend.pat_worker.isRunning():
                 self.app.processEvents()
                 time.sleep(0.05)
+            while not self.ide.queue.empty():
+                src, msg = self.ide.queue.get()
+                print(f"{src} {msg}")
+            rpt_base = self.ide.get_context()[1] or "design"
+            rpt_file = os.path.join(reports_dir, f"{rpt_base}_pat_report.rpt")
+            if os.path.isfile(rpt_file):
+                print(f"[SUCCESS] Step {step_name} completed.")
+                return True
+            else:
+                print(f"[ERR] Step {step_name} failed: report {rpt_file} not generated.")
+                return False
         elif hasattr(self.backend, 'magic_worker') and self.backend.magic_worker:
             while self.backend.magic_worker.isRunning():
                 self.app.processEvents()

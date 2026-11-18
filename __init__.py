@@ -50,6 +50,7 @@ from sdk import (
     PowerDomain,
     IsolationRule,
     LevelShifterRule,
+    SDCBuilder,
     PowerSwitch,
     PowerStateTable,
     TimingGraph,

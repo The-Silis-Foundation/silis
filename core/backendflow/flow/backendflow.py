@@ -1124,7 +1124,24 @@ class BackendWidget(QWidget):
             sdc_path = os.path.join(proj_root, "source", f"{base}.sdc").replace("\\", "/")
             if not os.path.exists(sdc_path):
                 sdc_files = glob.glob(os.path.join(proj_root, "source", "*.sdc"))
-                if sdc_files: sdc_path = sdc_files[0]
+                if sdc_files:
+                    sdc_path = sdc_files[0]
+                else:
+                    clk_port = "clk"
+                    try:
+                        from silis.core.sdk.sdc import extract_netlist_clock_ports
+                        cand_v = os.path.join(proj_root, "netlist", f"{base}_netlist.v")
+                        if not os.path.isfile(cand_v):
+                            cand_v = os.path.join(proj_root, "source", f"{base}.v")
+                        if os.path.isfile(cand_v):
+                            cand_clks = extract_netlist_clock_ports(cand_v, base)
+                            if cand_clks:
+                                clk_port = cand_clks[0]
+                    except Exception:
+                        pass
+                    os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
+                    with open(sdc_path, 'w') as f:
+                        f.write(f"create_clock -name {clk_port} -period 10.0 [get_ports {{{clk_port}}}]\nset_input_delay 2.0 -clock {clk_port} [all_inputs -no_clocks]\nset_output_delay 2.0 -clock {clk_port} [all_outputs]\n")
                 
             tcl_path = os.path.join(proj_root, "pat_mcmm.tcl").replace("\\", "/")
             multi_cfg = self.active_pdk.get('multi_corner', {})
@@ -1157,12 +1174,20 @@ class BackendWidget(QWidget):
             tcl_lines.append(f'read_def "{def_abs_path}"')
 
             corner_names = list(target_corners.keys())
+            tcl_lines.append("catch { suppress_message STA 1140 }")
             tcl_lines.append("define_corners " + " ".join(corner_names))
 
             for c_name, lib_path in target_corners.items():
                 tcl_lines.append(f'read_liberty -corner {c_name} "{lib_path}"')
 
+            seen_mlibs = set()
+            macro_libs = []
             for lib in self._get_macro_files("lib"):
+                if lib not in seen_mlibs:
+                    seen_mlibs.add(lib)
+                    macro_libs.append(lib)
+
+            for lib in macro_libs:
                 for c_name in corner_names:
                     tcl_lines.append(f'read_liberty -corner {c_name} "{lib}"')
 
@@ -1183,7 +1208,7 @@ class BackendWidget(QWidget):
                 'puts "PAT_INSTS: $inst_count"',
                 'puts "PAT_AREA: $total_area"',
                 'puts "PAT_POWER_START"',
-                "report_power",
+                f"report_power -corner {corner_names[0]}" if corner_names else "report_power",
                 'puts "PAT_POWER_END"'
             ])
 
@@ -1571,7 +1596,22 @@ ________________________________________________________________________________
             else:
                 sdc_path = os.path.join(proj_root, "constr", f"{ctx}.sdc") if os.path.isdir(os.path.join(proj_root, "constr")) else os.path.join(proj_root, "source", f"{ctx}.sdc")
                 os.makedirs(os.path.dirname(sdc_path), exist_ok=True)
-                with open(sdc_path, 'w') as f: f.write("create_clock -name clk -period 10.0 [get_ports clk]\nset_input_delay 2.0 -clock clk [all_inputs -no_clocks]\nset_output_delay 2.0 -clock clk [all_outputs]\n")
+                clk_port = "clk"
+                try:
+                    from silis.core.sdk.sdc import extract_netlist_clock_ports
+                    if os.path.isfile(netlist_path):
+                        cand_clks = extract_netlist_clock_ports(netlist_path, ctx)
+                        if cand_clks:
+                            clk_port = cand_clks[0]
+                except Exception:
+                    pass
+                with open(sdc_path, 'w') as f:
+                    f.write(
+                        f"# Auto-generated SDC constraint matching netlist clock port\n"
+                        f"create_clock -name {clk_port} -period 10.0 [get_ports {{{clk_port}}}]\n"
+                        f"set_input_delay 2.0 -clock {clk_port} [all_inputs -no_clocks]\n"
+                        f"set_output_delay 2.0 -clock {clk_port} [all_outputs]\n"
+                    )
             tcl_content = f"""set_thread_count [exec nproc]
 if {{[info exists ::env(APPDIR)] && [file exists "$::env(APPDIR)/assets/pdk/third-party/pdks"]}} {{
     set silis_pdk_root "$::env(APPDIR)/assets/pdk/third-party/pdks"
@@ -1605,7 +1645,7 @@ read_lef "{self._make_portable_pdk_path(self.active_pdk['lef'])}"
                 # OpenROAD / OpenSTA requires -corner on every read_liberty once define_corners is called.
                 # When using a single typical/TT macro lib across multiple PVT corners, suppress duplicate
                 # warning STA-1140 to keep log clean.
-                tcl_content += "suppress_message STA 1140\n"
+                tcl_content += "catch { suppress_message STA 1140 }\n"
                 tcl_content += f"define_corners {' '.join(corner_names)}\n"
                 for c_name, lib_path in target_corners.items():
                     tcl_content += f'read_liberty -corner {c_name} "{self._make_portable_pdk_path(lib_path)}"\n'
@@ -2148,9 +2188,28 @@ foreach net [$blk getNets] {
             
             # Restore STA context (Liberty & SDC)
             if self.active_pdk:
-                self.send_command_internal(f"read_liberty \"{self.active_pdk['lib']}\"")
-                for lib in self._get_macro_files("lib"):
-                    self.send_command_internal(f"read_liberty \"{lib}\"")
+                target_corners = getattr(self, 'selected_mcmm_corners', {})
+                if not target_corners:
+                    target_corners = self.active_pdk.get('corners', {})
+                if target_corners and len(target_corners) > 1:
+                    corner_names = list(target_corners.keys())
+                    self.send_command_internal("catch { suppress_message STA 1140 }")
+                    self.send_command_internal(f"define_corners {' '.join(corner_names)}")
+                    for c_name, lib_path in target_corners.items():
+                        self.send_command_internal(f'read_liberty -corner {c_name} "{self._make_portable_pdk_path(lib_path)}"')
+                    seen_mlibs = set()
+                    for lib in self._get_macro_files("lib"):
+                        if lib not in seen_mlibs:
+                            seen_mlibs.add(lib)
+                            for c_name in corner_names:
+                                self.send_command_internal(f'read_liberty -corner {c_name} "{self._make_portable_pdk_path(lib)}"')
+                else:
+                    self.send_command_internal(f"read_liberty \"{self.active_pdk['lib']}\"")
+                    seen_mlibs = set()
+                    for lib in self._get_macro_files("lib"):
+                        if lib not in seen_mlibs:
+                            seen_mlibs.add(lib)
+                            self.send_command_internal(f"read_liberty \"{lib}\"")
             
             ctx = self.ide.get_context()[0] or "top"
             import glob
