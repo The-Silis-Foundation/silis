@@ -1,17 +1,17 @@
 # Governance Charter — Silis
 
-Developed by **Jerome Antony Robin**, this repository follows a **BDFL Governance model**.  
-Co-developed by **Eatheshwar**, **Venkat**, and **Adhil**.
+Founded and developed by **Jerome Antony Robin** (Lead Developer & BDFL).  
+Co-developed with **Eatheshwar** (Developer).
 
 *Silis took 11 months from POC to pre-release.*
 
 ---
 
-## 1. Benevolent Dictator for Life (BDFL)
+## 1. Founder & Benevolent Dictator for Life (BDFL)
 
-**Jerome Antony Robin** is the Lead and BDFL of Silis.
+**Jerome Antony Robin** is the Founder, Lead Developer, and BDFL of Silis and The Silis Foundation.
 
-As BDFL, Jerome Antony Robin holds final authority and decision-making power over:
+As Founder and BDFL, Jerome Antony Robin holds final authority and decision-making power over:
 - Technical architecture and semiconductor invariant enforcement
 - Physical design algorithms and downstream EDA tool integration (RTL to GDSII flow)
 - User experience philosophy, design systems, and typography
@@ -29,9 +29,9 @@ While discussion, feedback, and peer review are encouraged, Silis does not opera
 
 ---
 
-## 3. Co-Developers & Maintainers
+## 3. Developers & Maintainers
 
-Silis is co-developed with **Eatheshwar**, **Venkat**, and **Adhil**. See [MAINTAINERS.md](MAINTAINERS.md) for details.
+Silis is co-developed with **Eatheshwar** (Developer). See [MAINTAINERS.md](MAINTAINERS.md) for details.
 
 ---
 

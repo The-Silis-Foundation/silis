@@ -44,8 +44,8 @@
 </p>
 
 <p align="center">
-  Developed by <strong>Jerome Antony Robin</strong>. This repository follows a <strong>BDFL Governance model</strong>.<br>
-  Co-developed by <strong>Eatheshwar</strong>, <strong>Venkat</strong>, and <strong>Adhil</strong>.<br>
+  Founded &amp; Developed by <strong>Jerome Antony Robin</strong> (Lead Developer &amp; BDFL).<br>
+  Co-developed with <strong>Eatheshwar</strong>.<br>
   <em>Silis took 11 months from POC to pre-release.</em>
 </p>
 

@@ -1,14 +1,14 @@
 # Maintainers — Silis
 
-Developed by **Jerome Antony Robin**, this repository follows a **BDFL Governance model**.  
-Co-developed by **Eatheshwar**, **Venkat**, and **Adhil**.
+Founded and developed by **Jerome Antony Robin** (Lead Developer & BDFL).  
+Co-developed with **Eatheshwar** (Developer).
 
 *Silis took 11 months from POC to pre-release.*
 
 ---
 
 ## Jerome Antony Robin  
-**Lead & Benevolent Dictator for Life (BDFL)**
+**Founder, Lead Developer & Benevolent Dictator for Life (BDFL)**
 
 ### Focus & Responsibilities
 - **Core Architecture**: Physical design engine, geometric quantization, DRC pre-flight contracts, and RTL-to-GDSII flow
@@ -19,11 +19,9 @@ Co-developed by **Eatheshwar**, **Venkat**, and **Adhil**.
 
 ---
 
-## Co-Developers
+## Developers
 Silis is co-developed with:
-- **Eatheshwar**
-- **Venkat**
-- **Adhil**
+- **Eatheshwar** (Developer)
 
 ---
 
