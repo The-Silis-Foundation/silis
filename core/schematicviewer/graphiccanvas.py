@@ -127,11 +127,6 @@ class SilisSchematic(QWidget):
             js = f"if (typeof setSchematicWireValues === 'function') {{ setSchematicWireValues({json.dumps(updates)}); }}"
             self.native_fast_view.page().runJavaScript(js)
 
-    def clear_wire_values(self):
-        self.ensure_engine()
-        if hasattr(self, 'native_fast_view') and hasattr(self.native_fast_view, 'page'):
-            self.native_fast_view.page().runJavaScript("if (typeof clearSchematicWireValues === 'function') { clearSchematicWireValues(); }")
-
     def highlight_net_or_cell(self, target_name):
         if not target_name: return
         self.ensure_engine()
@@ -176,9 +171,6 @@ class SchematicTab(QWidget):
         js = f"if (typeof updateNavButtons === 'function') updateNavButtons({str(can_back).lower()}, {str(can_forward).lower()});"
         if hasattr(self.view, 'native_fast_view') and hasattr(self.view.native_fast_view, 'page'):
             self.view.native_fast_view.page().runJavaScript(js)
-
-    def on_instance_selected(self, index):
-        pass
 
     def go_home(self):
         self.history_stack.clear()
@@ -250,15 +242,7 @@ class SchematicTab(QWidget):
                 
             self.view.load_json(path, module, mode)
 
-    def toggle_mode(self):
-        if 0 <= self.current_idx < len(self.history_stack):
-            entry = self.history_stack[self.current_idx]
-            new_mode = "gate" if entry["mode"] in ["top", "block"] else "block"
-            self.history_stack = self.history_stack[:self.current_idx]
-            self.current_idx -= 1
-            self.on_module_clicked(entry["module"], force_mode=new_mode)
-
-    def on_module_clicked(self, module_name, force_mode=None):
+    def on_module_clicked(self, module_name):
         # Always maintain block schematic view
         mode = "block"
         self.history_stack = self.history_stack[:self.current_idx + 1]

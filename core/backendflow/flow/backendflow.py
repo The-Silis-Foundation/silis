@@ -19,7 +19,6 @@ from pdkmanagers.pdk.manager import SSAForge, PDKSelector
 from config import USER_SETTINGS, THEMES
 from editor.editor import ScintillaEditor
 from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
-from backendflow.floorplanner.ioplacer import IOPlacerDialog
 from synthesisscripts.synthesisthread import ReportEngine
 from backendflow.signoff_flow import SignoffDiagnosticDialog, SignoffRunnerWorker
 
@@ -1672,19 +1671,6 @@ puts "SILIS_INIT_DONE"
             else:
                 self.floorplanner_dialog.show()
             return
-        elif step_name == "Tapcells":
-            tap_cmd = SSAForge.get_tap_cmd(pdk_name, lib_path)
-            cmd = load_template("tapcells.tcl", {"tap_cmd": tap_cmd, "write_cmd": write_cmd})
-        elif step_name == "PDN":
-            cmd = load_template("pdn.tcl", {"write_cmd": write_cmd})
-        elif step_name == "IO Pins":
-            if not bypass_prompt and not getattr(self.ide, 'headless', False):
-                self.ioplacer_dialog = IOPlacerDialog(self.ide.project_config, self.pdk_mgr, self)
-                self.ioplacer_dialog.show()
-                return
-            pin_cfg_cand = os.path.join(proj_root, "io", "pin_order.cfg").replace("\\", "/")
-            extra_cfg = f' -cfg "{pin_cfg_cand}"' if os.path.isfile(pin_cfg_cand) else ""
-            cmd = load_template("io_pins.tcl", {"write_cmd": write_cmd, "extra_cfg": extra_cfg})
         elif step_name == "Place":
             cmd = load_template("place.tcl", {"write_cmd": write_cmd})
         elif step_name == "CTS":
@@ -1956,16 +1942,6 @@ foreach net [$blk getNets] {
             self.proc.write(f"{cmd}\n".encode())
         else: self.term_log.append(f"[ERR] Backend not running. Click Reset.")
 
-    def replay_session_with_script(self, replay_script_path):
-        """
-        Seamlessly resets the OpenROAD engine and executes the compiled replay script
-        which plays back the user's customized earlier flow steps (Init, Floorplan,
-        Tapcells, PDN, user terminal commands) followed by the new I/O placement script.
-        """
-        self.term_log.append(f"\n[SYS] Preemptive Replay: Seamlessly replaying recorded session with tuned floorplan...")
-        self.reset_backend()
-        self.pending_init = f'source "{replay_script_path}"'
-    
     def update_view(self):
         try:
             self.fast_peeker.show_insts = self.chk_inst.isChecked(); self.fast_peeker.show_pins = self.chk_pins.isChecked()

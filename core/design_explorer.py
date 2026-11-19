@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTreeView, QLineEdit,
     QHeaderView, QMenu, QDialog, QListWidget, QListWidgetItem, QLabel
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QModelIndex, QAbstractItemModel
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
 
 class HierarchyNode:
@@ -427,14 +427,6 @@ class DesignExplorerPanel(QWidget):
                 self.goToSource.emit(node.file_path, node.line, node.col)
             if node.decl_name:
                 self.openSchematic.emit(node.decl_name)
-
-    def on_module_item_double_clicked(self, item):
-        data = item.data(Qt.ItemDataRole.UserRole)
-        if data:
-            mod_name, f_path, line, col = data
-            if f_path and os.path.exists(f_path):
-                self.goToSource.emit(f_path, line, col)
-            self.openSchematic.emit(mod_name)
 
     def show_context_menu(self, pos):
         index = self.hier_tree.indexAt(pos)

@@ -10,9 +10,8 @@ from PyQt6.QtGui import *
 from backendflow.siliconpeeker.peeker import DEFParser
 
 import hashlib
-from backendflow.floorplanner.ioplacer import (
-    PAD_CELL_MAP, PAD_CELL_DISPLAY_LIST, natural_sort_key, snap_to_grid,
-    PinItem, EdgeConstraintBox
+from backendflow.floorplanner.io_types import (
+    natural_sort_key, snap_to_grid, PinItem, parse_verilog_netlist_pins
 )
 from backendflow.floorplanner.power_domain_manager import (
     PowerDomain, PowerDomainManager, BoundaryClampTableDialog
@@ -2265,8 +2264,7 @@ class InteractiveFloorplannerWidget(QDialog):
 
         # Load pins from synthesized netlist / RTL sources if not already populated
         if not self.pins_data and proj_root:
-            from backendflow.floorplanner.ioplacer import IOPlacerDialog
-            v_pins = IOPlacerDialog._parse_verilog_netlist_pins(self, proj_root)
+            v_pins = parse_verilog_netlist_pins(self.project_config, proj_root)
             if v_pins:
                 self.pins_data = v_pins
 
@@ -3674,8 +3672,8 @@ class InteractiveFloorplannerWidget(QDialog):
             num_pads = len(self.pins_data)
             cw = self.core_rect.width() if hasattr(self, 'core_rect') and self.core_rect and self.core_rect.width() > 0 else 700.0
             ch = self.core_rect.height() if hasattr(self, 'core_rect') and self.core_rect and self.core_rect.height() > 0 else 1000.0
-            dw = self.die_rect.width()
-            dh = self.die_rect.height()
+            dw = self.die_rect.width() if hasattr(self, 'die_rect') and self.die_rect else 1000.0
+            dh = self.die_rect.height() if hasattr(self, 'die_rect') and self.die_rect else 1000.0
 
             # Optimal minimal die solution by adjusting pads around the 4 edges
             strat = getattr(self, "pad_strategy", "single")
@@ -4562,7 +4560,6 @@ class InteractiveFloorplannerWidget(QDialog):
                         pass
             if not pins_found and hasattr(self, 'top_module') and self.top_module and proj_root:
                 try:
-                    from backendflow.floorplanner.ioplacer import natural_sort_key
                     netlist_dir = os.path.join(proj_root, "netlist")
                     candidates = [
                         os.path.join(netlist_dir, f"{self.top_module}_netlist.v"),
@@ -6616,11 +6613,6 @@ class InteractiveFloorplannerWidget(QDialog):
         new_seed = random.randint(1, 99999)
         self.sp_autoplace_seed.setValue(new_seed)
 
-    def cancel_autoplace_preview(self):
-        """Discards preview, hides HUD and restores original snapshot."""
-        self.hud_autoplace.setVisible(False)
-        self.on_restore_regions_clicked()
-
     def _extract_standard_cell_area(self):
         """Discovers and parses standard cell and module area reports from synthesis."""
         total_std_area = getattr(self, 'total_std_cell_area', 0.0)
@@ -6663,77 +6655,6 @@ class InteractiveFloorplannerWidget(QDialog):
 
         return total_std_area
 
-    def on_fit_core_to_density_clicked(self):
-        """Mathematically fits core width and height to achieve the target density."""
-        target_dens = self.sp_target_core_density.value() / 100.0
-        total_std_area = getattr(self, 'total_std_cell_area', 0.0)
-        
-        # Fallback: query project context and reports if total_std_cell_area is not populated
-        if total_std_area <= 0.0:
-            total_std_area = self._extract_standard_cell_area()
-
-        # Calculate macro area
-        macro_area = 0.0
-        for it in self.scene.items():
-            if isinstance(it, MacroItem):
-                macro_area += it.rect().width() * it.rect().height()
-
-        # Guard against zero or uninitialized areas
-        if total_std_area <= 0.0 and macro_area <= 0.0:
-            QMessageBox.warning(
-                self,
-                "Cannot Fit Core",
-                "Standard cell and macro areas are 0 or synthesis sizes report has not been generated yet.\n\n"
-                "Please synthesize or run backend initialization first, or specify die dimensions manually."
-            )
-            return
-
-        req_logic_area = total_std_area / max(0.10, min(0.95, target_dens))
-        req_core_area = (req_logic_area + macro_area) * 1.15  # 15% routing reserve
-
-        side = math.sqrt(req_core_area)
-        # Snap to Sky130 row height multiple (min 50.0 um to prevent zero or sub-margin collapse)
-        row_h = 2.72
-        side_h = max(50.0, math.ceil(side / row_h) * row_h)
-        side_w = side_h
-
-        ml = self.sp_marg_l.value(); mr = self.sp_marg_r.value()
-        mb = self.sp_marg_b.value(); mt = self.sp_marg_t.value()
-
-        die_w = max(side_w + ml + mr, 100.0)
-        die_h = max(side_h + mb + mt, 100.0)
-
-        self.sp_die_w.setValue(round(die_w, 1))
-        self.sp_die_h.setValue(round(die_h, 1))
-        self._user_custom_dimensions = True
-        self.init_floorplan()
-
-    def auto_expand_core(self, new_core_w: float, new_core_h: float):
-        """Expands the core area and re-runs auto-placement."""
-        cur_die_w = self.die_rect.width()
-        cur_die_h = self.die_rect.height()
-        margin_x = 20.0
-        margin_y = 20.0
-
-        new_die_w = max(cur_die_w, new_core_w + (margin_x * 2))
-        new_die_h = max(cur_die_h, new_core_h + (margin_y * 2))
-
-        self.core_rect = QRectF(margin_x, margin_y, new_core_w, new_core_h)
-        self.die_rect = QRectF(0, 0, new_die_w, new_die_h)
-
-        if hasattr(self, "sp_die_w"):
-            self.sp_die_w.setValue(new_die_w)
-            self.sp_die_h.setValue(new_die_h)
-        if hasattr(self, "sp_core_x"):
-            self.sp_core_x.setValue(margin_x)
-            self.sp_core_y.setValue(margin_y)
-            self.sp_core_w.setValue(new_core_w)
-            self.sp_core_h.setValue(new_core_h)
-
-        self._user_custom_dimensions = True
-        self.init_floorplan()
-        # Re-trigger auto-placement inside newly expanded canvas
-        self.on_autoplace_regions_clicked()
 
 
     def on_spinbox_changed(self):

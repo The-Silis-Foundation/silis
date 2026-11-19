@@ -51,7 +51,7 @@ from editor.editor import CommandPalette, FileSearchPalette, VSCodeEditorTabs, S
 from terminal.terminal import VSCodeTerminalWidget
 from pdkmanagers.pdk.manager import SSAForge, PDKManager, PDKSelector
 from pdkmanagers.volare import VolareManagerWidget
-from backendflow.siliconpeeker.peeker import DEFParser, FastSiliconPeeker, SiliconPeeker
+from backendflow.siliconpeeker.peeker import DEFParser, FastSiliconPeeker
 from signalpeeker.code import SignalPeeker
 from schematicviewer.graphiccanvas import SchematicTab
 from synthesisscripts.synthesisthread import SynthesisTab
@@ -2485,10 +2485,6 @@ exit
             self.backend_widget.viz_tabs.setCurrentIndex(1)
             self.current_file = path; self.lbl_proj.setText(os.path.basename(path))
 
-    def handle_terminal_input(self):
-        """Legacy shim — real input now comes from VSCodeTerminalWidget via handle_terminal_cmd."""
-        pass
-
     def handle_terminal_cmd(self, cmd):
         """Called by VSCodeTerminalWidget after the user presses Enter."""
         terminal = self.tab_compile.terminal
@@ -3094,11 +3090,6 @@ exit
                 except: pass
         return root
 
-    def open_waves(self):
-        if hasattr(self, 'tab_compile') and hasattr(self.tab_compile, 'bottom_tabs'):
-            self.tab_compile.bottom_tabs.setCurrentIndex(2)
-        self.tab_waves.auto_load()
-
     def harvest_logs(self, root):
         p = os.path.join(root, "reports/synthesis.log")
         if os.path.exists(p):
@@ -3183,11 +3174,6 @@ exit
             elif not had_items and self.queue_timer.interval() != 200:
                 self.queue_timer.setInterval(200)
 
-    def load_violation_log(self): 
-        if hasattr(self, 'tab_compile') and hasattr(self.tab_compile, 'bottom_tabs'):
-            self.tab_compile.bottom_tabs.setCurrentIndex(1)
-        self.harvest_logs(self.get_proj_root(self.get_context()[1] or "design"))
-        
     def check_dependencies(self):
         if not shutil.which("sta"): self.log_system("OpenSTA not found!", "ERR")
 
