@@ -8,7 +8,7 @@ import os
 import re
 from typing import Dict, Any, List, Optional
 from PyQt6.QtCore import Qt, QRectF, QPointF
-from PyQt6.QtGui import QColor, QPen, QBrush, QTransform, QFont
+from PyQt6.QtGui import QColor, QPen, QBrush, QTransform
 from PyQt6.QtWidgets import (
     QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem
 )

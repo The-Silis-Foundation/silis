@@ -5,11 +5,6 @@ from PyQt6.QtSvgWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-try:
-    import qt_setup
-except ImportError:
-    pass
-
 _sch_dir = os.path.dirname(os.path.abspath(__file__))
 if _sch_dir not in sys.path:
     sys.path.append(_sch_dir)

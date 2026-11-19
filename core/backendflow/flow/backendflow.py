@@ -1,7 +1,6 @@
 import os
 import re
 import subprocess
-import time
 import shutil
 import glob
 import threading

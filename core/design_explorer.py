@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QMenu, QDialog, QListWidget, QListWidgetItem, QLabel
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon
 
 class HierarchyNode:
     def __init__(self, name, node_type, file_path=None, line=1, col=1, decl_name=None, parent=None):
