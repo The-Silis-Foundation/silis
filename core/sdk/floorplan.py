@@ -279,6 +279,7 @@ class Floorplan:
         else:
             self.margins = Margins(20.0, 20.0, 20.0, 20.0)
         self.macros: Dict[str, MacroInstance] = {}
+        self.regions: Dict[str, Dict[str, Any]] = {}
         self.site_row_height: float = self._resolve_site_row_height()
         self.manufacturing_grid: float = self._resolve_mfg_grid()
 
@@ -485,6 +486,75 @@ class Floorplan:
 
     def get_macros(self) -> List[MacroInstance]:
         return list(self.macros.values())
+
+    def add_region(
+        self,
+        name: str,
+        box: Union[Tuple[float, float, float, float], List[float]],
+        module: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Declares an exclusive voltage fence or hierarchical floorplan region with core containment assertions."""
+        if len(box) != 4:
+            raise ValueError(f"Region box must have 4 coordinates [x1, y1, x2, y2], got {box}")
+        x1, y1, x2, y2 = [legalize_coord(float(c), self.manufacturing_grid) for c in box]
+        cx1, cy1, cx2, cy2 = self.get_core_bbox()
+        if x1 < (cx1 - 0.001) or y1 < (cy1 - 0.001) or x2 > (cx2 + 0.001) or y2 > (cy2 + 0.001):
+            from .exceptions import PlacementContainmentError
+            raise PlacementContainmentError(name, (x1, y1, x2, y2), (cx1, cy1, cx2, cy2), "core")
+        reg_info = {
+            "name": name,
+            "box": (x1, y1, x2, y2),
+            "module": module or name
+        }
+        self.regions[name] = reg_info
+        self._notify_physical_mutation()
+        return reg_info
+
+    def get_regions(self) -> Dict[str, Dict[str, Any]]:
+        return dict(self.regions)
+
+    def _discover_netlist_instances(self) -> List[Tuple[str, str]]:
+        """Parses gate-level netlist to extract all non-macro standard cell instances."""
+        import re, os
+        instances: List[Tuple[str, str]] = []
+        if not self.project:
+            return instances
+        nl_path = self.project.get_netlist() if hasattr(self.project, "get_netlist") else None
+        if not nl_path or not os.path.isfile(nl_path):
+            return instances
+        try:
+            with open(nl_path, "r", errors="ignore") as f:
+                content = f.read()
+            for match in re.finditer(r"\b([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s*\(\s*\.", content):
+                cmaster, iname = match.group(1), match.group(2)
+                if cmaster not in ("module", "input", "output", "wire", "reg", "assign", "always"):
+                    instances.append((iname, cmaster))
+        except Exception:
+            pass
+        return instances
+
+    def _discover_toplevel_ports(self) -> List[Tuple[str, str]]:
+        """Discovers top-level module ports and their directions from netlist."""
+        import re, os
+        ports: List[Tuple[str, str]] = []
+        if not self.project:
+            return ports
+        nl_path = self.project.get_netlist() if hasattr(self.project, "get_netlist") else None
+        if not nl_path or not os.path.isfile(nl_path):
+            return ports
+        try:
+            with open(nl_path, "r", errors="ignore") as f:
+                content = f.read()
+            m_match = re.search(r"module\s+([a-zA-Z0-9_]+)\s*\((.*?)\);", content, re.DOTALL)
+            if m_match:
+                ports_raw = [p.strip() for p in m_match.group(2).split(",") if p.strip()]
+                for p in ports_raw:
+                    dir_match = re.search(r"(input|output|inout)\s+(?:wire\s+|reg\s+)?(?:\[.*?\]\s*)?\b" + re.escape(p) + r"\b", content)
+                    pdir = dir_match.group(1).upper() if dir_match else "INPUT"
+                    ports.append((p, pdir))
+        except Exception:
+            pass
+        return ports
 
     def check_collisions(self, min_routing_tracks_um: float = 15.0) -> None:
         """
@@ -875,7 +945,15 @@ class Floorplan:
 
     def export_def(self, path: str, verify_drc: bool = True) -> None:
         """
-        Exports DEF 5.8 physical design representation with integer DBU units.
+        Exports full production-grade DEF 5.8 physical design representation with integer DBU units.
+        Emits:
+        - DIEAREA
+        - Standard cell site ROWS across the core area
+        - Routing TRACKS for metal layers (li1, met1, met2, met3, met4, met5)
+        - REGIONS & GROUPS for voltage fences & power domains
+        - COMPONENTS for placed macros and unplaced/placed netlist instances
+        - PINS for top-level I/O ports along core perimeter
+        - BLOCKAGES for macro placement halos (DEF 5.8 PLACEMENT RECT)
         Executes strict pre-flight DRC legalization (grid, site rows, core containment, halos).
         """
         import os
@@ -890,23 +968,157 @@ class Floorplan:
         }
         dbu = 1000
         top_name = getattr(self.project, "top_module", "top") if self.project else "top"
+        die_w_dbu = int(round(self.die_width * dbu))
+        die_h_dbu = int(round(self.die_height * dbu))
+
+        cx1, cy1, cx2, cy2 = self.get_core_bbox()
+        cx1_dbu = int(round(cx1 * dbu))
+        cy1_dbu = int(round(cy1 * dbu))
+        cx2_dbu = int(round(cx2 * dbu))
+        cy2_dbu = int(round(cy2 * dbu))
+
         lines = [
             "VERSION 5.8 ;",
             'DIVIDERCHAR "/" ;',
             'BUSBITCHARS "[]" ;',
             f"DESIGN {top_name} ;",
             f"UNITS DISTANCE MICRONS {dbu} ;",
-            f"DIEAREA ( 0 0 ) ( {int(round(self.die_width * dbu))} {int(round(self.die_height * dbu))} ) ;",
+            f"DIEAREA ( 0 0 ) ( {die_w_dbu} {die_h_dbu} ) ;",
         ]
-        if self.macros:
-            lines.append(f"COMPONENTS {len(self.macros)} ;")
-            for inst in self.macros.values():
-                mx = int(round(inst.x * dbu))
-                my = int(round(inst.y * dbu))
-                raw_orient = getattr(inst.orientation, "value", str(inst.orientation))
-                def_orient = orient_to_def.get(raw_orient, "N")
-                lines.append(f"    - {inst.name} {inst.master} + PLACED ( {mx} {my} ) {def_orient} ;")
+
+        # 1. Standard Cell Site Rows (ROWS)
+        site_name = getattr(self, "site_name", "unithd")
+        site_h = self._resolve_site_row_height()
+        site_h_dbu = int(round(site_h * dbu))
+        site_w = 0.460
+        site_w_dbu = int(round(site_w * dbu))
+        
+        core_h_dbu = max(site_h_dbu, cy2_dbu - cy1_dbu)
+        core_w_dbu = max(site_w_dbu, cx2_dbu - cx1_dbu)
+        num_rows = max(1, int(core_h_dbu // site_h_dbu))
+        num_sites = max(1, int(core_w_dbu // site_w_dbu))
+
+        for r_idx in range(num_rows):
+            r_y = cy1_dbu + r_idx * site_h_dbu
+            r_orient = "FS" if (r_idx % 2 == 1) else "N"
+            lines.append(f"ROW ROW_{r_idx} {site_name} {cx1_dbu} {r_y} {r_orient} DO {num_sites} BY 1 STEP {site_w_dbu} 0 ;")
+
+        # 2. Manufacturing Routing Tracks (TRACKS)
+        tracks_spec = [
+            ("X", 230, int(die_w_dbu / 460), 460, "li1"),
+            ("Y", 170, int(die_h_dbu / 340), 340, "li1"),
+            ("X", 170, int(die_w_dbu / 340), 340, "met1"),
+            ("Y", 170, int(die_h_dbu / 340), 340, "met1"),
+            ("X", 230, int(die_w_dbu / 460), 460, "met2"),
+            ("Y", 230, int(die_h_dbu / 460), 460, "met2"),
+            ("X", 340, int(die_w_dbu / 680), 680, "met3"),
+            ("Y", 340, int(die_h_dbu / 680), 680, "met3"),
+            ("X", 460, int(die_w_dbu / 920), 920, "met4"),
+            ("Y", 460, int(die_h_dbu / 920), 920, "met4"),
+            ("X", 1700, int(die_w_dbu / 3400), 3400, "met5"),
+            ("Y", 1700, int(die_h_dbu / 3400), 3400, "met5"),
+        ]
+        for axis, start, count, step, layer in tracks_spec:
+            if count > 0:
+                lines.append(f"TRACKS {axis} {start} DO {count} STEP {step} LAYER {layer} ;")
+
+        # 3. Voltage Fences & Regions (REGIONS & GROUPS)
+        all_regions = dict(getattr(self, "regions", {}))
+        if self.project and hasattr(self.project, "get_power_network"):
+            pnet = self.project.get_power_network()
+            for d in getattr(pnet, "domains", {}).values():
+                d_area = getattr(d, "area_box", None) or getattr(d, "area", None)
+                if d_area and len(d_area) == 4 and not getattr(d, "is_top", False):
+                    all_regions[d.name] = {
+                        "name": d.name,
+                        "box": d_area,
+                        "module": d.elements[0] if getattr(d, "elements", []) else d.name
+                    }
+
+        if all_regions:
+            lines.append(f"REGIONS {len(all_regions)} ;")
+            for rname, rinfo in all_regions.items():
+                box = rinfo["box"]
+                rx1_dbu = int(round(box[0] * dbu))
+                ry1_dbu = int(round(box[1] * dbu))
+                rx2_dbu = int(round(box[2] * dbu))
+                ry2_dbu = int(round(box[3] * dbu))
+                lines.append(f"    - {rname} ( {rx1_dbu} {ry1_dbu} ) ( {rx2_dbu} {ry2_dbu} ) ;")
+            lines.append("END REGIONS")
+
+            lines.append(f"GROUPS {len(all_regions)} ;")
+            for rname, rinfo in all_regions.items():
+                lines.append(f"    - {rname} + REGION {rname} ;")
+            lines.append("END GROUPS")
+
+        # 4. Components (COMPONENTS)
+        comp_lines = []
+        placed_names = set()
+        for inst in self.macros.values():
+            mx = int(round(inst.x * dbu))
+            my = int(round(inst.y * dbu))
+            raw_orient = getattr(inst.orientation, "value", str(inst.orientation))
+            def_orient = orient_to_def.get(raw_orient, "N")
+            comp_lines.append(f"    - {inst.name} {inst.master} + PLACED ( {mx} {my} ) {def_orient} ;")
+            placed_names.add(inst.name)
+
+        # Ingest netlist standard cells as unplaced components
+        netlist_instances = self._discover_netlist_instances()
+        for iname, cmaster in netlist_instances:
+            if iname not in placed_names:
+                comp_lines.append(f"    - {iname} {cmaster} + UNPLACED ;")
+
+        if comp_lines:
+            lines.append(f"COMPONENTS {len(comp_lines)} ;")
+            lines.extend(comp_lines)
             lines.append("END COMPONENTS")
+
+        # 5. Top-level I/O Pins (PINS)
+        ports = self._discover_toplevel_ports()
+        if ports:
+            lines.append(f"PINS {len(ports)} ;")
+            q = max(1, len(ports) // 4)
+            for idx, (pname, pdir) in enumerate(ports):
+                side = idx // q
+                pos = idx % q
+                if side == 0:  # South
+                    px = cx1_dbu + int((pos + 0.5) * (core_w_dbu / q))
+                    py = cy1_dbu
+                    layer = "met2"
+                    orient = "N"
+                elif side == 1:  # East
+                    px = cx2_dbu
+                    py = cy1_dbu + int((pos + 0.5) * (core_h_dbu / q))
+                    layer = "met3"
+                    orient = "W"
+                elif side == 2:  # North
+                    px = cx1_dbu + int((pos + 0.5) * (core_w_dbu / q))
+                    py = cy2_dbu
+                    layer = "met2"
+                    orient = "S"
+                else:  # West
+                    px = cx1_dbu
+                    py = cy1_dbu + int((pos + 0.5) * (core_h_dbu / q))
+                    layer = "met3"
+                    orient = "E"
+                lines.append(f"    - {pname} + NET {pname} + DIRECTION {pdir} + USE SIGNAL")
+                lines.append(f"      + LAYER {layer} ( -140 -140 ) ( 140 140 ) + PLACED ( {px} {py} ) {orient} ;")
+            lines.append("END PINS")
+
+        # 6. Placement Blockages / Halos (BLOCKAGES)
+        blockage_lines = []
+        for inst in self.macros.values():
+            if inst.halo.left > 0 or inst.halo.right > 0 or inst.halo.bottom > 0 or inst.halo.top > 0:
+                hx1 = int(round((inst.x - inst.halo.left) * dbu))
+                hy1 = int(round((inst.y - inst.halo.bottom) * dbu))
+                hx2 = int(round((inst.x + inst.effective_width + inst.halo.right) * dbu))
+                hy2 = int(round((inst.y + inst.effective_height + inst.halo.top) * dbu))
+                blockage_lines.append(f"    - PLACEMENT RECT ( {hx1} {hy1} ) ( {hx2} {hy2} ) ;")
+        if blockage_lines:
+            lines.append(f"BLOCKAGES {len(blockage_lines)} ;")
+            lines.extend(blockage_lines)
+            lines.append("END BLOCKAGES")
+
         lines.append("END DESIGN")
         tmp_path = path + ".tmp"
         with open(tmp_path, "w") as f:

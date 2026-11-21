@@ -1037,16 +1037,16 @@ class Pipeline:
             lines.append("")
 
         # 4. VOLTAGE FENCES & REGIONS
-        # Note: If power domains already declared set_domain_area, do not duplicate them with create_fence to avoid empty Nesterov regions
-        non_pd_regions = [r for r in regions if not ((r.get("name") or "").startswith("PD_") or (r.get("module") or "").startswith("PD_"))]
-        if non_pd_regions:
+        if regions:
             lines.append("# === 4. VOLTAGE FENCES & REGIONS ===")
-            for r in non_pd_regions:
+            for r in regions:
                 mod = r.get("module") or r.get("name")
+                rname = r.get("name") or mod
                 box = r.get("box") or r.get("rect") or r.get("bounds")
                 density = r.get("density", 0.60)
                 halo = r.get("halo", [10.0, 10.0, 10.0, 10.0])
-                lines.append(f'create_fence -module "{mod}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -density {density} -halo {{{halo[0]} {halo[1]} {halo[2]} {halo[3]}}}')
+                if box:
+                    lines.append(f'create_region -module "{rname}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -type exclusive -density {density} -halo {{{halo[0]} {halo[1]} {halo[2]} {halo[3]}}}')
             lines.append("")
 
         # 5. FULL-CHIP I/O PAD RING OR BLOCK PIN GENERATION
@@ -1701,16 +1701,36 @@ class Pipeline:
         for spd in switched_pds:
             grid_n = f"grid_{spd.name.lower()}"
             d_pwr = f"VDD_{spd.name}"
+            # Check domain width to avoid PDN-0185
+            spd_area = getattr(spd, "area_box", None) or getattr(spd, "area", None)
+            if not spd_area or len(spd_area) != 4:
+                for r in regions:
+                    if r.get("name") == spd.name or r.get("module") == spd.name:
+                        spd_area = r.get("box")
+                        break
+            spd_w = (float(spd_area[2]) - float(spd_area[0])) if (spd_area and len(spd_area) == 4) else 100.0
+
             lines.extend([
                 f"\n# Dedicated PDN Grid for {spd.name}",
                 f'set_voltage_domain -name {{{spd.name}}} -power {{{d_pwr}}} -ground {{VSS}} -region {{{spd.name}}}',
                 f'define_pdn_grid -name {{{grid_n}}} -voltage_domains {{{spd.name}}}',
-                f'add_pdn_ring -grid {{{grid_n}}} -layers "met4 met5" -widths {{2.0 2.0}} -spacings {{2.0 2.0}} -core_offsets {{2.0 2.0}}',
-                f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_bot -width {{0.48}} -followpins',
-                f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_top -width {{1.6}} -pitch {{27.2}} -offset {{13.6}}',
-                f'add_pdn_connect -grid {{{grid_n}}} -layers "$_pdn_bot $_pdn_top"',
-                f'add_pdn_connect -grid {{{grid_n}}} -layers "met4 met5"',
             ])
+            if spd_w >= 40.0:
+                lines.extend([
+                    f'add_pdn_ring -grid {{{grid_n}}} -layers "met4 met5" -widths {{2.0 2.0}} -spacings {{2.0 2.0}} -core_offsets {{2.0 2.0}}',
+                    f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_bot -width {{0.48}} -followpins',
+                    f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_top -width {{1.6}} -pitch {{27.2}} -offset {{13.6}}',
+                    f'add_pdn_connect -grid {{{grid_n}}} -layers "$_pdn_bot $_pdn_top"',
+                    f'add_pdn_connect -grid {{{grid_n}}} -layers "met4 met5"',
+                ])
+            else:
+                stripe_w = min(1.6, max(0.48, spd_w / 4.0))
+                stripe_off = max(1.0, spd_w / 2.0)
+                lines.extend([
+                    f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_bot -width {{0.48}} -followpins',
+                    f'add_pdn_stripe -grid {{{grid_n}}} -layer $_pdn_top -width {{{stripe_w:.2f}}} -pitch {{10.0}} -offset {{{stripe_off:.2f}}}',
+                    f'add_pdn_connect -grid {{{grid_n}}} -layers "$_pdn_bot $_pdn_top"',
+                ])
 
         lines.extend([
             "",
@@ -1859,9 +1879,11 @@ class Pipeline:
                 f'_build_pad_trunks "met4" {trunk_w_dbu}',
             ])
 
+        stage_def = os.path.join(self.project.results_dir, f"{self.project.top_module}_floorplan.def").replace("\\", "/")
         lines.extend([
             "",
             f'write_def "{def_path}"',
+            f'write_def "{stage_def}"',
             'puts "SILIS_FLOORPLAN_DONE"',
         ])
 
