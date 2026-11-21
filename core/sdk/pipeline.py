@@ -700,6 +700,42 @@ class Pipeline:
         if not hasattr(self, "_spec_fps"):
             self._spec_fps = {}
 
+        # Immediate pre-flight DRC containment and bounds verification
+        if check_collisions and die_area and macros:
+            da = die_area
+            if isinstance(da, str):
+                da = [float(x) for x in da.replace('"', '').replace(',', ' ').split()]
+            if isinstance(core_margin, (int, float)):
+                cm_l = cm_r = cm_b = cm_t = float(core_margin)
+            elif len(core_margin) == 4:
+                cm_l, cm_r, cm_b, cm_t = core_margin
+            else:
+                cm_l = cm_r = cm_b = cm_t = 20.0
+            
+            c_x1 = da[0] + cm_l
+            c_y1 = da[1] + cm_b
+            c_x2 = da[2] - cm_r
+            c_y2 = da[3] - cm_t
+
+            for m in macros:
+                inst_name = m.get("inst") or m.get("inst_name") or m.get("name")
+                cell_name = m.get("cell") or m.get("master") or ""
+                loc = m.get("loc") or m.get("pos") or [m.get("x", 0), m.get("y", 0)]
+                mw = float(m.get("w") or m.get("width") or 0.0)
+                mh = float(m.get("h") or m.get("height") or 0.0)
+                if mw <= 0.0 or mh <= 0.0:
+                    dim = self.project.get_macro_dimensions(cell_name or inst_name)
+                    if dim:
+                        mw, mh = dim
+                if mw > 0.0 and mh > 0.0:
+                    mx1 = float(loc[0])
+                    my1 = float(loc[1])
+                    mx2 = mx1 + mw
+                    my2 = my1 + mh
+                    if mx1 < (c_x1 - 0.001) or my1 < (c_y1 - 0.001) or mx2 > (c_x2 + 0.001) or my2 > (c_y2 + 0.001):
+                        from .exceptions import PlacementContainmentError
+                        raise PlacementContainmentError(inst_name, (mx1, my1, mx2, my2), (c_x1, c_y1, c_x2, c_y2), "core")
+
         self._spec_fps["floorplan"] = {
             "die_area": die_area,
             "core_margin": core_margin,
@@ -968,6 +1004,26 @@ class Pipeline:
         # 3. MACRO PLACEMENT & HALO ROW CUTTING
         macros = fp_spec.get("macros", [])
         if macros:
+            # Pre-flight DRC Containment Check
+            for m in macros:
+                inst_name = m.get("inst") or m.get("inst_name") or m.get("name")
+                cell_name = m.get("cell") or m.get("master") or ""
+                loc = m.get("loc") or m.get("pos") or [m.get("x", 0), m.get("y", 0)]
+                mw = float(m.get("w") or m.get("width") or 0.0)
+                mh = float(m.get("h") or m.get("height") or 0.0)
+                if mw <= 0.0 or mh <= 0.0:
+                    dim = self.project.get_macro_dimensions(cell_name or inst_name)
+                    if dim:
+                        mw, mh = dim
+                if mw > 0.0 and mh > 0.0:
+                    mx1 = float(loc[0])
+                    my1 = float(loc[1])
+                    mx2 = mx1 + mw
+                    my2 = my1 + mh
+                    if mx1 < (core_x1 - 0.001) or my1 < (core_y1 - 0.001) or mx2 > (core_x2 + 0.001) or my2 > (core_y2 + 0.001):
+                        from .exceptions import PlacementContainmentError
+                        raise PlacementContainmentError(inst_name, (mx1, my1, mx2, my2), (core_x1, core_y1, core_x2, core_y2), "core")
+
             lines.append("# === 3. MACRO PLACEMENT ===")
             for m in macros:
                 inst = m.get("inst") or m.get("inst_name") or m.get("name")

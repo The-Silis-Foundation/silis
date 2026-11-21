@@ -1056,6 +1056,9 @@ class BackendWidget(QWidget):
                 target_corners = self.active_pdk.get('corners', {})
             if not target_corners:
                 target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk.get('lib', '')}
+            target_corners = {k: v for k, v in target_corners.items() if v and os.path.isfile(v)}
+            if not target_corners and self.active_pdk.get('lib') and os.path.isfile(self.active_pdk['lib']):
+                target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk['lib']}
 
             tcl_lines = [
                 "set_thread_count [exec nproc]",
@@ -1528,6 +1531,10 @@ read_lef "{self._make_portable_pdk_path(self.active_pdk['lef'])}"
             target_corners = getattr(self, 'selected_mcmm_corners', {})
             if not target_corners:
                 target_corners = self.active_pdk.get('corners', {})
+            if target_corners:
+                target_corners = {k: v for k, v in target_corners.items() if v and os.path.isfile(v)}
+            if not target_corners and self.active_pdk.get('lib') and os.path.isfile(self.active_pdk['lib']):
+                target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk['lib']}
 
             macro_libs = []
             seen_mlibs = set()
@@ -2064,6 +2071,10 @@ foreach net [$blk getNets] {
                 target_corners = getattr(self, 'selected_mcmm_corners', {})
                 if not target_corners:
                     target_corners = self.active_pdk.get('corners', {})
+                if target_corners:
+                    target_corners = {k: v for k, v in target_corners.items() if v and os.path.isfile(v)}
+                if not target_corners and self.active_pdk.get('lib') and os.path.isfile(self.active_pdk['lib']):
+                    target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk['lib']}
                 if target_corners and len(target_corners) > 1:
                     corner_names = list(target_corners.keys())
                     self.send_command_internal("catch { suppress_message STA 1140 }")

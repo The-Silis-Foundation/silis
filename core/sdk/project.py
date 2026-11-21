@@ -301,16 +301,80 @@ class Project:
         defs.extend(glob.glob(os.path.join(self.root_dir, "*.def")))
         return sorted(list(set(defs)))
 
-    def get_def(self) -> Optional[str]:
-        """Returns primary DEF file (temp.def or latest)."""
+    def get_def(self, stage: Optional[str] = None) -> Optional[str]:
+        """
+        Returns the authoritative physical layout DEF file for this project.
+        
+        Args:
+            stage: Optional flow stage name to target explicitly, e.g.
+                   'filled', 'routed', 'cts', 'placed', 'floorplan', 'fps'.
+        
+        Resolution Precedence:
+        1. If stage is specified, resolves that stage's exact DEF.
+        2. Milestone progression (filled > routed > cts > placed > floorplan):
+           If a completed milestone DEF exists, it takes precedence unless temp.def
+           was written strictly more recently (e.g. from an active in-flight step).
+        3. Most recently modified non-empty DEF across results/ and root.
+        """
+        defs = [d for d in self.get_defs() if os.path.isfile(d) and os.path.getsize(d) > 0]
+        if not defs:
+            return None
+
+        top = getattr(self, "top_module", "") or ""
+
+        # Explicit stage targeting
+        if stage:
+            st = stage.lower()
+            stage_map = {
+                "fill": [f"{top}_filled.def", "filled.def"],
+                "filled": [f"{top}_filled.def", "filled.def"],
+                "route": [f"{top}_routed.def", "routed.def"],
+                "routed": [f"{top}_routed.def", "routed.def"],
+                "cts": [f"{top}_cts.def", "cts.def"],
+                "place": [f"{top}_placed.def", "placed.def"],
+                "placed": [f"{top}_placed.def", "placed.def"],
+                "floorplan": [f"{top}_floorplan.def", "floorplanned.def", "floorplan.def"],
+                "floorplanned": [f"{top}_floorplan.def", "floorplanned.def", "floorplan.def"],
+                "fps": [f"{top}_floorplan.def", "floorplanned.def", "temp.def"],
+            }
+            cands = stage_map.get(st, [f"{top}_{st}.def", f"{st}.def"])
+            for c in cands:
+                p = os.path.join(self.results_dir, c)
+                if p in defs:
+                    return p
+
+        # Sort all candidates by modification time descending
+        by_mtime = sorted(defs, key=os.path.getmtime, reverse=True)
+        latest_def = by_mtime[0]
         temp_def = os.path.join(self.results_dir, "temp.def")
-        if os.path.isfile(temp_def):
+
+        # Milestone progression in descending order of physical completion.
+        # Authoritative milestone deliverables ALWAYS take precedence over intermediate scratch 'temp.def'.
+        milestones = [
+            f"{top}_filled.def" if top else None,
+            "filled.def",
+            f"{top}_routed.def" if top else None,
+            "routed.def",
+            f"{top}_cts.def" if top else None,
+            "cts.def",
+            f"{top}_placed.def" if top else None,
+            "placed.def",
+            f"{top}_floorplan.def" if top else None,
+            "floorplanned.def",
+            "floorplan.def",
+        ]
+        milestones = [m for m in milestones if m]
+
+        for m in milestones:
+            p = os.path.join(self.results_dir, m)
+            if p in defs:
+                return p
+
+        # If no milestone exists, check temp.def
+        if temp_def in defs:
             return temp_def
-        defs = self.get_defs()
-        if defs:
-            # Return most recently modified DEF
-            return max(defs, key=os.path.getmtime)
-        return None
+
+        return latest_def
 
     def get_gds_files(self) -> List[str]:
         """Returns all stream GDSII files in results/."""
@@ -394,6 +458,63 @@ class Project:
                     macro_lefs.append(sw_cand)
 
         return macro_lefs, macro_libs
+
+    def get_macro_master(self, inst_name: str) -> Optional[str]:
+        """Resolves the library master cell name for a hierarchical macro instance from netlist or sizes report."""
+        if hasattr(self, "_cached_sizes") and self._cached_sizes:
+            macros = self._cached_sizes.get("macros", {})
+            if inst_name in macros and isinstance(macros[inst_name], str):
+                return macros[inst_name]
+        nl = self.get_netlist()
+        if nl and os.path.isfile(nl):
+            import re
+            try:
+                with open(nl, "r", errors="ignore") as f:
+                    content = f.read()
+                match = re.search(rf"([a-zA-Z0-9_]+)\s+{re.escape(inst_name)}\s*\(", content)
+                if match:
+                    return match.group(1)
+            except Exception:
+                pass
+        return None
+
+    def get_macro_dimensions(self, cell_or_inst: str) -> Optional[Tuple[float, float]]:
+        """
+        Extracts exact physical (width, height) in microns for a macro by instance or master name.
+        Inspects project macro LEFs and PDK library LEFs with zero external tool invocations.
+        """
+        master_cand = self.get_macro_master(cell_or_inst)
+        if master_cand:
+            cell_or_inst = master_cand
+        if hasattr(self, "_cached_sizes") and self._cached_sizes:
+            m_dict = self._cached_sizes.get("macros", {})
+            if cell_or_inst in m_dict:
+                val = m_dict[cell_or_inst]
+                if isinstance(val, (list, tuple)) and len(val) == 2:
+                    return float(val[0]), float(val[1])
+                elif isinstance(val, str):
+                    cell_or_inst = val
+
+        macro_lefs, _ = self.get_macro_lefs_and_libs()
+        pdk_info = self.get_pdk_info()
+        all_lefs = list(macro_lefs)
+        if pdk_info and "lef" in pdk_info and os.path.isfile(pdk_info["lef"]):
+            all_lefs.append(pdk_info["lef"])
+
+        import re
+        pattern = re.compile(r"MACRO\s+([a-zA-Z0-9_]+)\b.*?SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)", re.DOTALL)
+        for lef_path in all_lefs:
+            if os.path.isfile(lef_path):
+                try:
+                    with open(lef_path, "r", errors="ignore") as f:
+                        content = f.read()
+                    for match in pattern.finditer(content):
+                        m_name = match.group(1)
+                        if m_name == cell_or_inst or cell_or_inst.endswith(m_name) or m_name.endswith(cell_or_inst):
+                            return float(match.group(2)), float(match.group(3))
+                except Exception:
+                    pass
+        return None
 
     def get_pdk_info(self) -> Optional[Dict[str, Any]]:
         """Finds configured PDK files (tlef, lef, lib, tech, gds) matching target PDK."""

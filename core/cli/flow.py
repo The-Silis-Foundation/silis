@@ -518,6 +518,10 @@ if {[info commands gds] eq ""} {
             target_corners = getattr(self.ide, 'selected_mcmm_corners', {}) if hasattr(self, 'ide') else {}
             if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk:
                 target_corners = self.ide.active_pdk.get('corners', {})
+            if target_corners:
+                target_corners = {k: v for k, v in target_corners.items() if v and os.path.isfile(v)}
+            if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk and self.ide.active_pdk.get('lib') and os.path.isfile(self.ide.active_pdk['lib']):
+                target_corners = {self.ide.active_pdk.get('corner', 'default'): self.ide.active_pdk['lib']}
 
             if target_corners and len(target_corners) > 1:
                 corner_names = list(target_corners.keys())
@@ -598,6 +602,10 @@ read_sdc "{sdc_path}"
         target_corners = getattr(self.ide, 'selected_mcmm_corners', {}) if hasattr(self, 'ide') else {}
         if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk:
             target_corners = self.ide.active_pdk.get('corners', {})
+        if target_corners:
+            target_corners = {k: v for k, v in target_corners.items() if v and os.path.isfile(v)}
+        if not target_corners and hasattr(self, 'ide') and self.ide.active_pdk and self.ide.active_pdk.get('lib') and os.path.isfile(self.ide.active_pdk['lib']):
+            target_corners = {self.ide.active_pdk.get('corner', 'default'): self.ide.active_pdk['lib']}
 
         if target_corners and len(target_corners) > 1:
             corner_names = list(target_corners.keys())

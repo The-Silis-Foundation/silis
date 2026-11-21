@@ -122,19 +122,37 @@ def view_layout(
     _ensure_desktop_env()
     abs_def = os.path.abspath(def_path)
     if os.path.isdir(abs_def):
-        candidates = [
-            os.path.join(abs_def, "results", "temp.def"),
-            os.path.join(abs_def, "results", "routed.def"),
-            os.path.join(abs_def, "results", "placed.def"),
-            os.path.join(abs_def, "results", "floorplanned.def"),
-        ]
-        import glob
-        candidates.extend(glob.glob(os.path.join(abs_def, "results", "*.def")))
-        candidates.extend(glob.glob(os.path.join(abs_def, "*.def")))
-        for cand in candidates:
-            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
-                abs_def = cand
-                break
+        resolved = None
+        try:
+            from .project import Project
+            proj_cand = Project(abs_def)
+            resolved = proj_cand.get_def()
+        except Exception:
+            try:
+                from silis.core.sdk.project import Project
+                proj_cand = Project(abs_def)
+                resolved = proj_cand.get_def()
+            except Exception:
+                pass
+
+        if not resolved or not os.path.isfile(resolved):
+            import glob
+            res_dir = os.path.join(abs_def, "results")
+            all_defs = glob.glob(os.path.join(res_dir, "*.def")) + glob.glob(os.path.join(abs_def, "*.def"))
+            valid_defs = [f for f in all_defs if os.path.isfile(f) and os.path.getsize(f) > 0]
+            if valid_defs:
+                # Milestone preferences first
+                milestones = ["filled.def", "routed.def", "cts.def", "placed.def", "floorplanned.def", "floorplan.def"]
+                for m in milestones:
+                    matched = [f for f in valid_defs if f.endswith(m)]
+                    if matched:
+                        resolved = max(matched, key=os.path.getmtime)
+                        break
+                if not resolved:
+                    resolved = max(valid_defs, key=os.path.getmtime)
+
+        if resolved and os.path.isfile(resolved):
+            abs_def = resolved
 
     win_title = title or f"Silis SiliconPeeker Layout — {os.path.basename(abs_def)}"
 
@@ -166,8 +184,6 @@ def view_layout(
         print(f"[SILIS] Desktop SiliconPeeker Layout window launched (PID: {proc.pid})")
         return proc
     _ensure_app()
-    abs_def = os.path.abspath(def_path)
-    win_title = title or f"Silis SiliconPeeker Layout — {os.path.basename(abs_def)}"
 
     win = QMainWindow(parent)
     win.setWindowFlags(

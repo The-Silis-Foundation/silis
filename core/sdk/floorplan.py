@@ -415,15 +415,56 @@ class Floorplan:
             if len(args) >= 4:
                 actual_halo = args[3]
 
+        # Auto-resolve physical dimensions from project/PDK LEF if omitted
+        if actual_width is None or actual_height is None:
+            proj = getattr(self, "project", None)
+            if proj and hasattr(proj, "get_macro_dimensions"):
+                dim = proj.get_macro_dimensions(master) or proj.get_macro_dimensions(name)
+                if dim:
+                    if actual_width is None:
+                        actual_width = dim[0]
+                    if actual_height is None:
+                        actual_height = dim[1]
+
         if actual_width is None:
             actual_width = float(kwargs.get("width", 100.0))
         if actual_height is None:
             actual_height = float(kwargs.get("height", 100.0))
-        if not isinstance(actual_orient, Orientation):
-            actual_orient = Orientation(str(actual_orient))
+        if isinstance(actual_orient, Orientation):
+            pass
+        elif hasattr(actual_orient, "value"):
+            actual_orient = Orientation(actual_orient.value)
+        else:
+            s_orient = str(actual_orient).split(".")[-1].upper()
+            def_to_orient = {
+                "N": "R0", "S": "R180", "W": "R90", "E": "R270",
+                "FN": "MY", "FS": "MX", "FW": "MXR90", "FE": "MYR90"
+            }
+            s_orient = def_to_orient.get(s_orient, s_orient)
+            actual_orient = Orientation(s_orient)
+
+        # Manufacturing grid assertion
+        diff_x = abs(x - round(x / self.manufacturing_grid) * self.manufacturing_grid)
+        if diff_x > 0.0001:
+            from .exceptions import GridLegalizationError
+            raise GridLegalizationError(name, x, y, self.manufacturing_grid)
 
         rh = self.site_row_height or self._resolve_site_row_height()
         snapped_y = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y)
+        legal_x = legalize_coord(x)
+
+        # Pre-flight core containment assertion
+        if self.die_width > 0.0 and self.die_height > 0.0:
+            cx1, cy1, cx2, cy2 = self.get_core_bbox()
+            cw, ch = self.get_core_dimensions()
+            if cw > 0.0 and ch > 0.0:
+                mx1 = legal_x
+                my1 = snapped_y
+                mx2 = mx1 + actual_width
+                my2 = my1 + actual_height
+                if mx1 < (cx1 - 0.001) or my1 < (cy1 - 0.001) or mx2 > (cx2 + 0.001) or my2 > (cy2 + 0.001):
+                    from .exceptions import PlacementContainmentError
+                    raise PlacementContainmentError(name, (mx1, my1, mx2, my2), (cx1, cy1, cx2, cy2), "core")
         inst = MacroInstance(
             name=name,
             master=master,
@@ -832,15 +873,28 @@ class Floorplan:
             f.write("\n".join(tcl) + "\n")
         os.replace(tmp_path, path)
 
-    def export_def(self, path: str) -> None:
-        """Exports DEF 5.8 physical design representation with integer DBU units."""
+    def export_def(self, path: str, verify_drc: bool = True) -> None:
+        """
+        Exports DEF 5.8 physical design representation with integer DBU units.
+        Executes strict pre-flight DRC legalization (grid, site rows, core containment, halos).
+        """
         import os
+        if verify_drc:
+            self.verify_legal_placement()
+
+        orient_to_def = {
+            "R0": "N", "R180": "S", "R90": "W", "R270": "E",
+            "MY": "FN", "MX": "FS", "MXR90": "FW", "MYR90": "FE",
+            "N": "N", "S": "S", "W": "W", "E": "E",
+            "FN": "FN", "FS": "FS", "FW": "FW", "FE": "FE",
+        }
         dbu = 1000
+        top_name = getattr(self.project, "top_module", "top") if self.project else "top"
         lines = [
             "VERSION 5.8 ;",
             'DIVIDERCHAR "/" ;',
             'BUSBITCHARS "[]" ;',
-            "DESIGN top ;",
+            f"DESIGN {top_name} ;",
             f"UNITS DISTANCE MICRONS {dbu} ;",
             f"DIEAREA ( 0 0 ) ( {int(round(self.die_width * dbu))} {int(round(self.die_height * dbu))} ) ;",
         ]
@@ -849,7 +903,9 @@ class Floorplan:
             for inst in self.macros.values():
                 mx = int(round(inst.x * dbu))
                 my = int(round(inst.y * dbu))
-                lines.append(f"    - {inst.name} {inst.master} + PLACED ( {mx} {my} ) {inst.orientation.value} ;")
+                raw_orient = getattr(inst.orientation, "value", str(inst.orientation))
+                def_orient = orient_to_def.get(raw_orient, "N")
+                lines.append(f"    - {inst.name} {inst.master} + PLACED ( {mx} {my} ) {def_orient} ;")
             lines.append("END COMPONENTS")
         lines.append("END DESIGN")
         tmp_path = path + ".tmp"

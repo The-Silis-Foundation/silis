@@ -36,6 +36,7 @@ from sdk import (
     PipelineStateError,
     PipelineExecutionError,
     OverlappingHaloError,
+    PlacementContainmentError,
     IllegalVoltageError,
     Project,
     SilisProject,

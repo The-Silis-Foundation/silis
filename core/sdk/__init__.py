@@ -47,6 +47,7 @@ from .exceptions import (
     OverlappingHaloError,
     IllegalVoltageError,
     GridLegalizationError,
+    PlacementContainmentError,
     SignoffHandoffIntegrityError,
 )
 from .dft_config import DFTConfig

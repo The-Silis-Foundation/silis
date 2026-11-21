@@ -246,15 +246,30 @@ proc place_macro {args} {
     set ox [_silis_snap [lindex $origin 0]]
     set oy [_silis_snap [lindex $origin 1]]
 
-    # Map MX90/MY90 aliases to OpenROAD's internal MXR90/MYR90
-    if {$orient eq "MX90"} { set orient "MXR90" }
-    if {$orient eq "MY90"} { set orient "MYR90" }
+    # Canonical DEF to OpenROAD orientation mapping
+    switch -- $orient {
+        "N"     { set orient "R0" }
+        "S"     { set orient "R180" }
+        "W"     { set orient "R90" }
+        "E"     { set orient "R270" }
+        "FN"    { set orient "MY" }
+        "FS"    { set orient "MX" }
+        "FW"    { set orient "MXR90" }
+        "FE"    { set orient "MYR90" }
+        "MX90"  { set orient "MXR90" }
+        "MY90"  { set orient "MYR90" }
+    }
 
     # Execute firm placement in OpenROAD using -location so (ox, oy) is the exact lower-left of the box
+    set place_err ""
     if {$cell ne ""} {
-        catch { place_inst -name $inst -cell $cell -location "$ox $oy" -status FIRM -orientation $orient }
+        if {[catch { place_inst -name $inst -cell $cell -location "$ox $oy" -status FIRM -orientation $orient } place_err]} {
+            puts "\[SILIS ERR\] place_inst failed for '$inst': $place_err"
+        }
     } else {
-        catch { place_inst -name $inst -location "$ox $oy" -status FIRM -orientation $orient }
+        if {[catch { place_inst -name $inst -location "$ox $oy" -status FIRM -orientation $orient } place_err]} {
+            puts "\[SILIS ERR\] place_inst failed for '$inst': $place_err"
+        }
     }
     puts "\[SILIS\] Placed macro '$inst' at ($ox, $oy) orientation $orient."
 

@@ -762,6 +762,8 @@ class FastSiliconPeeker(QWidget):
         self._load_worker = DefLoadWorker(path, getattr(self, 'ide', None), self)
         self._load_worker.def_loaded.connect(self._on_def_loaded)
         self._load_worker.start()
+        if os.environ.get("SILIS_HEADLESS_TEST") == "1":
+            self._load_worker.wait(1500)
 
     def _on_def_loaded(self, parsed_def):
         if parsed_def:

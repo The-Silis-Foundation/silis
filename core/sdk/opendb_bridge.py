@@ -51,11 +51,14 @@ class OpenDBBridge:
     def _resolve_paths(self):
         proj = getattr(self.pipe, "project", self.pipe)
         results_dir = getattr(proj, "results_dir", "")
-        def_path = os.path.join(results_dir, "temp.def")
-        if not os.path.isfile(def_path):
-            cand = getattr(proj, "get_def", lambda: None)()
-            if cand and os.path.isfile(cand):
-                def_path = cand
+        def_path = None
+        cand = getattr(proj, "get_def", lambda: None)()
+        if cand and os.path.isfile(cand):
+            def_path = cand
+        elif results_dir:
+            cand2 = os.path.join(results_dir, "temp.def")
+            if os.path.isfile(cand2):
+                def_path = cand2
         return proj, def_path
 
     def inspect(self, force_refresh: bool = False) -> Dict[str, Any]:
