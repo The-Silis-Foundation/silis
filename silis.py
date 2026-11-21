@@ -595,7 +595,204 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+class SynthesisConfirmDialog(QDialog):
+    """Native Qt6 2-Tab Confirmation Dialog: Yosys RTL Synthesis Script & DFT Architecture."""
+    def __init__(self, parent=None, ys_script="", init_dft=False, theme_name="Catppuccin Mocha"):
+        super().__init__(parent)
+        self.setWindowTitle("Confirm Synthesis Script & Flow Configuration")
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        self.resize(840, 580)
 
+        theme = THEMES.get(theme_name, THEMES.get("Catppuccin Mocha", {}))
+        bg = theme.get("bg", "#1e1e2e")
+        fg = theme.get("fg", "#cdd6f4")
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {bg}; color: {fg}; }} "
+            f"QLabel {{ color: {fg}; }} "
+            f"QGroupBox {{ font-weight: bold; border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 10px; }} "
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }} "
+            f"QTabWidget::pane {{ border: 1px solid #333; }} "
+        )
+
+        dlg_layout = QVBoxLayout(self)
+        self.tabs = QTabWidget(self)
+
+        # --- TAB 1: Yosys RTL Synthesis Script ---
+        tab_synth_widget = QWidget()
+        tab_synth_layout = QVBoxLayout(tab_synth_widget)
+        tab_synth_layout.addWidget(QLabel("<b>Yosys Synthesis Commands:</b> (Uncomment 'flatten' to extract complete hierarchy)"))
+
+        self.editor = ScintillaEditor(is_minimap=False, font_family=USER_SETTINGS.get("font_family", "Consolas"), font_size=USER_SETTINGS.get("font_size", 11), theme_name=theme_name)
+        self.editor.set_lexer(".tcl")
+        self.editor.setText(ys_script.strip())
+        tab_synth_layout.addWidget(self.editor)
+        self.tabs.addTab(tab_synth_widget, "Synthesis Script (Yosys RTL)")
+
+        # --- TAB 2: DFT & Testability Architecture ---
+        tab_dft_widget = QWidget()
+        tab_dft_scroll = QScrollArea()
+        tab_dft_scroll.setWidgetResizable(True)
+        tab_dft_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        dft_container = QWidget()
+        dft_vbox = QVBoxLayout(dft_container)
+        dft_vbox.setSpacing(10)
+        dft_vbox.setContentsMargins(8, 8, 8, 8)
+
+        # 1. Scan Architecture & Primary Controls
+        grp_scan = QGroupBox("Scan Architecture & Primary Controls")
+        scan_grid = QGridLayout(grp_scan)
+        scan_grid.setContentsMargins(10, 10, 10, 10)
+        scan_grid.setHorizontalSpacing(10)
+        scan_grid.setVerticalSpacing(8)
+
+        self.chk_dft_en = QCheckBox("Enable Scan Insertion")
+        self.chk_dft_en.setChecked(bool(init_dft))
+        self.chk_dft_en.setStyleSheet("font-weight: bold;")
+
+        self.in_sin = QLineEdit("scan_in"); self.in_sin.setPlaceholderText("Scan In"); self.in_sin.setFixedWidth(85)
+        self.in_sout = QLineEdit("scan_out"); self.in_sout.setPlaceholderText("Scan Out"); self.in_sout.setFixedWidth(85)
+        self.in_sen = QLineEdit("scan_en"); self.in_sen.setPlaceholderText("Scan En"); self.in_sen.setFixedWidth(85)
+        self.in_sclk = QLineEdit("clk"); self.in_sclk.setPlaceholderText("Scan Clk"); self.in_sclk.setFixedWidth(85)
+
+        self.chk_lockup = QCheckBox("Insert CDC Lockup Latches")
+        self.chk_lockup.setChecked(True)
+        self.chk_icg_bypass = QCheckBox("Bypass Clock Gating (ICG TE/TM pins)")
+        self.chk_icg_bypass.setChecked(True)
+
+        scan_grid.addWidget(self.chk_dft_en, 0, 0, 1, 4)
+        scan_grid.addWidget(QLabel("Scan In:"), 1, 0); scan_grid.addWidget(self.in_sin, 1, 1)
+        scan_grid.addWidget(QLabel("Scan Out:"), 1, 2); scan_grid.addWidget(self.in_sout, 1, 3)
+        scan_grid.addWidget(QLabel("Scan En:"), 2, 0); scan_grid.addWidget(self.in_sen, 2, 1)
+        scan_grid.addWidget(QLabel("Scan Clk:"), 2, 2); scan_grid.addWidget(self.in_sclk, 2, 3)
+        scan_grid.addWidget(self.chk_lockup, 3, 0, 1, 2)
+        scan_grid.addWidget(self.chk_icg_bypass, 3, 2, 1, 2)
+        dft_vbox.addWidget(grp_scan)
+
+        # 2. On-Chip Compression (EDT) & Spatial Compactor
+        grp_comp = QGroupBox("On-Chip Compression (EDT) & Spatial Compactor")
+        comp_grid = QGridLayout(grp_comp)
+        comp_grid.setContentsMargins(10, 10, 10, 10)
+        comp_grid.setHorizontalSpacing(10)
+        comp_grid.setVerticalSpacing(8)
+
+        self.chk_comp_en = QCheckBox("Enable Continuous Flow Decompressor & Spatial XOR Compactor")
+        self.spin_ext_ch = QSpinBox(); self.spin_ext_ch.setRange(1, 64); self.spin_ext_ch.setValue(4); self.spin_ext_ch.setFixedWidth(70)
+        self.spin_int_ch = QSpinBox(); self.spin_int_ch.setRange(8, 1024); self.spin_int_ch.setValue(128); self.spin_int_ch.setFixedWidth(70)
+        self.spin_comp_ratio = QSpinBox(); self.spin_comp_ratio.setRange(2, 500); self.spin_comp_ratio.setValue(50); self.spin_comp_ratio.setFixedWidth(70); self.spin_comp_ratio.setSuffix("x")
+        self.chk_x_mask = QCheckBox("Dynamic X-State Masking Logic")
+        self.chk_x_mask.setChecked(True)
+
+        comp_grid.addWidget(self.chk_comp_en, 0, 0, 1, 4)
+        comp_grid.addWidget(QLabel("External ATE Channels:"), 1, 0); comp_grid.addWidget(self.spin_ext_ch, 1, 1)
+        comp_grid.addWidget(QLabel("Internal Short Chains:"), 1, 2); comp_grid.addWidget(self.spin_int_ch, 1, 3)
+        comp_grid.addWidget(QLabel("Target Compression:"), 2, 0); comp_grid.addWidget(self.spin_comp_ratio, 2, 1)
+        comp_grid.addWidget(self.chk_x_mask, 2, 2, 1, 2)
+        dft_vbox.addWidget(grp_comp)
+
+        # 3. Memory BIST & BIRA Self-Repair
+        grp_mbist = QGroupBox("Memory BIST & BIRA Self-Repair")
+        mbist_grid = QGridLayout(grp_mbist)
+        mbist_grid.setContentsMargins(10, 10, 10, 10)
+        mbist_grid.setHorizontalSpacing(10)
+        mbist_grid.setVerticalSpacing(8)
+
+        self.chk_mbist_en = QCheckBox("Synthesize SRAM Memory Collars")
+        self.cmb_march = QComboBox()
+        self.cmb_march.addItems(["MARCH C+", "MARCH SS", "MARCH C", "MATS+"])
+        self.chk_bira = QCheckBox("Enable BIRA Redundancy Allocation Engine")
+        self.chk_bira.setChecked(True)
+        self.chk_dft_clamp = QCheckBox("Clamp Macro Outputs to 0")
+        self.chk_dft_clamp.setChecked(True)
+
+        mbist_grid.addWidget(self.chk_mbist_en, 0, 0, 1, 2)
+        mbist_grid.addWidget(self.chk_dft_clamp, 0, 2, 1, 2)
+        mbist_grid.addWidget(QLabel("Test Algorithm:"), 1, 0); mbist_grid.addWidget(self.cmb_march, 1, 1)
+        mbist_grid.addWidget(self.chk_bira, 1, 2, 1, 2)
+        dft_vbox.addWidget(grp_mbist)
+
+        # 4. IEEE 1149.1 JTAG TAP & Boundary Scan
+        grp_jtag = QGroupBox("IEEE 1149.1 JTAG TAP & Boundary Scan")
+        jtag_grid = QGridLayout(grp_jtag)
+        jtag_grid.setContentsMargins(10, 10, 10, 10)
+        jtag_grid.setHorizontalSpacing(10)
+        jtag_grid.setVerticalSpacing(8)
+
+        self.chk_jtag_en = QCheckBox("Insert 16-State JTAG TAP Controller")
+        self.in_idcode = QLineEdit("0x00010001"); self.in_idcode.setPlaceholderText("Device IDCODE"); self.in_idcode.setFixedWidth(100)
+        self.cmb_ir_len = QComboBox(); self.cmb_ir_len.addItems(["4 bits", "5 bits", "8 bits"])
+        self.chk_bsdl = QCheckBox("Generate IEEE 1149.1b BSDL Specification")
+        self.chk_bsdl.setChecked(True)
+
+        jtag_grid.addWidget(self.chk_jtag_en, 0, 0, 1, 2)
+        jtag_grid.addWidget(self.chk_bsdl, 0, 2, 1, 2)
+        jtag_grid.addWidget(QLabel("Device IDCODE:"), 1, 0); jtag_grid.addWidget(self.in_idcode, 1, 1)
+        jtag_grid.addWidget(QLabel("IR Opcode Length:"), 1, 2); jtag_grid.addWidget(self.cmb_ir_len, 1, 3)
+        dft_vbox.addWidget(grp_jtag)
+
+        # 5. At-Speed Delay Testing (LOC / LOS)
+        grp_at_speed = QGroupBox("At-Speed Delay Testing (LOC / LOS)")
+        at_speed_grid = QGridLayout(grp_at_speed)
+        at_speed_grid.setContentsMargins(10, 10, 10, 10)
+        at_speed_grid.setHorizontalSpacing(10)
+        at_speed_grid.setVerticalSpacing(8)
+
+        self.chk_at_speed = QCheckBox("Enable Transition Delay Fault Testing")
+        self.cmb_launch = QComboBox(); self.cmb_launch.addItems(["Launch-off-Capture (LOC)", "Launch-off-Shift (LOS)"])
+        self.spin_slack = QDoubleSpinBox(); self.spin_slack.setRange(0.0, 10.0); self.spin_slack.setSingleStep(0.05); self.spin_slack.setValue(0.500); self.spin_slack.setSuffix(" ns"); self.spin_slack.setFixedWidth(80)
+
+        at_speed_grid.addWidget(self.chk_at_speed, 0, 0, 1, 4)
+        at_speed_grid.addWidget(QLabel("Launch Mode:"), 1, 0); at_speed_grid.addWidget(self.cmb_launch, 1, 1)
+        at_speed_grid.addWidget(QLabel("OpenSTA Slack Cutoff:"), 1, 2); at_speed_grid.addWidget(self.spin_slack, 1, 3)
+        dft_vbox.addWidget(grp_at_speed)
+
+        dft_vbox.addStretch()
+        tab_dft_scroll.setWidget(dft_container)
+
+        tab_dft_wrapper = QVBoxLayout(tab_dft_widget)
+        tab_dft_wrapper.setContentsMargins(0, 0, 0, 0)
+        tab_dft_wrapper.addWidget(tab_dft_scroll)
+        self.tabs.addTab(tab_dft_widget, "DFT & Testability Architecture")
+
+        dlg_layout.addWidget(self.tabs)
+
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bbox.accepted.connect(self.accept)
+        bbox.rejected.connect(self.reject)
+        dlg_layout.addWidget(bbox)
+
+        QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self.accept)
+
+    def get_synthesis_script(self) -> str:
+        return self.editor.text()
+
+    def get_dft_config(self) -> dict:
+        return {
+            "enabled": self.chk_dft_en.isChecked(),
+            "scan_in": self.in_sin.text().strip() or "scan_in",
+            "scan_out": self.in_sout.text().strip() or "scan_out",
+            "scan_en": self.in_sen.text().strip() or "scan_en",
+            "scan_clk": self.in_sclk.text().strip() or "clk",
+            "lockup_latches": self.chk_lockup.isChecked(),
+            "icg_bypass": self.chk_icg_bypass.isChecked(),
+            "compression": self.chk_comp_en.isChecked(),
+            "compression_ratio": self.spin_comp_ratio.value(),
+            "external_channels": self.spin_ext_ch.value(),
+            "internal_chains": self.spin_int_ch.value(),
+            "x_masking": self.chk_x_mask.isChecked(),
+            "mbist": self.chk_mbist_en.isChecked(),
+            "march_algorithm": self.cmb_march.currentText().replace(" ", "_").replace("+", "_PLUS").upper(),
+            "enable_bira": self.chk_bira.isChecked(),
+            "clamp": self.chk_dft_clamp.isChecked(),
+            "clamp_macros": self.chk_dft_clamp.isChecked(),
+            "jtag": self.chk_jtag_en.isChecked(),
+            "device_id": self.in_idcode.text().strip() or "0x00010001",
+            "ir_length": int(self.cmb_ir_len.currentText().split()[0]),
+            "export_bsdl": self.chk_bsdl.isChecked(),
+            "at_speed": self.chk_at_speed.isChecked(),
+            "launch_mode": "LOC" if "LOC" in self.cmb_launch.currentText() else "LOS",
+            "slack_cutoff_ns": self.spin_slack.value(),
+        }
 
 
 class SilisIDE(QMainWindow):
@@ -1258,205 +1455,15 @@ class SilisIDE(QMainWindow):
             bypass_prompt = True
 
         if not bypass_prompt:
-            # --- USER CONFIRMATION DIALOG (2-Tab: Synthesis Script + DFT Architecture) ---
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Confirm Synthesis Script & Flow Configuration")
-            dlg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
-            dlg.resize(840, 580)
-            
             theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
-            theme = THEMES.get(theme_name, THEMES["Catppuccin Mocha"])
-            dlg.setStyleSheet(
-                f"QDialog {{ background-color: {theme['bg']}; color: {theme['fg']}; }} "
-                f"QLabel {{ color: {theme['fg']}; }} "
-                f"QGroupBox {{ font-weight: bold; border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 10px; }} "
-                f"QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }} "
-                f"QTabWidget::pane {{ border: 1px solid #333; }} "
-            )
-            
-            dlg_layout = QVBoxLayout(dlg)
-            tabs = QTabWidget(dlg)
-            
-            # --- TAB 1: Yosys RTL Synthesis Script ---
-            tab_synth_widget = QWidget()
-            tab_synth_layout = QVBoxLayout(tab_synth_widget)
-            tab_synth_layout.addWidget(QLabel("<b>Yosys Synthesis Commands:</b> (Uncomment 'flatten' to extract complete hierarchy)"))
-            
-            editor = ScintillaEditor(is_minimap=False, font_family=USER_SETTINGS.get("font_family", "Consolas"), font_size=USER_SETTINGS.get("font_size", 11), theme_name=theme_name)
-            editor.set_lexer(".tcl")
-            editor.setText(ys.strip())
-            tab_synth_layout.addWidget(editor)
-            tabs.addTab(tab_synth_widget, "Synthesis Script (Yosys RTL)")
-
-            # --- TAB 2: DFT & Testability Architecture ---
-            tab_dft_widget = QWidget()
-            tab_dft_scroll = QScrollArea()
-            tab_dft_scroll.setWidgetResizable(True)
-            tab_dft_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            
-            dft_container = QWidget()
-            dft_vbox = QVBoxLayout(dft_container)
-            dft_vbox.setSpacing(10)
-            dft_vbox.setContentsMargins(8, 8, 8, 8)
-
-            # 1. Scan Architecture & Primary Controls
-            grp_scan = QGroupBox("Scan Architecture & Primary Controls")
-            scan_grid = QGridLayout(grp_scan)
-            scan_grid.setContentsMargins(10, 10, 10, 10)
-            scan_grid.setHorizontalSpacing(10)
-            scan_grid.setVerticalSpacing(8)
-
-            chk_dft_en = QCheckBox("Enable Scan Insertion")
             init_dft = getattr(self, 'enable_dft', False) or (hasattr(self, 'tab_synth') and getattr(self.tab_synth, 'chk_dft', None) and self.tab_synth.chk_dft.isChecked())
-            chk_dft_en.setChecked(bool(init_dft))
-            chk_dft_en.setStyleSheet("font-weight: bold;")
-
-            in_sin = QLineEdit("scan_in"); in_sin.setPlaceholderText("Scan In"); in_sin.setFixedWidth(85)
-            in_sout = QLineEdit("scan_out"); in_sout.setPlaceholderText("Scan Out"); in_sout.setFixedWidth(85)
-            in_sen = QLineEdit("scan_en"); in_sen.setPlaceholderText("Scan En"); in_sen.setFixedWidth(85)
-            in_sclk = QLineEdit("clk"); in_sclk.setPlaceholderText("Scan Clk"); in_sclk.setFixedWidth(85)
-
-            chk_lockup = QCheckBox("Insert CDC Lockup Latches")
-            chk_lockup.setChecked(True)
-            chk_icg_bypass = QCheckBox("Bypass Clock Gating (ICG TE/TM pins)")
-            chk_icg_bypass.setChecked(True)
-
-            scan_grid.addWidget(chk_dft_en, 0, 0, 1, 4)
-            scan_grid.addWidget(QLabel("Scan In:"), 1, 0); scan_grid.addWidget(in_sin, 1, 1)
-            scan_grid.addWidget(QLabel("Scan Out:"), 1, 2); scan_grid.addWidget(in_sout, 1, 3)
-            scan_grid.addWidget(QLabel("Scan En:"), 2, 0); scan_grid.addWidget(in_sen, 2, 1)
-            scan_grid.addWidget(QLabel("Scan Clk:"), 2, 2); scan_grid.addWidget(in_sclk, 2, 3)
-            scan_grid.addWidget(chk_lockup, 3, 0, 1, 2)
-            scan_grid.addWidget(chk_icg_bypass, 3, 2, 1, 2)
-            dft_vbox.addWidget(grp_scan)
-
-            # 2. On-Chip Compression (EDT) & Spatial Compactor
-            grp_comp = QGroupBox("On-Chip Compression (EDT) & Spatial Compactor")
-            comp_grid = QGridLayout(grp_comp)
-            comp_grid.setContentsMargins(10, 10, 10, 10)
-            comp_grid.setHorizontalSpacing(10)
-            comp_grid.setVerticalSpacing(8)
-
-            chk_comp_en = QCheckBox("Enable Continuous Flow Decompressor & Spatial XOR Compactor")
-            spin_ext_ch = QSpinBox(); spin_ext_ch.setRange(1, 64); spin_ext_ch.setValue(4); spin_ext_ch.setFixedWidth(70)
-            spin_int_ch = QSpinBox(); spin_int_ch.setRange(8, 1024); spin_int_ch.setValue(128); spin_int_ch.setFixedWidth(70)
-            spin_comp_ratio = QSpinBox(); spin_comp_ratio.setRange(2, 500); spin_comp_ratio.setValue(50); spin_comp_ratio.setFixedWidth(70); spin_comp_ratio.setSuffix("x")
-            chk_x_mask = QCheckBox("Dynamic X-State Masking Logic")
-            chk_x_mask.setChecked(True)
-
-            comp_grid.addWidget(chk_comp_en, 0, 0, 1, 4)
-            comp_grid.addWidget(QLabel("External ATE Channels:"), 1, 0); comp_grid.addWidget(spin_ext_ch, 1, 1)
-            comp_grid.addWidget(QLabel("Internal Short Chains:"), 1, 2); comp_grid.addWidget(spin_int_ch, 1, 3)
-            comp_grid.addWidget(QLabel("Target Compression:"), 2, 0); comp_grid.addWidget(spin_comp_ratio, 2, 1)
-            comp_grid.addWidget(chk_x_mask, 2, 2, 1, 2)
-            dft_vbox.addWidget(grp_comp)
-
-            # 3. Memory BIST & BIRA Self-Repair
-            grp_mbist = QGroupBox("Memory BIST & BIRA Self-Repair")
-            mbist_grid = QGridLayout(grp_mbist)
-            mbist_grid.setContentsMargins(10, 10, 10, 10)
-            mbist_grid.setHorizontalSpacing(10)
-            mbist_grid.setVerticalSpacing(8)
-
-            chk_mbist_en = QCheckBox("Synthesize SRAM Memory Collars")
-            cmb_march = QComboBox()
-            cmb_march.addItems(["MARCH C+", "MARCH SS", "MARCH C", "MATS+"])
-            chk_bira = QCheckBox("Enable BIRA Redundancy Allocation Engine")
-            chk_bira.setChecked(True)
-            chk_dft_clamp = QCheckBox("Clamp Macro Outputs to 0")
-            chk_dft_clamp.setChecked(True)
-
-            mbist_grid.addWidget(chk_mbist_en, 0, 0, 1, 2)
-            mbist_grid.addWidget(chk_dft_clamp, 0, 2, 1, 2)
-            mbist_grid.addWidget(QLabel("Test Algorithm:"), 1, 0); mbist_grid.addWidget(cmb_march, 1, 1)
-            mbist_grid.addWidget(chk_bira, 1, 2, 1, 2)
-            dft_vbox.addWidget(grp_mbist)
-
-            # 4. IEEE 1149.1 JTAG TAP & Boundary Scan
-            grp_jtag = QGroupBox("IEEE 1149.1 JTAG TAP & Boundary Scan")
-            jtag_grid = QGridLayout(grp_jtag)
-            jtag_grid.setContentsMargins(10, 10, 10, 10)
-            jtag_grid.setHorizontalSpacing(10)
-            jtag_grid.setVerticalSpacing(8)
-
-            chk_jtag_en = QCheckBox("Insert 16-State JTAG TAP Controller")
-            in_idcode = QLineEdit("0x00010001"); in_idcode.setPlaceholderText("Device IDCODE"); in_idcode.setFixedWidth(100)
-            cmb_ir_len = QComboBox(); cmb_ir_len.addItems(["4 bits", "5 bits", "8 bits"])
-            chk_bsdl = QCheckBox("Generate IEEE 1149.1b BSDL Specification")
-            chk_bsdl.setChecked(True)
-
-            jtag_grid.addWidget(chk_jtag_en, 0, 0, 1, 2)
-            jtag_grid.addWidget(chk_bsdl, 0, 2, 1, 2)
-            jtag_grid.addWidget(QLabel("Device IDCODE:"), 1, 0); jtag_grid.addWidget(in_idcode, 1, 1)
-            jtag_grid.addWidget(QLabel("IR Opcode Length:"), 1, 2); jtag_grid.addWidget(cmb_ir_len, 1, 3)
-            dft_vbox.addWidget(grp_jtag)
-
-            # 5. At-Speed Delay Testing (LOC / LOS)
-            grp_at_speed = QGroupBox("At-Speed Delay Testing (LOC / LOS)")
-            at_speed_grid = QGridLayout(grp_at_speed)
-            at_speed_grid.setContentsMargins(10, 10, 10, 10)
-            at_speed_grid.setHorizontalSpacing(10)
-            at_speed_grid.setVerticalSpacing(8)
-
-            chk_at_speed = QCheckBox("Enable Transition Delay Fault Testing")
-            cmb_launch = QComboBox(); cmb_launch.addItems(["Launch-off-Capture (LOC)", "Launch-off-Shift (LOS)"])
-            spin_slack = QDoubleSpinBox(); spin_slack.setRange(0.0, 10.0); spin_slack.setSingleStep(0.05); spin_slack.setValue(0.500); spin_slack.setSuffix(" ns"); spin_slack.setFixedWidth(80)
-
-            at_speed_grid.addWidget(chk_at_speed, 0, 0, 1, 4)
-            at_speed_grid.addWidget(QLabel("Launch Mode:"), 1, 0); at_speed_grid.addWidget(cmb_launch, 1, 1)
-            at_speed_grid.addWidget(QLabel("OpenSTA Slack Cutoff:"), 1, 2); at_speed_grid.addWidget(spin_slack, 1, 3)
-            dft_vbox.addWidget(grp_at_speed)
-
-            dft_vbox.addStretch()
-            tab_dft_scroll.setWidget(dft_container)
-
-            tab_dft_wrapper = QVBoxLayout(tab_dft_widget)
-            tab_dft_wrapper.setContentsMargins(0, 0, 0, 0)
-            tab_dft_wrapper.addWidget(tab_dft_scroll)
-            tabs.addTab(tab_dft_widget, "DFT & Testability Architecture")
-
-            dlg_layout.addWidget(tabs)
-            
-            bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            bbox.accepted.connect(dlg.accept)
-            bbox.rejected.connect(dlg.reject)
-            dlg_layout.addWidget(bbox)
-            
-            QShortcut(QKeySequence("Ctrl+Return"), dlg).activated.connect(dlg.accept)
-            
+            dlg = SynthesisConfirmDialog(self, ys_script=ys, init_dft=init_dft, theme_name=theme_name)
             if not dlg.exec():
                 if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'card_status'):
                     self.tab_synth.card_status.setText("CANCELLED")
                 return
-                
-            ys = editor.text()
-            # Cache complete user DFT configuration
-            self._dft_config = {
-                "enabled": chk_dft_en.isChecked(),
-                "scan_in": in_sin.text().strip() or "scan_in",
-                "scan_out": in_sout.text().strip() or "scan_out",
-                "scan_en": in_sen.text().strip() or "scan_en",
-                "scan_clk": in_sclk.text().strip() or "clk",
-                "lockup_latches": chk_lockup.isChecked(),
-                "icg_bypass": chk_icg_bypass.isChecked(),
-                "compression": chk_comp_en.isChecked(),
-                "compression_ratio": spin_comp_ratio.value(),
-                "external_channels": spin_ext_ch.value(),
-                "internal_chains": spin_int_ch.value(),
-                "x_masking": chk_x_mask.isChecked(),
-                "mbist": chk_mbist_en.isChecked(),
-                "march_algorithm": cmb_march.currentText().replace(" ", "_").replace("+", "_PLUS").upper(),
-                "enable_bira": chk_bira.isChecked(),
-                "clamp": chk_dft_clamp.isChecked(),
-                "clamp_macros": chk_dft_clamp.isChecked(),
-                "jtag": chk_jtag_en.isChecked(),
-                "device_id": in_idcode.text().strip() or "0x00010001",
-                "ir_length": int(cmb_ir_len.currentText().split()[0]),
-                "export_bsdl": chk_bsdl.isChecked(),
-                "at_speed": chk_at_speed.isChecked(),
-                "launch_mode": "LOC" if "LOC" in cmb_launch.currentText() else "LOS",
-                "slack_cutoff_ns": spin_slack.value(),
-            }
+            ys = dlg.get_synthesis_script()
+            self._dft_config = dlg.get_dft_config()
         else:
             try:
                 from sdk.dft_config import DFTConfig
