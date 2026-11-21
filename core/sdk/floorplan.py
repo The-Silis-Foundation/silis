@@ -514,7 +514,7 @@ class Floorplan:
         return dict(self.regions)
 
     def _discover_netlist_instances(self) -> List[Tuple[str, str]]:
-        """Parses gate-level netlist to extract all non-macro standard cell instances."""
+        """Parses gate-level netlist to extract valid non-macro standard cell instances for top-level module."""
         import re, os
         instances: List[Tuple[str, str]] = []
         if not self.project:
@@ -525,9 +525,26 @@ class Floorplan:
         try:
             with open(nl_path, "r", errors="ignore") as f:
                 content = f.read()
-            for match in re.finditer(r"\b([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s*\(\s*\.", content):
+
+            # Discover all module names declared in netlist to prevent treating submodules as LEF cells
+            declared_modules = set(re.findall(r"\bmodule\s+([a-zA-Z0-9_]+)\b", content))
+
+            top_mod = getattr(self.project, "top_module", None)
+            search_content = content
+            if top_mod:
+                m_match = re.search(rf"\bmodule\s+{re.escape(top_mod)}\b\s*\(.*?\);(.*?)endmodule", content, re.DOTALL)
+                if m_match:
+                    search_content = m_match.group(1)
+
+            seen_inames = set()
+            for match in re.finditer(r"\b([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s*\(\s*\.", search_content):
                 cmaster, iname = match.group(1), match.group(2)
-                if cmaster not in ("module", "input", "output", "wire", "reg", "assign", "always"):
+                if cmaster in declared_modules:
+                    continue  # Hierarchical submodule instance, not a physical LEF cell
+                if cmaster in ("module", "input", "output", "wire", "reg", "assign", "always"):
+                    continue
+                if iname not in seen_inames:
+                    seen_inames.add(iname)
                     instances.append((iname, cmaster))
         except Exception:
             pass
@@ -545,13 +562,23 @@ class Floorplan:
         try:
             with open(nl_path, "r", errors="ignore") as f:
                 content = f.read()
-            m_match = re.search(r"module\s+([a-zA-Z0-9_]+)\s*\((.*?)\);", content, re.DOTALL)
-            if m_match:
-                ports_raw = [p.strip() for p in m_match.group(2).split(",") if p.strip()]
-                for p in ports_raw:
-                    dir_match = re.search(r"(input|output|inout)\s+(?:wire\s+|reg\s+)?(?:\[.*?\]\s*)?\b" + re.escape(p) + r"\b", content)
-                    pdir = dir_match.group(1).upper() if dir_match else "INPUT"
-                    ports.append((p, pdir))
+            top_mod = getattr(self.project, "top_module", None)
+            module_body = content
+            ports_raw = []
+            if top_mod:
+                m_match = re.search(rf"\bmodule\s+{re.escape(top_mod)}\b\s*\((.*?)\);(.*?)endmodule", content, re.DOTALL)
+                if m_match:
+                    ports_raw = [p.strip() for p in m_match.group(1).split(",") if p.strip()]
+                    module_body = m_match.group(2)
+            if not ports_raw:
+                m_match = re.search(r"\bmodule\s+([a-zA-Z0-9_]+)\s*\((.*?)\);(.*?)endmodule", content, re.DOTALL)
+                if m_match:
+                    ports_raw = [p.strip() for p in m_match.group(2).split(",") if p.strip()]
+                    module_body = m_match.group(3)
+            for p in ports_raw:
+                dir_match = re.search(r"\b(input|output|inout)\b(?:\s+(?:wire|reg))?(?:\s*\[.*?\])?\s*[^;]*?\b" + re.escape(p) + r"\b", module_body)
+                pdir = dir_match.group(1).upper() if dir_match else "INPUT"
+                ports.append((p, pdir))
         except Exception:
             pass
         return ports
@@ -1067,6 +1094,7 @@ class Floorplan:
         for iname, cmaster in netlist_instances:
             if iname not in placed_names:
                 comp_lines.append(f"    - {iname} {cmaster} + UNPLACED ;")
+                placed_names.add(iname)
 
         if comp_lines:
             lines.append(f"COMPONENTS {len(comp_lines)} ;")

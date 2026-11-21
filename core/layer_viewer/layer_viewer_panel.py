@@ -387,8 +387,49 @@ print("___SILIS_LAYER_JSON_END___")
                 j_str = p.stdout.split("___SILIS_LAYER_JSON_START___")[1].split("___SILIS_LAYER_JSON_END___")[0].strip()
                 data = json.loads(j_str)
                 self.data_loaded.emit(data)
-        except Exception:
-            pass
+                return
+            else:
+                if p.returncode != 0 or p.stderr:
+                    err_msg = (p.stderr or p.stdout or "").strip()
+                    last_line = err_msg.splitlines()[-1] if err_msg.splitlines() else f"exit code {p.returncode}"
+                    print(f"[SILIS LAYER VIEWER] OpenROAD extraction error ({last_line})")
+        except Exception as e:
+            print(f"[SILIS LAYER VIEWER] Worker execution exception: {e}")
+
+        # Robust Fallback to direct Python DEFParser if OpenROAD fails or is unavailable
+        try:
+            from silis.core.backendflow.siliconpeeker.peeker import DEFParser
+            parser = DEFParser(self.def_path)
+            die_rect = parser.die_rect
+            die = [int(die_rect.left()), int(die_rect.top()), int(die_rect.right()), int(die_rect.bottom())]
+            inst_x, inst_y, inst_w, inst_h = [], [], [], []
+            inst_names, inst_masters, is_macro, inst_categories = [], [], [], []
+            inst_lookup = {}
+            for mx, my, mw, mh, mname in parser.macro_items:
+                inst_x.append(mx); inst_y.append(my); inst_w.append(mw); inst_h.append(mh)
+                inst_names.append(mname); inst_masters.append(parser.comp_masters.get(mname, "macro"))
+                is_macro.append(True); inst_categories.append(1)
+                inst_lookup[mname] = {
+                    "master": parser.comp_masters.get(mname, "macro"),
+                    "type": "BLOCK", "category": "MACRO",
+                    "x": mx, "y": my, "w": mw, "h": mh,
+                    "orient": parser.comp_orients.get(mname, "R0"), "terms": []
+                }
+            fallback_data = {
+                "dbu": parser.dbu,
+                "die": die,
+                "layers": {},
+                "rail_x": [], "rail_y": [], "rail_w": [], "rail_h": [],
+                "rail_nets": [], "rail_layers": [],
+                "inst_x": inst_x, "inst_y": inst_y, "inst_w": inst_w, "inst_h": inst_h,
+                "inst_names": inst_names, "inst_masters": inst_masters, "is_macro": is_macro,
+                "inst_categories": inst_categories,
+                "inst_lookup": inst_lookup,
+                "net_lookup": {}
+            }
+            self.data_loaded.emit(fallback_data)
+        except Exception as fb_err:
+            print(f"[SILIS LAYER VIEWER] Fallback parser exception: {fb_err}")
 
 
 class LayerViewerPanel(QWidget):
