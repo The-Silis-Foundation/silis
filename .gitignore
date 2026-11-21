@@ -26,6 +26,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# Pre-compiled high-performance layout viewer C++ engines for zero-build boot
+!core/layer_viewer/silis_layer_viewer*.so
+!core/backendflow/siliconpeeker/fast_layout_viewer*.so
+!core/backendflow/fast_viewer/fast_layout_viewer*.so
+!core/backendflow/fast_viewer/build/
+!core/backendflow/fast_viewer/build/fast_layout_viewer*.so
 .pytest_cache/
 .coverage
 htmlcov/
