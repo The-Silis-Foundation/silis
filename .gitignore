@@ -74,9 +74,11 @@ node_modules/
 # Third-party precompiled binaries
 third-party/bin/
 third-party/share/
+third-party/ordlibs/
 
-# Built AppImages
+# Built AppImages & zsync update metadata
 *.AppImage
+*.zsync
 squashfs-root/
 
 # AppImage staging directory
