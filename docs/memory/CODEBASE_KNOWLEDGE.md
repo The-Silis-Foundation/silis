@@ -5,79 +5,106 @@
 
 ## 1. Top-Level Core SDK Classes & Methods
 
-### `class Pipeline` (silis/core/sdk/pipeline.py:359)
+### `class DFTConfig` (silis/core/sdk/dft_config.py:13)
+> Strongly typed configuration dataclass for Tier-1 DFT, compression, MBIST/BIRA, JTAG, and At-Speed testing.
+
+| Method / Field | Arguments / Type | File Line | Description |
+|---|---|---|---|
+| `validate` | `(self)` | [`L51`](silis/core/sdk/dft_config.py#L51) | Enforces numeric bounds and physical consistency across scan, EDT, MBIST, and JTAG settings. |
+| `to_dict` | `(self)` | [`L70`](silis/core/sdk/dft_config.py#L70) | Serializes configuration to plain dictionary for JSON/TCL export. |
+| `from_dict` | `(cls, data)` | [`L75`](silis/core/sdk/dft_config.py#L75) | Deserializes dictionary to strongly-typed DFTConfig dataclass. |
+
+### `class DFTBuilder` (silis/core/sdk/pipeline.py:378)
+> Fluent builder for programmatic configuration and execution of the Silis Tier-1 DFT suite.
+
+| Method | Arguments | File Line | Description |
+|---|---|---|---|
+| `__init__` | `(self, pipeline)` | [`L384`](silis/core/sdk/pipeline.py#L384) | Instantiates builder attached to parent Pipeline instance. |
+| `with_scan_ports` | `(self, scan_in, scan_out, scan_en, scan_clk)` | [`L388`](silis/core/sdk/pipeline.py#L388) | Configures top-level scan port names. |
+| `with_lockup_latches` | `(self, enabled)` | [`L395`](silis/core/sdk/pipeline.py#L395) | Toggles inter-clock domain lockup latch insertion. |
+| `with_icg_bypass` | `(self, enabled)` | [`L399`](silis/core/sdk/pipeline.py#L399) | Toggles integrated clock gating (ICG) test mode bypass. |
+| `with_compression` | `(self, ratio, channels, internal_chains, x_masking)` | [`L403`](silis/core/sdk/pipeline.py#L403) | Configures LFSR decompressor and spatial XOR compactor with dynamic X-masking. |
+| `with_mbist` | `(self, algorithm, enable_bira)` | [`L411`](silis/core/sdk/pipeline.py#L411) | Configures SRAM MARCH test controller and BIRA redundancy repair. |
+| `with_jtag` | `(self, device_id, ir_length, export_bsdl)` | [`L418`](silis/core/sdk/pipeline.py#L418) | Configures IEEE 1149.1 TAP controller and BSDL export. |
+| `with_at_speed` | `(self, launch_mode, target_slack_ns)` | [`L425`](silis/core/sdk/pipeline.py#L425) | Configures at-speed LOC/LOS transition delay testing and OpenSTA slack-directed paths. |
+| `execute` | `(self)` | [`L431`](silis/core/sdk/pipeline.py#L431) | Applies configuration and triggers pipeline DFT signoff analysis. |
+
+### `class Pipeline` (silis/core/sdk/pipeline.py:435)
 > High-level programmatic ASIC pipeline for Silis.
 Provides methods for synthesis, PnR steps, GDS stream-out, and signoff.
 
 | Method | Arguments | File Line | Description |
 |---|---|---|---|
-| `__init__` | `(self, project_or_path, headless)` | [`L403`](silis/core/sdk/pipeline.py#L403) | - |
-| `process_events` | `(self, iterations, delay_ms)` | [`L437`](silis/core/sdk/pipeline.py#L437) | Pumps Qt event loop so QProcess, QThread, and timer events are processed. |
-| `synthesis` | `(self, tcl, corner, mcmm, dft, flatten)` | [`L449`](silis/core/sdk/pipeline.py#L449) | Runs frontend RTL synthesis, scan insertion (if dft=True), and technology mapping. |
-| `init` | `(self, tcl)` | [`L469`](silis/core/sdk/pipeline.py#L469) | Initializes OpenROAD, links PDK LEF/LIBs, and reads the synthesized netlist. |
-| `spec_floorplan` | `(self, die_area, core_margin, macros, regions, blockages, power_domains, site, auto_macro_placer, macro_halo, macro_channel, check_collisions, strict_collisions)` | [`L531`](silis/core/sdk/pipeline.py#L531) | Declaratively specifies chip die bounds, core utilization, macro placement, halos, blockages, and regions. |
-| `spec_iopins` | `(self, mode, pad_strategy, pad_ring_margin, upf_aware, supply_pairs_per_edge, edge_assignments, pin_target, hor_layers, ver_layers, corner_avoidance, min_distance, pin_constraints, pin_order_file)` | [`L571`](silis/core/sdk/pipeline.py#L571) | Declaratively specifies IO pad ring or peripheral pin placement. |
-| `spec_pdn` | `(self, enable_ring, ring_width, ring_spacing, ring_offset, ring_h_layer, ring_v_layer, enable_trunks, trunk_layer, trunk_width)` | [`L610`](silis/core/sdk/pipeline.py#L610) | Declaratively specifies the PDN mesh, core power rings, and dedicated pad trunk synthesis parameters. |
-| `spec_tapcells` | `(self, distance, tapcell_master, endcap_cpp, endcap_master)` | [`L641`](silis/core/sdk/pipeline.py#L641) | Declaratively specifies tapcell and endcap insertion parameters. |
-| `spec_power_switches` | `(self, cell_master, columns, pitch_um, domains, adaptive_placement)` | [`L662`](silis/core/sdk/pipeline.py#L662) | Declaratively specifies physical power switch column synthesis in gated domains. |
-| `spec_level_shifters` | `(self, cell_master, rules)` | [`L690`](silis/core/sdk/pipeline.py#L690) | Declaratively specifies level shifter cell synthesis on domain boundary cuts. |
-| `run_fps` | `(self, tcl_out_path)` | [`L707`](silis/core/sdk/pipeline.py#L707) | Unified FloorPlan Synthesis (FPS) Orchestrator. |
-| `floorplan` | `(self, tcl, die_area, core_margin, macros, regions, blockages, power_domains, power_domain_affinity, check_collisions, strict_collisions, auto_macro_placer, macro_halo, macro_channel, mpl_max_levels, mpl_min_instances, mpl_max_instances, mpl_min_macros, mpl_max_macros, mpl_bus_planning, mpl_target_dead_space, mpl_wirelength_weight, mpl_area_weight)` | [`L1313`](silis/core/sdk/pipeline.py#L1313) | Configures chip die bounds, core utilization, macro placement, halos, blockages, and regions. |
-| `place_macro` | `(self, inst, at, orient, halo)` | [`L1586`](silis/core/sdk/pipeline.py#L1586) | Creates a clean, validated macro placement dictionary. |
-| `add_fence` | `(self, module, box, origin, density, aspect_ratio, halo)` | [`L1612`](silis/core/sdk/pipeline.py#L1612) | Creates a clean fence region dictionary. |
-| `add_region` | `(self, module, box, origin, density, aspect_ratio, halo)` | [`L1647`](silis/core/sdk/pipeline.py#L1647) | Creates an inclusive region dictionary. |
-| `auto_place_regions` | `(self, die_area, core_margin, macros, regions, blockages, target_density, min_cutoff_pct, force_place_all, force_auto_shape, as_fence, common_halo, seed, w_r2m, w_r2r, w_r2io, allow_non_rectangular)` | [`L1683`](silis/core/sdk/pipeline.py#L1683) | Executes hierarchical auto region placement using the Silis geometric & affinity solver. |
-| `auto_shape_regions` | `(self, module_names, target_density, min_cutoff_pct, core_margin, as_fence)` | [`L1762`](silis/core/sdk/pipeline.py#L1762) | Convenience method to auto-shape and auto-place inclusive floorplanning regions. |
-| `add_blockage` | `(self, box, soft)` | [`L1814`](silis/core/sdk/pipeline.py#L1814) | Creates a placement/routing blockage dictionary. |
-| `tapcells` | `(self, tcl, distance, endcap_cpp, tapcell, endcap)` | [`L1822`](silis/core/sdk/pipeline.py#L1822) | Inserts welltap and endcap cells according to PDK DRC spacing rules. |
-| `configure_power_domain_supply` | `(self, domain_name, supply_type)` | [`L1846`](silis/core/sdk/pipeline.py#L1846) | Configures the power supply architecture for a power domain: |
-| `pdn` | `(self, tcl, enable_ring, ring_width, ring_spacing, ring_offset, ring_h_layer, ring_v_layer, enable_trunks, trunk_layer, trunk_width)` | [`L1857`](silis/core/sdk/pipeline.py#L1857) | Synthesizes VDD and VSS power grid straps, peripheral power ring, and targeted pad trunk bridges. |
-| `iopins` | `(self, tcl, mode, pad_strategy, pad_ring_margin, upf_aware, supply_pairs_per_edge, edge_assignments, pin_target, hor_layers, ver_layers, corner_avoidance, min_distance, pin_constraints, pin_order_file, random, exclude_left, exclude_right, exclude_top, exclude_bottom)` | [`L2252`](silis/core/sdk/pipeline.py#L2252) | Places IO pins or full-chip pad ring along die perimeter. |
-| `place` | `(self, tcl, density, pad_left, pad_right, timing_driven, init_density_penalty)` | [`L2688`](silis/core/sdk/pipeline.py#L2688) | Executes global placement, timing-driven optimization, and detailed placement. |
-| `cts` | `(self, tcl, root_buf, buf_list, sink_clustering)` | [`L2783`](silis/core/sdk/pipeline.py#L2783) | Synthesizes balanced clock tree network with clock buffer insertion. |
-| `route` | `(self, tcl, congestion_iterations, allow_congestion, bottom_layer, top_layer, layer_adjustments)` | [`L2828`](silis/core/sdk/pipeline.py#L2828) | Runs global routing (FastRoute) and detailed routing (TritonRoute). |
-| `fill` | `(self, tcl)` | [`L2908`](silis/core/sdk/pipeline.py#L2908) | Inserts decap & standard cell filler cells and checks metal layer densities. |
-| `gds` | `(self, tcl)` | [`L2923`](silis/core/sdk/pipeline.py#L2923) | Streams out physical layout into standard GDSII using Magic. |
-| `signoff` | `(self, step, tcl)` | [`L2945`](silis/core/sdk/pipeline.py#L2945) | Executes final verification and signoff checks: |
-| `dft` | `(self, tcl)` | [`L2989`](silis/core/sdk/pipeline.py#L2989) | Executes full DFT scan chain stitching and ATPG signoff analysis. Returns DFTSignoffReport. |
-| `lvs` | `(self, tcl)` | [`L2993`](silis/core/sdk/pipeline.py#L2993) | Executes Layout Versus Schematic (LVS) comparison. Returns LVSSignoffReport. |
-| `gls` | `(self, tcl)` | [`L2997`](silis/core/sdk/pipeline.py#L2997) | Executes Gate-Level Simulation (GLS) with SDF timing back-annotation. Returns GLSSignoffReport. |
-| `simulate` | `(self, trace_format, coverage, threads, timeout_sec)` | [`L3001`](silis/core/sdk/pipeline.py#L3001) | Executes high-speed cycle-accurate SystemVerilog / UVM simulation using Verilator. |
-| `lint` | `(self)` | [`L3093`](silis/core/sdk/pipeline.py#L3093) | Runs fast static linting across project RTL using bundled Verilator. |
-| `export_sdf` | `(self)` | [`L3118`](silis/core/sdk/pipeline.py#L3118) | Exports Standard Delay Format (SDF) timing file from physical design. |
-| `tapeout` | `(self, tcl)` | [`L3125`](silis/core/sdk/pipeline.py#L3125) | Packages final foundry tapeout GDS and generates signoff checklist manifest. |
-| `export_macro` | `(self, macro_name, pdk_name, corners, def_path, gds_path, verilog_path, sdc_path)` | [`L3129`](silis/core/sdk/pipeline.py#L3129) | Exports the current physical design as a foundry-grade Hard Macro Package |
-| `run_step` | `(self, step_name)` | [`L3209`](silis/core/sdk/pipeline.py#L3209) | Dispatches an individual step by name. |
-| `run_until` | `(self, target_step)` | [`L3259`](silis/core/sdk/pipeline.py#L3259) | Executes flow steps sequentially starting from 'synthesis' up to and |
-| `run_from` | `(self, start_step, end_step)` | [`L3279`](silis/core/sdk/pipeline.py#L3279) | Executes flow steps sequentially from start_step to end_step (inclusive). |
-| `run_all` | `(self)` | [`L3307`](silis/core/sdk/pipeline.py#L3307) | Executes full ASIC flow end-to-end: synthesis through signoff. |
-| `get_synthesis_report` | `(self)` | [`L3314`](silis/core/sdk/pipeline.py#L3314) | Retrieves parsed post-synthesis report. |
-| `get_signoff_report` | `(self)` | [`L3318`](silis/core/sdk/pipeline.py#L3318) | Retrieves parsed post-route PAT signoff report. |
-| `get_drc_report` | `(self)` | [`L3322`](silis/core/sdk/pipeline.py#L3322) | Retrieves parsed DRC verification report. |
-| `get_dft_report` | `(self)` | [`L3326`](silis/core/sdk/pipeline.py#L3326) | Retrieves parsed DFT scan chain and fault coverage report. |
-| `get_lvs_report` | `(self)` | [`L3330`](silis/core/sdk/pipeline.py#L3330) | Retrieves parsed LVS signoff report. |
-| `get_gls_report` | `(self)` | [`L3334`](silis/core/sdk/pipeline.py#L3334) | Retrieves parsed Gate-Level Simulation (GLS) signoff report. |
-| `get_tapeout_report` | `(self)` | [`L3338`](silis/core/sdk/pipeline.py#L3338) | Retrieves parsed Foundry Tapeout checklist manifest report. |
-| `get_reports` | `(self)` | [`L3342`](silis/core/sdk/pipeline.py#L3342) | Returns all parsed reports for the pipeline project. |
-| `get_sizes` | `(self, refresh)` | [`L3349`](silis/core/sdk/pipeline.py#L3349) | Returns design sizes JSON containing total cell area and module breakdown. |
-| `get_modules` | `(self, refresh)` | [`L3353`](silis/core/sdk/pipeline.py#L3353) | Returns list of hierarchical module instance names. |
-| `get_module_area` | `(self, module, refresh)` | [`L3357`](silis/core/sdk/pipeline.py#L3357) | Returns standard cell area in um^2 for module or core. |
-| `get_utilization` | `(self, module_or_region, area, refresh)` | [`L3361`](silis/core/sdk/pipeline.py#L3361) | Calculates and returns cell utilization (0.0 to 1.0+) for a module or region. |
-| `get_required_area` | `(self, module, target_density, refresh)` | [`L3377`](silis/core/sdk/pipeline.py#L3377) | Returns required physical area in um^2 for target density. |
-| `suggest_box` | `(self, module, origin, target_density, aspect_ratio, grid_snap, refresh)` | [`L3388`](silis/core/sdk/pipeline.py#L3388) | Calculates optimal [x1, y1, x2, y2] bounding box for target density and aspect ratio. |
-| `convert` | `(self, src, src_lang, out, std, fsynopsys, use_latches, hls_top, hls_memory_policy, hls_channels)` | [`L3410`](silis/core/sdk/pipeline.py#L3410) | Lowers source HDL/HLS code (SystemVerilog, VHDL-2008, C/C++) to standard synthesizable Verilog. |
-| `formal` | `(self, properties, engine, mode, depth)` | [`L3480`](silis/core/sdk/pipeline.py#L3480) | Executes formal property verification using SymbiYosys (SBY). |
-| `get_heatmap` | `(self, heatmap_type, grid_size, def_path)` | [`L3530`](silis/core/sdk/pipeline.py#L3530) | Calculates and returns physical heatmap data directly as a NumPy array. |
-| `compute_minimum_die_for_pads` | `(self, num_pads, core_w, core_h, strategy, target_aspect, pad_margin, min_pitch)` | [`L3703`](silis/core/sdk/pipeline.py#L3703) | Calculates the minimum PDK-legal die dimensions and per-edge pad allocations |
-| `optimize_die` | `(self, target_density, padring, strategy, pad_margin)` | [`L3770`](silis/core/sdk/pipeline.py#L3770) | Optimizes core and die dimensions based on synthesized standard cell area |
-| `apply_clock_ndr` | `(self, rule_name, min_layer, max_layer, clock_nets)` | [`L3812`](silis/core/sdk/pipeline.py#L3812) | Applies Non-Default Routing (NDR) rules to clock trees. |
-| `repair_clock_buffers` | `(self)` | [`L3832`](silis/core/sdk/pipeline.py#L3832) | Repairs and balances clock buffer chains in OpenROAD. |
-| `repair_antennas` | `(self, iterations, diode_cell)` | [`L3839`](silis/core/sdk/pipeline.py#L3839) | Inserts antenna diodes on long gate routing nets. |
-| `save_checkpoint` | `(self, tag)` | [`L3856`](silis/core/sdk/pipeline.py#L3856) | Saves current layout and database checkpoint to results/{tag}.odb and results/{tag}.def. |
-| `load_checkpoint` | `(self, tag)` | [`L3881`](silis/core/sdk/pipeline.py#L3881) | Loads a previously saved database checkpoint from results/{tag}.odb. |
-| `close` | `(self)` | [`L3897`](silis/core/sdk/pipeline.py#L3897) | Gracefully closes child OpenROAD processes and flushes events. |
-| `__enter__` | `(self)` | [`L3916`](silis/core/sdk/pipeline.py#L3916) | - |
-| `__exit__` | `(self, exc_type, exc_val, exc_tb)` | [`L3919`](silis/core/sdk/pipeline.py#L3919) | - |
+| `__init__` | `(self, project_or_path, headless)` | [`L480`](silis/core/sdk/pipeline.py#L480) | - |
+| `process_events` | `(self, iterations, delay_ms)` | [`L525`](silis/core/sdk/pipeline.py#L525) | Pumps Qt event loop so QProcess, QThread, and timer events are processed. |
+| `synthesis` | `(self, tcl, corner, mcmm, dft, flatten)` | [`L537`](silis/core/sdk/pipeline.py#L537) | Runs frontend RTL synthesis, scan insertion (if dft=True), and technology mapping. |
+| `init` | `(self, tcl)` | [`L557`](silis/core/sdk/pipeline.py#L557) | Initializes OpenROAD, links PDK LEF/LIBs, and reads the synthesized netlist. |
+| `spec_floorplan` | `(self, die_area, core_margin, macros, regions, blockages, power_domains, site, auto_macro_placer, macro_halo, macro_channel, check_collisions, strict_collisions)` | [`L681`](silis/core/sdk/pipeline.py#L681) | Declaratively specifies chip die bounds, core utilization, macro placement, halos, blockages, and regions. |
+| `spec_iopins` | `(self, mode, pad_strategy, pad_ring_margin, upf_aware, supply_pairs_per_edge, edge_assignments, pin_target, hor_layers, ver_layers, corner_avoidance, min_distance, pin_constraints, pin_order_file)` | [`L721`](silis/core/sdk/pipeline.py#L721) | Declaratively specifies IO pad ring or peripheral pin placement. |
+| `spec_pdn` | `(self, enable_ring, ring_width, ring_spacing, ring_offset, ring_h_layer, ring_v_layer, enable_trunks, trunk_layer, trunk_width)` | [`L760`](silis/core/sdk/pipeline.py#L760) | Declaratively specifies the PDN mesh, core power rings, and dedicated pad trunk synthesis parameters. |
+| `spec_tapcells` | `(self, distance, tapcell_master, endcap_cpp, endcap_master)` | [`L801`](silis/core/sdk/pipeline.py#L801) | Declaratively specifies tapcell and endcap insertion parameters. |
+| `spec_power_switches` | `(self, cell_master, columns, pitch_um, domains, adaptive_placement)` | [`L822`](silis/core/sdk/pipeline.py#L822) | Declaratively specifies physical power switch column synthesis in gated domains. |
+| `spec_level_shifters` | `(self, cell_master, rules)` | [`L856`](silis/core/sdk/pipeline.py#L856) | Declaratively specifies level shifter cell synthesis on domain boundary cuts. |
+| `run_fps` | `(self, tcl_out_path)` | [`L873`](silis/core/sdk/pipeline.py#L873) | Unified FloorPlan Synthesis (FPS) Orchestrator. Executes verified, single-pass floorplan compilation. |
+| `floorplan` | `(self, tcl, die_area, core_margin, macros, regions, blockages, power_domains, power_domain_affinity, check_collisions, strict_collisions, auto_macro_placer, macro_halo, macro_channel, mpl_max_levels, mpl_min_instances, mpl_max_instances, mpl_min_macros, mpl_max_macros, mpl_bus_planning, mpl_target_dead_space, mpl_wirelength_weight, mpl_area_weight)` | [`L1838`](silis/core/sdk/pipeline.py#L1838) | `[Legacy/Deprecated]` Configures chip die bounds, core utilization, macro placement, halos, blockages, and regions. Prefer Declarative FPS (`spec_*` + `run_fps()`). |
+| `place_macro` | `(self, inst, at, orient, halo)` | [`L2114`](silis/core/sdk/pipeline.py#L2114) | Creates a clean, validated macro placement dictionary. |
+| `add_fence` | `(self, module, box, origin, density, aspect_ratio, halo)` | [`L2140`](silis/core/sdk/pipeline.py#L2140) | Creates a clean fence region dictionary. |
+| `add_region` | `(self, module, box, origin, density, aspect_ratio, halo)` | [`L2175`](silis/core/sdk/pipeline.py#L2175) | Creates an inclusive region dictionary. |
+| `auto_place_regions` | `(self, die_area, core_margin, macros, regions, blockages, target_density, min_cutoff_pct, force_place_all, force_auto_shape, as_fence, common_halo, seed, w_r2m, w_r2r, w_r2io, allow_non_rectangular)` | [`L2211`](silis/core/sdk/pipeline.py#L2211) | Executes hierarchical auto region placement using the Silis geometric & affinity solver. |
+| `auto_shape_regions` | `(self, module_names, target_density, min_cutoff_pct, core_margin, as_fence)` | [`L2290`](silis/core/sdk/pipeline.py#L2290) | Convenience method to auto-shape and auto-place inclusive floorplanning regions. |
+| `add_blockage` | `(self, box, soft)` | [`L2413`](silis/core/sdk/pipeline.py#L2413) | Creates a placement/routing blockage dictionary. |
+| `tapcells` | `(self, tcl, distance, endcap_cpp, tapcell, endcap)` | [`L2421`](silis/core/sdk/pipeline.py#L2421) | `[Legacy/Deprecated]` Inserts welltap and endcap cells. Prefer `spec_tapcells` + `run_fps()`. |
+| `configure_power_domain_supply` | `(self, domain_name, supply_type)` | [`L2448`](silis/core/sdk/pipeline.py#L2448) | Configures the power supply architecture for a power domain: |
+| `pdn` | `(self, tcl, enable_ring, ring_width, ring_spacing, ring_offset, ring_h_layer, ring_v_layer, enable_trunks, trunk_layer, trunk_width)` | [`L2459`](silis/core/sdk/pipeline.py#L2459) | `[Legacy/Deprecated]` Synthesizes power grid straps and rings. Prefer `spec_pdn` + `run_fps()`. |
+| `iopins` | `(self, tcl, mode, pad_strategy, pad_ring_margin, upf_aware, supply_pairs_per_edge, edge_assignments, pin_target, hor_layers, ver_layers, corner_avoidance, min_distance, pin_constraints, pin_order_file, random, exclude_left, exclude_right, exclude_top, exclude_bottom)` | [`L2857`](silis/core/sdk/pipeline.py#L2857) | `[Legacy/Deprecated]` Places IO pins or pad ring. Prefer `spec_iopins` + `run_fps()`. |
+| `place` | `(self, tcl, density, pad_left, pad_right, timing_driven, init_density_penalty)` | [`L3299`](silis/core/sdk/pipeline.py#L3299) | Executes global placement, timing-driven optimization, and detailed placement. |
+| `cts` | `(self, tcl, root_buf, buf_list, sink_clustering)` | [`L3421`](silis/core/sdk/pipeline.py#L3421) | Synthesizes balanced clock tree network with clock buffer insertion. |
+| `route` | `(self, tcl, congestion_iterations, allow_congestion, bottom_layer, top_layer, layer_adjustments)` | [`L3469`](silis/core/sdk/pipeline.py#L3469) | Runs global routing (FastRoute) and detailed routing (TritonRoute). |
+| `fill` | `(self, tcl)` | [`L3552`](silis/core/sdk/pipeline.py#L3552) | Inserts decap & standard cell filler cells and checks metal layer densities. |
+| `gds` | `(self, tcl)` | [`L3581`](silis/core/sdk/pipeline.py#L3581) | Streams out physical layout into standard GDSII using Magic. |
+| `signoff` | `(self, step, tcl)` | [`L3603`](silis/core/sdk/pipeline.py#L3603) | Executes final verification and signoff checks. |
+| `dft_builder` | `(self)` | [`L3647`](silis/core/sdk/pipeline.py#L3647) | Returns fluent DFTBuilder for configuring Tier-1 DFT parameters. |
+| `dft` | `(self, tcl, scan_in, scan_out, scan_en, scan_clk, lockup_latches, icg_bypass, compression, compression_ratio, compression_channels, internal_scan_chains, x_masking, mbist, march_algorithm, enable_bira, jtag, device_id, export_bsdl, at_speed, launch_mode, target_slack_ns)` | [`L3652`](silis/core/sdk/pipeline.py#L3652) | Executes full DFT scan chain stitching, EDT compression, MBIST, JTAG TAP, and ATPG analysis. Returns DFTSignoffReport. |
+| `lvs` | `(self, tcl)` | [`L3765`](silis/core/sdk/pipeline.py#L3765) | Executes Layout Versus Schematic (LVS) comparison. Returns LVSSignoffReport. |
+| `gls` | `(self, tcl)` | [`L3769`](silis/core/sdk/pipeline.py#L3769) | Executes Gate-Level Simulation (GLS) with SDF timing back-annotation. Returns GLSSignoffReport. |
+| `simulate` | `(self, trace_format, coverage, threads, timeout_sec)` | [`L3773`](silis/core/sdk/pipeline.py#L3773) | Executes high-speed cycle-accurate SystemVerilog / UVM simulation using Verilator. |
+| `lint` | `(self)` | [`L3909`](silis/core/sdk/pipeline.py#L3909) | Runs fast static linting across project RTL using bundled Verilator. |
+| `export_sdf` | `(self)` | [`L3934`](silis/core/sdk/pipeline.py#L3934) | Exports Standard Delay Format (SDF) timing file from physical design. |
+| `tapeout` | `(self, tcl)` | [`L3941`](silis/core/sdk/pipeline.py#L3941) | Packages final foundry tapeout GDS and generates signoff checklist manifest. |
+| `export_macro` | `(self, macro_name, pdk_name, corners, def_path, gds_path, verilog_path, sdc_path)` | [`L3945`](silis/core/sdk/pipeline.py#L3945) | Exports the current physical design as a foundry-grade Hard Macro Package |
+| `run_step` | `(self, step_name)` | [`L4025`](silis/core/sdk/pipeline.py#L4025) | Dispatches an individual step by name. |
+| `run_until` | `(self, target_step)` | [`L4075`](silis/core/sdk/pipeline.py#L4075) | Executes flow steps sequentially starting from 'synthesis' up to target_step. |
+| `run_from` | `(self, start_step, end_step)` | [`L4095`](silis/core/sdk/pipeline.py#L4095) | Executes flow steps sequentially from start_step to end_step (inclusive). |
+| `run_all` | `(self)` | [`L4123`](silis/core/sdk/pipeline.py#L4123) | Executes full ASIC flow end-to-end: synthesis through signoff. |
+| `get_synthesis_report` | `(self)` | [`L4130`](silis/core/sdk/pipeline.py#L4130) | Retrieves parsed post-synthesis report. |
+| `get_signoff_report` | `(self)` | [`L4134`](silis/core/sdk/pipeline.py#L4134) | Retrieves parsed post-route PAT signoff report. |
+| `get_drc_report` | `(self)` | [`L4138`](silis/core/sdk/pipeline.py#L4138) | Retrieves parsed DRC verification report. |
+| `get_dft_report` | `(self)` | [`L4142`](silis/core/sdk/pipeline.py#L4142) | Retrieves parsed DFT scan chain and fault coverage report. |
+| `get_lvs_report` | `(self)` | [`L4146`](silis/core/sdk/pipeline.py#L4146) | Retrieves parsed LVS signoff report. |
+| `get_gls_report` | `(self)` | [`L4150`](silis/core/sdk/pipeline.py#L4150) | Retrieves parsed Gate-Level Simulation (GLS) signoff report. |
+| `get_tapeout_report` | `(self)` | [`L4154`](silis/core/sdk/pipeline.py#L4154) | Retrieves parsed Foundry Tapeout checklist manifest report. |
+| `get_reports` | `(self)` | [`L4158`](silis/core/sdk/pipeline.py#L4158) | Returns all parsed reports for the pipeline project. |
+| `get_sizes` | `(self, refresh)` | [`L4165`](silis/core/sdk/pipeline.py#L4165) | Returns design sizes JSON containing total cell area and module breakdown. |
+| `get_modules` | `(self, refresh)` | [`L4169`](silis/core/sdk/pipeline.py#L4169) | Returns list of hierarchical module instance names. |
+| `get_module_area` | `(self, module, refresh)` | [`L4173`](silis/core/sdk/pipeline.py#L4173) | Returns standard cell area in um^2 for module or core. |
+| `get_utilization` | `(self, module_or_region, area, refresh)` | [`L4177`](silis/core/sdk/pipeline.py#L4177) | Calculates and returns cell utilization (0.0 to 1.0+) for a module or region. |
+| `get_required_area` | `(self, module, target_density, refresh)` | [`L4193`](silis/core/sdk/pipeline.py#L4193) | Returns required physical area in um^2 for target density. |
+| `suggest_box` | `(self, module, origin, target_density, aspect_ratio, grid_snap, refresh)` | [`L4204`](silis/core/sdk/pipeline.py#L4204) | Calculates optimal [x1, y1, x2, y2] bounding box for target density and aspect ratio. |
+| `convert` | `(self, src, src_lang, out, std, fsynopsys, use_latches, hls_top, hls_memory_policy, hls_channels)` | [`L4226`](silis/core/sdk/pipeline.py#L4226) | Lowers source HDL/HLS code (SystemVerilog, VHDL-2008, C/C++) to standard synthesizable Verilog. |
+| `formal` | `(self, properties, engine, mode, depth)` | [`L4296`](silis/core/sdk/pipeline.py#L4296) | Executes formal property verification using SymbiYosys (SBY). |
+| `get_heatmap` | `(self, heatmap_type, grid_size, def_path)` | [`L4346`](silis/core/sdk/pipeline.py#L4346) | Calculates and returns physical heatmap data directly as a NumPy array. |
+| `compute_minimum_die_for_pads` | `(self, num_pads, core_w, core_h, strategy, target_aspect, pad_margin, min_pitch)` | [`L4519`](silis/core/sdk/pipeline.py#L4519) | Calculates the minimum PDK-legal die dimensions and per-edge pad allocations |
+| `optimize_die` | `(self, target_density, padring, strategy, pad_margin)` | [`L4600`](silis/core/sdk/pipeline.py#L4600) | Optimizes core and die dimensions based on synthesized standard cell area |
+| `apply_clock_ndr` | `(self, rule_name, min_layer, max_layer, clock_nets)` | [`L4642`](silis/core/sdk/pipeline.py#L4642) | Applies Non-Default Routing (NDR) rules to clock trees. |
+| `repair_clock_buffers` | `(self)` | [`L4662`](silis/core/sdk/pipeline.py#L4662) | Repairs and balances clock buffer chains in OpenROAD. |
+| `repair_antennas` | `(self, iterations, diode_cell)` | [`L4669`](silis/core/sdk/pipeline.py#L4669) | Inserts antenna diodes on long gate routing nets. |
+| `save_checkpoint` | `(self, tag)` | [`L4686`](silis/core/sdk/pipeline.py#L4686) | Saves current layout and database checkpoint to results/{tag}.odb and results/{tag}.def. |
+| `load_checkpoint` | `(self, tag)` | [`L4721`](silis/core/sdk/pipeline.py#L4721) | Loads a previously saved database checkpoint from results/{tag}.odb. |
+| `stash` | `(self)` | [`L4740`](silis/core/sdk/pipeline.py#L4740) | Creates an in-memory snapshot of current layout state for speculative operations. |
+| `undo` | `(self)` | [`L4751`](silis/core/sdk/pipeline.py#L4751) | Reverts layout state to the last stashed checkpoint. |
+| `close` | `(self)` | [`L4855`](silis/core/sdk/pipeline.py#L4855) | Gracefully closes child OpenROAD processes and flushes events. |
+| `__enter__` | `(self)` | [`L4874`](silis/core/sdk/pipeline.py#L4874) | Context manager entry. |
+| `__exit__` | `(self, exc_type, exc_val, exc_tb)` | [`L4877`](silis/core/sdk/pipeline.py#L4877) | Context manager exit with automatic cleanup. |
 
 ### `class Project` (silis/core/sdk/project.py:30)
 > Programmatic abstraction of a Silis ASIC Project (.silisproj).
@@ -258,7 +285,13 @@ and I/O Pad/Pin Co-Optimization Workbench.
 |---|---|---|
 | `generate_floorplan_tcl_from_data` | [`silis/core/backendflow/floorplanner/floorplanner.py:L7745`](silis/core/backendflow/floorplanner/floorplanner.py#L7745) | Headless & programmatic ASIC floorplan TCL generator. |
 | `compute_peripheral_macro_placement` | [`silis/core/backendflow/floorplanner/floorplanner.py:L7575`](silis/core/backendflow/floorplanner/floorplanner.py#L7575) | Computes strict non-overlapping peripheral macro placement for all macros. |
-| `check_floorplan_collisions` | [`silis/core/sdk/pipeline.py:L69`](silis/core/sdk/pipeline.py#L69) | Performs comprehensive 2D geometric collision and containment checks between: |
+| `check_floorplan_collisions` | [`silis/core/sdk/pipeline.py:L90`](silis/core/sdk/pipeline.py#L90) | Performs comprehensive 2D geometric collision and containment checks between macros and core. |
+| `verify_grid_alignment` | [`silis/core/dft/verifiers.py:L23`](silis/core/dft/verifiers.py#L23) | Validates numeric coordinates against manufacturing grid (default 0.005 µm for Sky130). |
+| `verify_scandef_text_grid` | [`silis/core/dft/verifiers.py:L43`](silis/core/dft/verifiers.py#L43) | Audits raw SCANDEF 5.8 syntax ensuring every coordinate satisfies 3-decimal grid quantization. |
+| `verify_upf_dft_integrity` | [`silis/core/dft/verifiers.py:L55`](silis/core/dft/verifiers.py#L55) | Enforces IEEE 1801 rules: JTAG TAP in Always-On PD_TOP, gated MBIST boundary nets isolation clamped. |
+| `verify_macro_halo_clearance` | [`silis/core/dft/verifiers.py:L96`](silis/core/dft/verifiers.py#L96) | Asserts test/MBIST collar cells maintain >= 10 µm keepout halo clearance around macros. |
+| `generate_bsdl_spec` | [`silis/core/dft/jtag.py:L13`](silis/core/dft/jtag.py#L13) | Emits standard IEEE 1149.1b Boundary Scan Description Language (.bsdl) for signoff package. |
+| `verify_exported_signoff_package` | [`silis/core/backendflow/design_exporter.py:L42`](silis/core/backendflow/design_exporter.py#L42) | Audits exported signoff package for complete deliverables (GDS, DEF, SDC, SDF, UPF, BSDL, reports) and SHA-256 manifest. |
 
 ## 4. OpenROAD TCL Shims & Floorplan Commands
 

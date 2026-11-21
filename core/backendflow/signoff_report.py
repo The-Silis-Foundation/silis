@@ -112,6 +112,8 @@ class SignoffAuditReport:
         md.append(f"| ATPG Production Vectors | `dft/{top_module}.stil` | IEEE 1450 STIL | Manufacturing test vectors for ATE equipment |")
         md.append(f"| Scan Chain Specification | `dft/{top_module}.scandef` | IEEE SCANDEF 5.8 | Serial shift order for scan flip-flops |")
         md.append(f"| ATPG Self-Checking TB | `dft/{top_module}_atpg_tb.v` | Verilog Testbench | Automated test pattern regression suite |")
+        md.append(f"| Boundary Scan Specification | `dft/{top_module}.bsdl` | IEEE 1149.1b BSDL | Formal TAP pin mapping, opcode table, and boundary register description |")
+
         md.append(f"| LVS CDL / SPICE Netlist | `{top_module}.spice` | SPICE / CDL | Transistor-level extracted layout netlist |")
         md.append(f"| Post-Synthesis Gate Netlist | `{top_module}.sim.v` | Verilog Structural | Mapped gate-level netlist with scan ports |")
         md.append(f"| Blackbox Verilog Stub | `{top_module}.v` | Verilog ANSI | Synthesis blackbox interface definition |")

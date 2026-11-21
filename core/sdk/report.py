@@ -465,6 +465,10 @@ class DFTSignoffReport:
         estimated_test_time_ms: float = 0.0,
         status: str = "UNKNOWN",
         raw_text: str = "",
+        compression_metrics: Optional[Dict[str, Any]] = None,
+        mbist_metrics: Optional[Dict[str, Any]] = None,
+        jtag_metrics: Optional[Dict[str, Any]] = None,
+        at_speed_metrics: Optional[Dict[str, Any]] = None,
     ):
         self.file_path = file_path
         self.top_module = top_module
@@ -481,6 +485,11 @@ class DFTSignoffReport:
         self.estimated_test_time_ms = estimated_test_time_ms
         self.status = status
         self.raw_text = raw_text
+        self.compression_metrics = compression_metrics or {}
+        self.mbist_metrics = mbist_metrics or {}
+        self.jtag_metrics = jtag_metrics or {}
+        self.at_speed_metrics = at_speed_metrics or {}
+
 
     @property
     def is_clean(self) -> bool:
@@ -518,7 +527,12 @@ class DFTSignoffReport:
                 macro_clamped_faults=d.get("macro_clamped_faults", 0),
                 estimated_test_time_ms=d.get("estimated_test_time_ms", 0.0),
                 status=d.get("status", "PASS"),
+                compression_metrics=d.get("compression_metrics", {}),
+                mbist_metrics=d.get("mbist_metrics", {}),
+                jtag_metrics=d.get("jtag_metrics", {}),
+                at_speed_metrics=d.get("at_speed_metrics", {}),
             )
+
         elif rpt_cand and os.path.isfile(rpt_cand):
             with open(rpt_cand, "r") as f:
                 content = f.read()

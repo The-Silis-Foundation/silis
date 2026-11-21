@@ -28,6 +28,11 @@ import re
 from typing import List, Dict, Optional, Tuple, Any
 
 
+def legalize_coord(val: float, grid: float = 0.005) -> float:
+    """Quantizes coordinate to manufacturing grid and rounds to 3 decimal places."""
+    return round(round(val / grid) * grid, 3)
+
+
 class ScanCellInfo:
     """Represents a single scan flip-flop in a scan chain."""
     def __init__(
@@ -40,6 +45,8 @@ class ScanCellInfo:
         scan_enable_pin: str = "SCE",
         data_in_pin: str = "D",
         bits: int = 1,
+        x: Optional[float] = None,
+        y: Optional[float] = None,
     ):
         self.instance_name = instance_name
         self.cell_type = cell_type
@@ -49,9 +56,11 @@ class ScanCellInfo:
         self.scan_enable_pin = scan_enable_pin
         self.data_in_pin = data_in_pin
         self.bits = bits
+        self.x = legalize_coord(x) if x is not None else None
+        self.y = legalize_coord(y) if y is not None else None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "instance": self.instance_name,
             "cell_type": self.cell_type,
             "scan_in": self.scan_in_pin,
@@ -60,6 +69,12 @@ class ScanCellInfo:
             "scan_enable": self.scan_enable_pin,
             "data_in": self.data_in_pin,
         }
+        if self.x is not None:
+            d["x"] = self.x
+        if self.y is not None:
+            d["y"] = self.y
+        return d
+
 
 
 class ScanChain:
@@ -113,12 +128,26 @@ class SCANDEFGenerator:
             lines.append(f"  - {chain.name}")
             lines.append(f"    + START {chain.scan_in_port}")
             if chain.cells:
-                lines.append("    + FLOATING")
-                for cell in chain.cells:
-                    lines.append(
-                        f"        {cell.instance_name} ( IN {cell.scan_in_pin} OUT {cell.scan_out_pin} )"
-                    )
+                has_fixed = any(c.x is not None and c.y is not None for c in chain.cells)
+                if has_fixed:
+                    lines.append("    + ORDERED")
+                    for cell in chain.cells:
+                        if cell.x is not None and cell.y is not None:
+                            lines.append(
+                                f"        {cell.instance_name} ( IN {cell.scan_in_pin} OUT {cell.scan_out_pin} ) + FIXED ( {cell.x:.3f} {cell.y:.3f} )"
+                            )
+                        else:
+                            lines.append(
+                                f"        {cell.instance_name} ( IN {cell.scan_in_pin} OUT {cell.scan_out_pin} )"
+                            )
+                else:
+                    lines.append("    + FLOATING")
+                    for cell in chain.cells:
+                        lines.append(
+                            f"        {cell.instance_name} ( IN {cell.scan_in_pin} OUT {cell.scan_out_pin} )"
+                        )
             lines.append(f"    + STOP {chain.scan_out_port} ;")
+
 
         lines.append("END SCANCHAINS\n")
         lines.append("END DESIGN")

@@ -416,7 +416,13 @@ class SignoffRunnerWorker(QThread):
             dft_summary = dft_eng.run_atpg(target_coverage=95.0)
             dft_eng.export_stil(os.path.join(self.results_dir, f"{self.top_module}_atpg.stil"))
             dft_eng.export_atpg_testbench(os.path.join(self.results_dir, f"{self.top_module}_atpg_tb.v"))
+            try:
+                from dft.jtag import generate_bsdl_spec
+                generate_bsdl_spec(self.top_module, pdk_name, os.path.join(self.results_dir, f"{self.top_module}.bsdl"))
+            except Exception:
+                pass
             dft_eng.write_reports(dft_summary, self.reports_dir)
+
 
             cov = dft_summary.get("fault_coverage", 0.0)
             if cov < 90.0:

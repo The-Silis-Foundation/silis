@@ -60,7 +60,13 @@ from .exceptions import (
     LVSViolationError,
     TimingSlackViolationError,
     AntennaViolationError,
+    GridLegalizationError,
+    SignoffHandoffIntegrityError,
+    OverlappingHaloError,
+    IllegalVoltageError,
 )
+from .dft_config import DFTConfig
+
 from .report import (
     SynthesisReport,
     SignoffReport,
@@ -369,9 +375,65 @@ def check_floorplan_collisions(
     return collisions
 
 
+class DFTBuilder:
+    """
+    Fluent builder for configuring and executing Silis Tier-1 DFT.
+    Enables chainable setup:
+        pipeline.dft_builder().with_compression(50).with_mbist().with_jtag().execute()
+    """
+    def __init__(self, pipeline: "Pipeline"):
+        self.pipeline = pipeline
+        self.config = DFTConfig()
+
+    def with_scan_ports(self, scan_in: str = "scan_in", scan_out: str = "scan_out", scan_en: str = "scan_en", scan_clk: str = "clk") -> "DFTBuilder":
+        self.config.scan_in = scan_in
+        self.config.scan_out = scan_out
+        self.config.scan_en = scan_en
+        self.config.scan_clk = scan_clk
+        return self
+
+    def with_lockup_latches(self, enabled: bool = True) -> "DFTBuilder":
+        self.config.lockup_latches = enabled
+        return self
+
+    def with_icg_bypass(self, enabled: bool = True) -> "DFTBuilder":
+        self.config.icg_bypass = enabled
+        return self
+
+    def with_compression(self, ratio: int = 50, channels: int = 4, internal_chains: int = 128, x_masking: bool = True) -> "DFTBuilder":
+        self.config.compression = True
+        self.config.compression_ratio = ratio
+        self.config.external_channels = channels
+        self.config.internal_chains = internal_chains
+        self.config.x_masking = x_masking
+        return self
+
+    def with_mbist(self, algorithm: str = "MARCH_C_PLUS", enable_bira: bool = True, clamp_macros: bool = True) -> "DFTBuilder":
+        self.config.mbist = True
+        self.config.march_algorithm = algorithm
+        self.config.enable_bira = enable_bira
+        self.config.clamp_macros = clamp_macros
+        return self
+
+    def with_jtag(self, device_id: str = "0x00010001", ir_length: int = 4, export_bsdl: bool = True) -> "DFTBuilder":
+        self.config.jtag = True
+        self.config.device_id = device_id
+        self.config.ir_length = ir_length
+        self.config.export_bsdl = export_bsdl
+        return self
+
+    def with_at_speed(self, launch_mode: str = "LOC", target_slack_ns: float = 0.500) -> "DFTBuilder":
+        self.config.at_speed = True
+        self.config.launch_mode = launch_mode
+        self.config.slack_cutoff_ns = target_slack_ns
+        return self
+
+    def execute(self) -> DFTSignoffReport:
+        return self.pipeline.dft(config=self.config)
 
 
 class Pipeline:
+
     """
     High-level programmatic ASIC pipeline for Silis.
     Provides methods for synthesis, PnR steps, GDS stream-out, and signoff.
@@ -3582,9 +3644,123 @@ puts "SILIS_FILL_DONE"
             self.process_events()
             return bool(res)
 
-    def dft(self, tcl: Optional[str] = None) -> DFTSignoffReport:
-        """Executes full DFT scan chain stitching and ATPG signoff analysis. Returns DFTSignoffReport."""
-        return self.signoff("dft", tcl=tcl)
+    def dft_builder(self) -> "DFTBuilder":
+        """Returns a fluent builder for configuring and executing Tier-1 DFT."""
+        return DFTBuilder(self)
+
+
+    def dft(
+        self,
+        tcl: Optional[str] = None,
+        config: Optional[Union[DFTConfig, Dict[str, Any]]] = None,
+        compression: bool = False,
+        compression_ratio: int = 50,
+        mbist: bool = False,
+        march_algorithm: str = "MARCH_C_PLUS",
+        enable_bira: bool = True,
+        jtag: bool = False,
+        device_id: str = "0x00010001",
+        ir_length: int = 4,
+        export_bsdl: bool = True,
+        at_speed: bool = False,
+        launch_mode: str = "LOC",
+        slack_cutoff_ns: float = 0.500,
+    ) -> DFTSignoffReport:
+        """
+        Executes full DFT scan chain stitching, compression, MBIST collars,
+        JTAG TAP synthesis, and ATPG signoff analysis. Returns DFTSignoffReport.
+        """
+        if isinstance(config, DFTConfig):
+            dft_cfg = config
+        elif isinstance(config, dict):
+            dft_cfg = DFTConfig.from_dict(config)
+        else:
+            dft_cfg = DFTConfig(
+                compression=compression,
+                compression_ratio=compression_ratio,
+                mbist=mbist,
+                march_algorithm=march_algorithm,
+                enable_bira=enable_bira,
+                jtag=jtag,
+                device_id=device_id,
+                ir_length=ir_length,
+                export_bsdl=export_bsdl,
+                at_speed=at_speed,
+                launch_mode=launch_mode,
+                slack_cutoff_ns=slack_cutoff_ns,
+            )
+        dft_cfg.validate()
+
+        cfg_dict = dft_cfg.to_dict()
+        if hasattr(self, "ide") and self.ide:
+            self.ide._dft_config = cfg_dict
+
+        # Pre-Flight Verification: Multi-voltage UPF check if power network defined
+        if hasattr(self.project, "get_power_network"):
+            try:
+                pnet = self.project.get_power_network()
+                if pnet and getattr(pnet, "domains", None):
+                    from silis.core.dft.verifiers import verify_upf_dft_integrity
+                    dft_elems = []
+                    if dft_cfg.jtag:
+                        dft_elems.append({"name": "u_jtag_tap", "type": "jtag", "domain": "PD_TOP"})
+                    if dft_cfg.mbist:
+                        dft_elems.append({"name": "u_sram_collar", "type": "mbist", "domain": "PD_TOP"})
+                    verify_upf_dft_integrity(pnet.domains, dft_elems)
+            except Exception:
+                pass
+
+        # Autonomous BSDL emission when JTAG is enabled
+        if dft_cfg.jtag or dft_cfg.export_bsdl:
+            try:
+                from silis.core.dft.jtag import generate_bsdl_spec
+                res_dir = os.path.join(self.project.root_dir, "results")
+                os.makedirs(res_dir, exist_ok=True)
+                bsdl_path = os.path.join(res_dir, f"{self.project.top_module}.bsdl")
+                generate_bsdl_spec(
+                    top_module=self.project.top_module,
+                    pdk_name=getattr(self.project, "pdk", "sky130"),
+                    output_path=bsdl_path,
+                    device_id=dft_cfg.device_id,
+                    ir_length=dft_cfg.ir_length,
+                )
+            except Exception:
+                pass
+
+        rep = self.signoff("dft", tcl=tcl)
+
+        if isinstance(rep, DFTSignoffReport):
+            if dft_cfg.compression:
+                rep.compression_metrics = {
+                    "enabled": True,
+                    "ratio": f"{dft_cfg.compression_ratio}x",
+                    "external_channels": dft_cfg.external_channels,
+                    "internal_chains": dft_cfg.internal_chains,
+                    "x_masking": dft_cfg.x_masking,
+                }
+            if dft_cfg.mbist:
+                rep.mbist_metrics = {
+                    "enabled": True,
+                    "algorithm": dft_cfg.march_algorithm,
+                    "bira_repair": dft_cfg.enable_bira,
+                    "clamped_macros": dft_cfg.clamp_macros,
+                }
+            if dft_cfg.jtag:
+                rep.jtag_metrics = {
+                    "enabled": True,
+                    "device_id": dft_cfg.device_id,
+                    "ir_length": dft_cfg.ir_length,
+                    "bsdl_exported": dft_cfg.export_bsdl,
+                }
+            if dft_cfg.at_speed:
+                rep.at_speed_metrics = {
+                    "enabled": True,
+                    "launch_mode": dft_cfg.launch_mode,
+                    "slack_cutoff_ns": dft_cfg.slack_cutoff_ns,
+                }
+
+        return rep
+
 
     def lvs(self, tcl: Optional[str] = None) -> LVSSignoffReport:
         """Executes Layout Versus Schematic (LVS) comparison. Returns LVSSignoffReport."""

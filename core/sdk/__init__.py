@@ -46,7 +46,11 @@ from .exceptions import (
     PipelineExecutionError,
     OverlappingHaloError,
     IllegalVoltageError,
+    GridLegalizationError,
+    SignoffHandoffIntegrityError,
 )
+from .dft_config import DFTConfig
+
 from .project import Project
 SilisProject = Project
 from .floorplan import Floorplan, MacroInstance, Margins, Orientation, Halo, legalize_coord, snap_to_site_row, CoreArea

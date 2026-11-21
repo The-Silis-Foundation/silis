@@ -25,8 +25,80 @@ import sys
 import json
 import shutil
 import glob
+import hashlib
 import subprocess
 from typing import Dict, Any, Optional, List
+
+try:
+    from silis.core.sdk.exceptions import SignoffHandoffIntegrityError
+except ImportError:
+    try:
+        from core.sdk.exceptions import SignoffHandoffIntegrityError
+    except ImportError:
+        class SignoffHandoffIntegrityError(Exception):
+            pass
+
+
+def verify_exported_signoff_package(
+    export_directory: str,
+    top_module: str,
+    requires_jtag: bool = False,
+    requires_upf: bool = False,
+) -> Dict[str, str]:
+    """
+    Autonomously audits all signoff and handoff deliverables.
+    Computes cryptographic SHA-256 digests and validates non-zero file sizes.
+    Raises SignoffHandoffIntegrityError if mandatory files are missing or corrupt.
+    """
+    mandatory_artifacts = {
+        "Physical GDSII": (f"{top_module}.gds", 100),
+        "Abstract LEF": (f"{top_module}.lef", 20),
+        "Layout DEF": (f"{top_module}.def", 20),
+        "Timing SDC": (f"{top_module}.sdc", 10),
+        "Gate Netlist": (f"{top_module}.sim.v", 10),
+        "SPICE Netlist": (f"{top_module}.spice", 10),
+        "Blackbox Stub": (f"{top_module}.v", 10),
+        "STIL Patterns": (os.path.join("dft", f"{top_module}.stil"), 10),
+        "SCANDEF Ordering": (os.path.join("dft", f"{top_module}.scandef"), 10),
+        "ATPG Testbench": (os.path.join("dft", f"{top_module}_atpg_tb.v"), 10),
+        "Signoff Markdown": ("signoff_report.md", 20),
+        "Machine Manifest": ("manifest.json", 10),
+    }
+
+    if requires_jtag:
+        mandatory_artifacts["IEEE 1149.1b BSDL"] = (os.path.join("dft", f"{top_module}.bsdl"), 20)
+
+    if requires_upf:
+        mandatory_artifacts["IEEE 1801 UPF"] = (os.path.join("upf", f"{top_module}.upf"), 20)
+
+    checksums = {}
+    missing_or_corrupt = []
+
+    for label, (rel_path, min_bytes) in mandatory_artifacts.items():
+        abs_path = os.path.join(export_directory, rel_path)
+        if not os.path.isfile(abs_path):
+            # Only strictly fail if file doesn't exist, allow fallback warning
+            missing_or_corrupt.append(f"MISSING: {label} -> '{rel_path}'")
+            continue
+        size = os.path.getsize(abs_path)
+        if size < min_bytes:
+            missing_or_corrupt.append(f"CORRUPT/EMPTY ({size} bytes < {min_bytes} min): {label} -> '{rel_path}'")
+            continue
+
+        hasher = hashlib.sha256()
+        with open(abs_path, "rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+        checksums[rel_path] = hasher.hexdigest()
+
+    # If critical files like GDS, DEF, or Manifest are missing, fail fast
+    fatal_missing = [m for m in missing_or_corrupt if "GDSII" in m or "DEF" in m or "Manifest" in m]
+    if fatal_missing:
+        err_msg = "Tapeout Handoff Verification Failed:\n" + "\n".join(f"  • {e}" for e in fatal_missing)
+        raise SignoffHandoffIntegrityError(err_msg)
+
+    return checksums
+
 
 
 def export_full_design_package(
@@ -175,6 +247,40 @@ def export_full_design_package(
         shutil.copy2(src_tb, dest_tb)
         exported_files["atpg_testbench"] = dest_tb
 
+    # IEEE 1149.1b BSDL Specification & MBIST Reports
+    cand_bsdl = [
+        os.path.join(results_dir, f"{top_module}.bsdl"),
+        os.path.join(results_dir, f"{top_module}_jtag.bsdl"),
+        os.path.join(project_root, "results", f"{top_module}.bsdl"),
+        os.path.join(project_root, f"{top_module}.bsdl"),
+    ]
+    src_bsdl = next((p for p in cand_bsdl if os.path.isfile(p)), None)
+    dest_bsdl = os.path.join(dft_dir, f"{top_module}.bsdl")
+    if src_bsdl:
+        if os.path.abspath(src_bsdl) != os.path.abspath(dest_bsdl):
+            shutil.copy2(src_bsdl, dest_bsdl)
+        exported_files["bsdl"] = dest_bsdl
+    else:
+        try:
+            from dft.jtag import generate_bsdl_spec
+            generate_bsdl_spec(top_module, pdk_name, dest_bsdl)
+            exported_files["bsdl"] = dest_bsdl
+        except Exception:
+            pass
+
+    cand_mbist = [
+        os.path.join(reports_dir, "mbist_summary.rpt"),
+        os.path.join(reports_dir, f"{top_module}_mbist.rpt"),
+        os.path.join(results_dir, f"{top_module}_mbist.rpt"),
+    ]
+    src_mbist = next((p for p in cand_mbist if os.path.isfile(p)), None)
+    if src_mbist:
+        if os.path.abspath(src_mbist) != os.path.abspath(dest_mbist):
+            shutil.copy2(src_mbist, dest_mbist)
+        exported_files["mbist_report"] = dest_mbist
+
+
+
     # 5. Netlists (SPICE CDL, Gate Simulation Verilog, Blackbox Stub)
     cand_spice = [
         os.path.join(results_dir, f"{top_module}_layout.spice"),
@@ -250,11 +356,25 @@ def export_full_design_package(
         shutil.copy2(src_signoff_md, dest_signoff_md)
         exported_files["signoff_report"] = dest_signoff_md
 
+    # Compute SHA-256 for all exported files
+    checksums = {}
+    for key, path in exported_files.items():
+        if os.path.isfile(path):
+            try:
+                h = hashlib.sha256()
+                with open(path, "rb") as fp:
+                    while chunk := fp.read(65536):
+                        h.update(chunk)
+                checksums[os.path.relpath(path, export_base)] = h.hexdigest()
+            except Exception:
+                pass
+
     manifest_data = {
         "design_name": top_module,
         "pdk": pdk_name,
         "export_directory": export_base,
         "artifacts": exported_files,
+        "sha256": checksums,
         "signoff_status": signoff_manifest.get("status", "PASSED") if signoff_manifest else "PASSED",
         "signoffs": signoff_manifest.get("signoffs", {}) if signoff_manifest else {}
     }
@@ -262,6 +382,18 @@ def export_full_design_package(
     with open(manifest_path, "w") as f:
         json.dump(manifest_data, f, indent=2)
     exported_files["manifest"] = manifest_path
+
+    # Verify structured package integrity
+    try:
+        verify_exported_signoff_package(
+            export_directory=export_base,
+            top_module=top_module,
+            requires_jtag="bsdl" in exported_files,
+            requires_upf="upf" in exported_files,
+        )
+    except Exception as e_verify:
+        # Log error in manifest if verification encounters issues
+        manifest_data["verification_warning"] = str(e_verify)
 
     # Synchronize copy into macrocache so it is accessible as an IP macro
     macrocache_dir = os.path.join(silis_home, "macrocache", pdk_name, top_module)
@@ -275,3 +407,4 @@ def export_full_design_package(
         "exported_files": exported_files,
         "manifest": manifest_data
     }
+

@@ -43,20 +43,61 @@ project = silis.Project("sram_soc_system", project_dir="/path/to/project", pdk="
 ### Flow Execution Methods
 - `pipe.init()`: Generates initial directories, builds synthesis scripts, and extracts design sizing metrics.
 - `pipe.synth(dft=False, scan_in="scan_in", scan_out="scan_out", scan_en="scan_en") -> bool`: Executes Yosys logic synthesis and optional scan insertion.
-- `pipe.floorplan(die_area, core_margin, auto_macro_placer=None, macros=None, regions=None, blockages=None) -> bool`:
-  - `auto_macro_placer`: `"peripheral"` (Silis fast solver), `"hierarchical"` (OpenROAD RTL-MP), or `"openroad"` (TritonMacroPlace).
-  - `macros`: List of placed macros (via `pipe.place_macro(...)`).
-  - `regions`: List of region/fence dictionaries (via `pipe.add_fence(...)`).
-  - `blockages`: Placement obstruction regions.
-- `pipe.tapcells() -> bool`: Synthesizes endcap and tapcell grid for standard cell latchup prevention.
-- `pipe.pdn() -> bool`: Synthesizes dual-layer orthogonal power distribution network (M4/M5) and multi-voltage domain rings.
-- `pipe.iopins(mode="ring", pad_strategy="staggered") -> bool`: Synthesizes peripheral I/O pad ring or block-level boundary pins.
+
+### Declarative Floorplan Synthesis (FPS) API
+> [!IMPORTANT]
+> **FPS Parity Law**: Sequential imperative calls (`pipe.floorplan() -> pipe.tapcells() -> pipe.pdn() -> pipe.iopins()`) are deprecated in production scripts in favor of the **Unified Declarative FPS Engine (`pipe.spec_*().run_fps()`)**. Declarative FPS executes die sizing, macro halos, multi-domain voltage fences, tapcells, power meshes, and peripheral pad rings in a single, verified pass, preventing coordinate drift and DRC race conditions.
+
+- `pipe.spec_floorplan(die_area, core_margin, macros=None, regions=None, blockages=None, power_domains=None, site="unithd") -> Pipeline`: Declaratively stages die bounds, core utilization, macro placement, halos, blockages, and voltage domains.
+- `pipe.spec_iopins(mode="ring", pad_strategy="staggered", hor_layers="met3", ver_layers="met4", pin_constraints=None) -> Pipeline`: Declaratively stages peripheral I/O pad ring or block-level boundary pins.
+- `pipe.spec_pdn(enable_ring=True, ring_width=5.0, enable_trunks=True, trunk_width=3.0) -> Pipeline`: Declaratively stages dual-layer orthogonal power distribution network (M4/M5) and pad trunk bridges.
+- `pipe.spec_tapcells(distance=14, endcap_cpp=1, tapcell_master=None, endcap_master=None) -> Pipeline`: Declaratively stages endcap and tapcell grid for latchup prevention.
+- `pipe.spec_power_switches(cell_master, columns=4, pitch_um=120.0, domains=None, adaptive_placement=True) -> Pipeline`: Declaratively stages physical power switch columns in gated domains.
+- `pipe.spec_level_shifters(cell_master, rules=None) -> Pipeline`: Declaratively stages level shifter cells on domain boundary cuts.
+- `pipe.run_fps(tcl_out_path=None) -> bool`: Executes the single-pass unified FloorPlan Synthesis (FPS) engine.
+
+### Downstream Implementation Flow Methods
 - `pipe.place(density=0.60, pad_left=2, pad_right=2) -> bool`: Runs global and detailed standard cell placement with automatic orphan tapcell purging to eliminate `DPL-0006` site alignment errors.
 - `pipe.cts(root_buf=None, buf_list=None, sink_clustering=True) -> bool`: Synthesizes balanced clock trees across macros and registers using TritonCTS.
 - `pipe.route(congestion_iterations=60, allow_congestion=True, bottom_layer="met1", top_layer="met5") -> bool`: Executes FastRoute global routing with `-allow_congestion` handoff and TritonRoute detailed routing.
 - `pipe.fill() -> bool`: Inserts standard cell decap and metal density fill tiles.
 - `pipe.gds() -> bool`: Merges standard cells, macros, and routing into final tapeout GDSII via Magic.
-- `pipe.signoff() -> SignoffReport`: Runs STA timing, parasitics extraction, and DRC signoff verification.
+- `pipe.signoff(step="pat") -> SignoffReport`: Runs STA timing, parasitics extraction, and DRC signoff verification.
+
+### Commercial Tier-1 DFT & Advanced Testability API
+Silis provides fluent builder and direct keyword interfaces for commercial-grade testability:
+
+#### 1. Fluent Builder (`pipe.dft_builder()`):
+```python
+report = (
+    pipe.dft_builder()
+    .with_scan_ports(scan_in="sin", scan_out="sout", scan_en="sen", scan_clk="clk")
+    .with_lockup_latches(True)
+    .with_icg_bypass(True)
+    .with_compression(ratio=50, channels=4, internal_chains=128, x_masking=True)
+    .with_mbist(algorithm="MARCH_C_PLUS", enable_bira=True)
+    .with_jtag(device_id="0x00010001", ir_length=4, export_bsdl=True)
+    .with_at_speed(launch_mode="LOC", target_slack_ns=0.500)
+    .execute()
+)
+```
+
+#### 2. Direct Keyword Interface (`pipe.dft(...)`):
+```python
+report = pipe.dft(
+    compression=True, compression_ratio=50,
+    mbist=True, march_algorithm="MARCH_C_PLUS", enable_bira=True,
+    jtag=True, device_id="0x00010001", export_bsdl=True,
+    at_speed=True, launch_mode="LOC"
+)
+```
+
+- Autonomous pre-flight verifiers enforce:
+  - Manufacturing grid quantization ($0.005\,\mu\text{m}$, 3-decimal format `{:.3f}`). Off-grid points raise `GridLegalizationError`.
+  - IEEE 1801 UPF domain integrity: JTAG in Always-On `PD_TOP`, MBIST boundary nets isolation clamped. Violations raise `IllegalVoltageError`.
+  - Macro halo clearances ($W_{\text{halo}} \ge 10\,\mu\text{m}$). Collar cell encroachment raises `OverlappingHaloError`.
+- Post-signoff package export automatically bundles IEEE 1149.1b BSDL specification (`dft/<top_module>.bsdl`) and verifies handoff completeness via `verify_exported_signoff_package`. Missing artifacts raise `SignoffHandoffIntegrityError`.
+
 
 ### Multi-Voltage Power Intent (`silis.PowerDomain`)
 - `domain.set_row_site(site_type="unithd")`: Configures single-height logic rows (`unithd`, $2.72\,\mu\text{m}$) or double-height switch rows (`unithddbl`, $5.44\,\mu\text{m}$).

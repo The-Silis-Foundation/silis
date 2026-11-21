@@ -1,10 +1,10 @@
-# 📘 Silis Python SDK: The Complete Architectural Guide & Reference Manual
+# Silis Python SDK: The Complete Architectural Guide & Reference Manual
 
 *An exhaustive, fully-indexed programmer's manual for programmatic ASIC design, physical floorplanning, RTL-to-GDSII pipeline execution, and post-layout verification using the Silis Python SDK.*
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 
 1. [Chapter 1: Architecture & Foundation](#chapter-1-architecture--foundation)
    - 1.1 Philosophy & The Zero-TCL Promise
@@ -96,7 +96,7 @@ flowchart LR
 Silis is engineered around a hybrid architectural runtime:
 1. **Application Runtime**: Built on `PyQt6`, providing an asynchronous execution bridge (`QProcess`, `QThread`) to underlying EDA tools (OpenROAD, Yosys, Magic, Netgen).
 2. **Headless Execution Guard**: When running scripts from the CLI or CI/CD pipelines, the SDK automatically sets `QT_QPA_PLATFORM="offscreen"` to enable 100% headless execution without requiring an X11 server or physical monitor.
-3. **Pumping Events**: Methods in [`silis.Pipeline`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py) explicitly pump the Qt event loop via `process_events()`, ensuring subprocess buffers, inter-process communication (IPC) queues, and timers never deadlock.
+3. **Pumping Events**: Methods in [`silis.Pipeline`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) explicitly pump the Qt event loop via `process_events()`, ensuring subprocess buffers, inter-process communication (IPC) queues, and timers never deadlock.
 
 ### 1.3 Installation, Dependencies & Environment Initialization
 The Silis SDK requires Python $\ge 3.10$ and `PyQt6`.
@@ -116,7 +116,7 @@ from silis import Project, Pipeline, SignoffReport, SynthesisReport
 
 # Chapter 2: Project Management (`silis.Project`)
 
-The [`silis.Project`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py) class encapsulates all files, configuration, target PDKs, macros, reports, and generated physical artifacts belonging to an ASIC design.
+The [`silis.Project`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py) class encapsulates all files, configuration, target PDKs, macros, reports, and generated physical artifacts belonging to an ASIC design.
 
 ### 2.1 Project Discovery & Configuration (`.silisproj`)
 A Silis project is defined by a JSON-formatted configuration file named `<project_name>.silisproj` located inside the project directory:
@@ -138,7 +138,7 @@ A Silis project is defined by a JSON-formatted configuration file named `<projec
 #### Instantiation Methods:
 ```python
 # Load an existing project directory
-proj = silis.Project("/home/eatheswar/silisfoundation/silis/projects/gemm_rv32_pentium_soc")
+proj = silis.Project("/home/econsystems/silisfoundation/silis/projects/gemm_rv32_pentium_soc")
 
 # Or use the top-level factory
 proj = silis.load_project("sram_soc_system")
@@ -223,7 +223,7 @@ $$\text{Utilization} = \frac{\text{Standard Cell Area } (\mu\text{m}^2)}{\text{A
 The Silis SDK normalizes utilization on a scale of `0.0` to `1.0` ($0\% - 100\%$).
 
 ### 3.2 `get_utilization()` & Polymorphic Region Queries
-[`get_utilization()`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L388-L442) supports two calling styles:
+[`get_utilization()`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L388-L442) supports two calling styles:
 
 #### Style A: Direct Module and Box Query
 ```python
@@ -387,7 +387,7 @@ print("IEEE 1801 Power Intent successfully verified!")
 
 # Chapter 5: Programmatic ASIC Pipeline (`silis.Pipeline`)
 
-The [`silis.Pipeline`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py) class is the execution engine for the physical design flow. It provides granular Python methods for each step, context management, and automatic report extraction.
+The [`silis.Pipeline`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py) class is the execution engine for the physical design flow. It provides granular Python methods for each step, context management, and automatic report extraction.
 
 ### 4.1 Context Management (`with silis.Pipeline(...) as pipe:`)
 Using the `with` statement ensures all database checkpoints, worker processes, and Qt resources are cleanly initialized and finalized:
@@ -625,7 +625,7 @@ print(f"Liberty TT:  {pkg['lib_tt']}")
 
 # Chapter 5: Signoff Analytics & Report Objects
 
-All report objects are parsed and extracted by [`silis.sdk.report`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py).
+All report objects are parsed and extracted by [`silis.sdk.report`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py).
 
 ### 5.1 `SynthesisReport`
 Returned by `proj.get_synthesis_report()`:
@@ -661,43 +661,65 @@ for v in drc.violations:
 ```
 
 ### 5.4 `DFTSignoffReport`
-Returned by `pipe.dft()`:
+Returned by `pipe.dft()` or `pipe.dft_builder().execute()`:
 ```python
 dft = pipe.dft()
-print(f"Fault Coverage : {dft.fault_coverage:.2%}")
-print(f"Total Vectors  : {dft.vector_count}")
-print(f"Scan Chains    : {dft.chain_count}")
+print(f"Fault Coverage    : {dft.fault_coverage:.2f}%")
+print(f"ATPG Vectors      : {dft.pattern_count}")
+print(f"Scan Chains       : {dft.scan_chain_count}")
+print(f"Scan Flops        : {dft.scan_flop_count}")
+print(f"Signoff Status    : {dft.status} (Clean: {dft.is_clean})")
+
+# Extended Tier-1 DFT Metrics
+if dft.compression_metrics:
+    print(f"EDT Compression   : {dft.compression_metrics.get('ratio')} (Channels: {dft.compression_metrics.get('external_channels')})")
+if dft.mbist_metrics:
+    print(f"Memory BIST / BIRA: {dft.mbist_metrics.get('algorithm')} (BIRA Repair: {dft.mbist_metrics.get('bira_repair')})")
+if dft.jtag_metrics:
+    print(f"IEEE 1149.1 JTAG  : IDCODE {dft.jtag_metrics.get('device_id')}, BSDL Exported: {dft.jtag_metrics.get('bsdl_exported')}")
+if dft.at_speed_metrics:
+    print(f"At-Speed Testing  : {dft.at_speed_metrics.get('launch_mode')}, Slack Cutoff: {dft.at_speed_metrics.get('slack_cutoff_ns')} ns")
 ```
 
 ### 5.5 `LVSSignoffReport`
 Returned by `pipe.lvs()`:
 ```python
 lvs = pipe.lvs()
-print(f"LVS Clean : {lvs.is_clean}")
-print(f"Mismatches: {lvs.mismatch_count}")
+print(f"LVS Clean        : {lvs.is_clean} ({lvs.status})")
+print(f"Matched Devices  : {lvs.matched_devices}")
+print(f"Matched Nets     : {lvs.matched_nets}")
+print(f"Unmatched Devices: {lvs.unmatched_devices}")
+print(f"Unmatched Nets   : {lvs.unmatched_nets}")
+print(f"Total Mismatches : {len(lvs.mismatches)}")
 ```
 
 ### 5.6 `GLSSignoffReport`
 Returned by `pipe.gls()`:
 ```python
 gls = pipe.gls()
-print(f"GLS Passed: {gls.passed}")
-print(f"Cycles Run: {gls.cycles_simulated}")
+print(f"GLS Passed       : {gls.is_clean} ({gls.status})")
+print(f"Cycles Evaluated : {gls.cycles_evaluated}")
+print(f"Timing Violations: {gls.timing_violations_count}")
+print(f"Back-Annotated   : {gls.sdf_file}")
 ```
 
 ### 5.7 `TapeoutManifestReport`
 Returned by `pipe.tapeout()`:
 ```python
 manifest = pipe.tapeout()
-print(f"GDS MD5 Checksum : {manifest.gds_md5}")
-print(f"Foundry Package  : {manifest.package_tar}")
+print(f"Tapeout Ready    : {manifest.tapeout_ready}")
+print(f"Tapeout GDS      : {manifest.tapeout_gds}")
+print(f"DRC Status       : {'PASS' if manifest.drc_pass else 'FAIL'}")
+print(f"LVS Status       : {'PASS' if manifest.lvs_pass else 'FAIL'}")
+print(f"DFT Status       : {'PASS' if manifest.dft_pass else 'FAIL'}")
 ```
+
 
 ---
 
 # Chapter 6: Interactive & Headless Visual Peeker Engines
 
-The SDK provides standalone viewer invocation functions in [`silis.sdk.viewers`](file:///home/eatheswar/silisfoundation/silis/sdk/viewers.py) for visual inspection:
+The SDK provides standalone viewer invocation functions in [`silis.sdk.viewers`](file:///home/econsystems/silisfoundation/silis/core/sdk/viewers.py) for visual inspection:
 
 ```python
 # Launch fast OpenGL 2D DEF layout viewer
@@ -789,11 +811,13 @@ with silis.Pipeline(proj) as pipe:
         {"box": [100.0, 560.0, 2300.0, 600.0],   "soft": True},
     ]
 
-    # 4. Execute PnR Steps
-    assert pipe.floorplan(die_area=(0.0, 0.0, 2400.0, 2400.0), core_margin=20.0, macros=macros, regions=fences, blockages=highways)
-    assert pipe.tapcells(distance=14, endcap_cpp=1)
-    assert pipe.pdn()
-    assert pipe.iopins(
+    # 4. Declarative Floorplan Synthesis (FPS)
+    # NOTE: Unified pipe.run_fps() supersedes legacy sequential imperative calls
+    # (pipe.floorplan -> pipe.tapcells -> pipe.pdn -> pipe.iopins) to eliminate ordering and pad conflicts.
+    pipe.spec_floorplan(die_area=(0.0, 0.0, 2400.0, 2400.0), core_margin=20.0, macros=macros, regions=fences, blockages=highways)
+    pipe.spec_tapcells(distance=14, endcap_cpp=1)
+    pipe.spec_pdn()
+    pipe.spec_iopins(
         hor_layers="met3", ver_layers="met4",
         pin_constraints=[
             {"pins": ["clk", "rst_n"], "region": "bottom:1000-1400"},
@@ -804,10 +828,14 @@ with silis.Pipeline(proj) as pipe:
             {"pins": [f"gpio_out[{i}]" for i in range(8)], "region": "right:400-2000"},
         ]
     )
+    assert pipe.run_fps()
+
+    # 5. Downstream Placement, Clocking, and Routing
     assert pipe.place()
     assert pipe.cts()
     assert pipe.route(congestion_iterations=60, layer_adjustments={"met1": 0.5, "met2": 0.3, "met3": 0.2})
     assert pipe.gds()
+
 
     pat = pipe.signoff("pat")
     print(f"PAT Signoff: WNS={pat.wns}ns, Area={pat.area}um^2, Power={pat.total_power_mw}mW")
@@ -1011,16 +1039,99 @@ For full-chip implementations, `pipe.spec_iopins(mode="padring")` provisions a c
 
 ---
 
+# 11. Commercial Tier-1 DFT & Advanced Testability Architecture
+
+Silis provides a native, commercial-grade Design-for-Testability (DFT) suite fully integrated into the Python SDK and GUI. Zero external proprietary binaries are required: all test logic (decompressors, compactors, BIST collars, JTAG TAP) is generated as synthesizable Verilog and placed/routed using bundled OpenROAD and Yosys.
+
+### 11.1 Canonical Configuration (`DFTConfig`)
+Resides in `silis.core.sdk.dft_config.DFTConfig` and encapsulates all test parameters:
+
+```python
+from silis.core.sdk import DFTConfig
+
+cfg = DFTConfig(
+    enabled=True,
+    scan_in="scan_in",
+    scan_out="scan_out",
+    scan_en="scan_en",
+    scan_clk="clk",
+    lockup_latches=True,        # Automatic CDC hold-violation prevention
+    icg_bypass=True,            # Automatic Integrated Clock Gating TE/TM tie-off
+    
+    # On-Chip Compression (EDT)
+    compression=True,
+    compression_ratio=50,       # 50x ATE test time / data volume reduction
+    external_channels=4,        # ATE tester channels exposed to package
+    internal_chains=128,        # Short internal balanced scan chains
+    x_masking=True,             # Dynamic X-state masking logic
+    
+    # SRAM Memory BIST & BIRA
+    mbist=True,
+    march_algorithm="MARCH_C_PLUS",  # MARCH C+, MARCH SS, MARCH C, MATS+
+    enable_bira=True,           # Built-In Redundancy Analysis (spare row/col)
+    clamp_macros=True,          # Macro output X-bounding clamps
+    
+    # IEEE 1149.1 JTAG TAP & Boundary Scan
+    jtag=True,
+    device_id="0x00010001",     # 32-bit standard IDCODE
+    ir_length=4,                # 4, 5, or 8-bit Instruction Register
+    export_bsdl=True,           # Formal IEEE 1149.1b BSDL specification export
+    
+    # At-Speed Delay Testing
+    at_speed=True,
+    launch_mode="LOC",          # Launch-off-Capture (LOC) vs Launch-off-Shift (LOS)
+    slack_cutoff_ns=0.500       # OpenSTA critical path slack filtering threshold
+)
+```
+
+### 11.2 Fluent Builder Pattern (`pipe.dft_builder()`)
+Enables clean, chainable configuration directly on the pipeline:
+
+```python
+report = (
+    pipe.dft_builder()
+    .with_scan_ports(scan_in="sin", scan_out="sout", scan_en="sen", scan_clk="clk")
+    .with_lockup_latches(True)
+    .with_icg_bypass(True)
+    .with_compression(ratio=50, channels=4, internal_chains=128, x_masking=True)
+    .with_mbist(algorithm="MARCH_C_PLUS", enable_bira=True)
+    .with_jtag(device_id="0x00010001", ir_length=4, export_bsdl=True)
+    .with_at_speed(launch_mode="LOC", target_slack_ns=0.500)
+    .execute()
+)
+```
+
+### 11.3 Autonomous Pre-Flight Physical Design & UPF Verifiers
+Before disk emission or downstream OpenROAD handoff, Silis enforces three physical design and multi-voltage contracts:
+
+1. **Manufacturing Grid Invariance (`GridLegalizationError`)**:
+   Every coordinate $(x, y)$ in SCANDEF 5.8 must snap to the foundry manufacturing grid ($g = 0.005\,\mu\text{m}$ for Sky130) and format strictly to `{:.3f}`.
+2. **IEEE 1801 UPF Domain Integrity (`IllegalVoltageError`)**:
+   JTAG TAP controllers and peripheral Boundary Scan Cells (BSCs) must reside in Always-On `PD_TOP` ($1.8\,\text{V}$). MBIST collars in power-gated domains (`PD_COMPUTE`, $0.95\,\text{V}$) must have boundary isolation clamp cells on test status signals (`bist_done`, `bist_fail`, `scan_out`).
+3. **Macro Halo Clearances (`OverlappingHaloError`)**:
+   MBIST collar standard cells and test multiplexers must be placed completely outside macro keepout halos ($W_{\text{halo}} \ge 10\,\mu\text{m}$) to eliminate routing congestion near memory pins.
+
+### 11.4 IEEE 1149.1b BSDL Specification & Package Integrity
+- **BSDL Specification (`dft/<top_module>.bsdl`)**: Generated according to IEEE 1149.1b standards specifying TAP ports (`tck`, `tms`, `tdi`, `tdo`, `trst_n`), standard opcodes (`BYPASS`, `IDCODE`, `SAMPLE`, `PRELOAD`, `EXTEST`, `CLAMP`, `HIGHZ`, `RUNBIST`), IDCODE bit-slices, and Boundary Scan Register (BSR) cell mappings (`BC_1`, `BC_4`).
+- **Autonomous Post-Export Handoff Verifier (`verify_exported_signoff_package`)**: Audits the exported package in `~/.silis/designs/<top_module>/`, verifying every single mask, layout, test, timing, netlist, and report deliverable with SHA-256 cryptographic digests recorded in `manifest.json`. Missing or corrupt critical artifacts raise `SignoffHandoffIntegrityError`.
+
+---
+
 # Appendix: Master Alphabetical API Index
 
 | Symbol / Endpoint | Signature / Syntax | Description |
 |:---|:---|:---|
-| [`create_project`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L182) | `(name, top_module, pdk, root_dir) -> Project` | Programmatically instantiates a new project on disk. |
-| [`DFTSignoffReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L300) | `class DFTSignoffReport` | ATPG test coverage and scan chain report container. |
-| [`DRCReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L200) | `class DRCReport` | Geometric Magic DRC violation container. |
-| [`GLSSignoffReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L400) | `class GLSSignoffReport` | Gate-level back-annotated SDF simulation report. |
-| [`LVSSignoffReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L350) | `class LVSSignoffReport` | Netgen layout vs. schematic report. |
-| [`Pipeline`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L33) | `class Pipeline(project, headless=True)` | Main programmatic PnR flow executor. |
+| [`create_project`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L182) | `(name, top_module, pdk, root_dir) -> Project` | Programmatically instantiates a new project on disk. |
+| [`DFTBuilder`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L378) | `class DFTBuilder(pipeline)` | Fluent builder for configuring and executing Tier-1 DFT. |
+| [`DFTConfig`](file:///home/econsystems/silisfoundation/silis/core/sdk/dft_config.py) | `class DFTConfig` | Canonical configuration dataclass for Tier-1 DFT. |
+| [`DFTSignoffReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L450) | `class DFTSignoffReport` | ATPG test coverage, scan chain, compression, and MBIST report container. |
+| [`DRCReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L200) | `class DRCReport` | Geometric Magic DRC violation container. |
+| [`GLSSignoffReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L400) | `class GLSSignoffReport` | Gate-level back-annotated SDF simulation report. |
+| [`GridLegalizationError`](file:///home/econsystems/silisfoundation/silis/core/sdk/exceptions.py) | `class GridLegalizationError` | Raised when coordinates violate foundry manufacturing grid quantization. |
+| [`LVSSignoffReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L350) | `class LVSSignoffReport` | Netgen layout vs. schematic report. |
+| [`Pipeline`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L430) | `class Pipeline(project, headless=True)` | Main programmatic PnR flow executor. |
+| [`Pipeline.dft`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L3650) | `(tcl=None, config=None, **kwargs) -> DFTSignoffReport` | Unified DFT scan, compression, MBIST, and JTAG signoff. |
+| [`Pipeline.dft_builder`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L3647) | `() -> DFTBuilder` | Returns a fluent builder for configuring and executing Tier-1 DFT. |
 | [`Pipeline.spec_floorplan`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L526) | `(die_area, core_margin, macros, regions, power_domains) -> Pipeline` | Declaratively stages die bounds, macros, and domains. |
 | [`Pipeline.spec_iopins`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L566) | `(hor_layers, ver_layers, corner_avoidance, pad_ring) -> Pipeline` | Declaratively stages pin assignment and pad rings. |
 | [`Pipeline.spec_pdn`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L605) | `(core_grid, trunk_width, enable_regional_rails) -> Pipeline` | Declaratively stages PDN mesh and strap parameters. |
@@ -1028,35 +1139,36 @@ For full-chip implementations, `pipe.spec_iopins(mode="padring")` provisions a c
 | [`Pipeline.spec_power_switches`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L657) | `(cell_master, columns, pitch_um, domains, adaptive_placement) -> Pipeline` | Declaratively stages physical power switch columns. |
 | [`Pipeline.spec_level_shifters`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L678) | `(cell_master, rules) -> Pipeline` | Declaratively stages IEEE 1801 level shifter boundary insertion. |
 | [`Pipeline.run_fps`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L695) | `(tcl_out_path=None) -> bool` | Single-pass holistic floorplan, pad, tap, and switch synthesis. |
-| [`Pipeline.cts`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L276) | `(root_buf, buf_list, sink_clustering) -> bool` | Clock tree synthesis & buffer row legalization. |
-| [`Pipeline.dft`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L407) | `(tcl=None) -> DFTSignoffReport` | Scan stitching and ATPG signoff. |
-| [`Pipeline.fill`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L355) | `(tcl=None) -> bool` | Decap and standard cell filler insertion. |
-| [`Pipeline.floorplan`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L129) | `(die_area, core_margin, macros, regions, blockages) -> bool` | Physical floorplan and macro positioning. |
-| [`Pipeline.gds`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L361) | `(tcl=None) -> bool` | Magic GDSII stream-out. |
-| [`Pipeline.gls`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L415) | `(tcl=None) -> GLSSignoffReport` | Back-annotated gate-level simulation. |
-| [`Pipeline.init`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L121) | `(tcl=None) -> bool` | OpenROAD backend linking & netlist loading. |
-| [`Pipeline.iopins`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L203) | `(hor_layers, ver_layers, corner_avoidance, pin_constraints) -> bool` | Symmetrical peripheral IO pin placement. |
-| [`Pipeline.lvs`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L411) | `(tcl=None) -> LVSSignoffReport` | Netgen LVS comparison. |
-| [`Pipeline.pdn`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L197) | `(tcl=None) -> bool` | Power distribution network grid synthesis. |
-| [`Pipeline.place`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L255) | `(density, pad_left, pad_right, timing_driven) -> bool` | Global placement and detailed legalization. |
-| [`Pipeline.route`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L299) | `(congestion_iterations, bottom_layer, top_layer, layer_adjustments) -> bool` | FastRoute global and TritonRoute detailed routing. |
-| [`Pipeline.signoff`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L367) | `(step="pat", tcl=None) -> ReportObject` | Comprehensive signoff verification dispatcher. |
-| [`Pipeline.synthesis`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L115) | `(tcl=None, dft=False) -> bool` | Yosys frontend RTL synthesis. |
-| [`Pipeline.tapcells`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L179) | `(distance=14, endcap_cpp=1) -> bool` | Well-tap and boundary endcap insertion. |
-| [`Pipeline.tapeout`](file:///home/eatheswar/silisfoundation/silis/sdk/pipeline.py#L426) | `(tcl=None) -> TapeoutManifestReport` | Final GDS packaging and tapeout checklist. |
-| [`Project`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L40) | `class Project(path)` | Represents an ASIC design project directory. |
-| [`Project.get_module_area`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L346) | `(module="core") -> float` | Returns module standard cell area in $\mu\text{m}^2$. |
-| [`Project.get_modules`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L341) | `() -> List[str]` | Lists all hierarchical blocks in the netlist. |
-| [`Project.get_required_area`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L444) | `(module, target_density) -> float` | Computes needed area in $\mu\text{m}^2$ for target utilization. |
-| [`Project.get_sizes`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L314) | `() -> Dict[str, Any]` | Returns parsed `{top}_sizes.json` dictionary. |
-| [`Project.get_utilization`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L388) | `(module_or_region, area=None) -> float` | Computes density ($0.0 - 1.0$) for block or bounding box. |
-| [`Project.load`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L156) | `(path) -> Project` | Factory method to load existing project. |
-| [`Project.save`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L493) | `(path=None) -> str` | Persists `.silisproj` state to disk. |
-| [`Project.suggest_box`](file:///home/eatheswar/silisfoundation/silis/sdk/project.py#L459) | `(module, origin, target_density, aspect_ratio) -> List[float]` | Computes grid-snapped bounding box `[x1, y1, x2, y2]`. |
-| [`SignoffReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L104) | `class SignoffReport` | Post-route Power, Area, Timing (PAT) report container. |
-| [`SynthesisReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L15) | `class SynthesisReport` | Post-synthesis gate-level metrics container. |
-| [`TapeoutManifestReport`](file:///home/eatheswar/silisfoundation/silis/sdk/report.py#L500) | `class TapeoutManifestReport` | Foundry tapeout packaging and checklist container. |
-| [`view_gds3d`](file:///home/eatheswar/silisfoundation/silis/sdk/viewers.py#L45) | `(project_or_gds) -> QMainWindow` | Launches 3D silicon inspection viewer. |
-| [`view_layout`](file:///home/eatheswar/silisfoundation/silis/sdk/viewers.py#L15) | `(project_or_def) -> QMainWindow` | Launches FastSiliconPeeker 2D DEF layout viewer. |
-| [`view_schematic`](file:///home/eatheswar/silisfoundation/silis/sdk/viewers.py#L75) | `(html_path) -> QMainWindow` | Launches DigitalJS logic schematic inspector. |
-| [`view_waveforms`](file:///home/eatheswar/silisfoundation/silis/sdk/viewers.py#L60) | `(vcd_path) -> QMainWindow` | Launches SignalPeeker VCD waveform viewer. |
+| [`Pipeline.cts`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L276) | `(root_buf, buf_list, sink_clustering) -> bool` | Clock tree synthesis & buffer row legalization. |
+| [`Pipeline.fill`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L355) | `(tcl=None) -> bool` | Decap and standard cell filler insertion. |
+| [`Pipeline.floorplan`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L129) | `(die_area, core_margin, macros, regions, blockages) -> bool` | Physical floorplan and macro positioning. |
+| [`Pipeline.gds`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L361) | `(tcl=None) -> bool` | Magic GDSII stream-out. |
+| [`Pipeline.gls`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L415) | `(tcl=None) -> GLSSignoffReport` | Back-annotated gate-level simulation. |
+| [`Pipeline.init`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L121) | `(tcl=None) -> bool` | OpenROAD backend linking & netlist loading. |
+| [`Pipeline.iopins`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L203) | `(hor_layers, ver_layers, corner_avoidance, pin_constraints) -> bool` | Symmetrical peripheral IO pin placement. |
+| [`Pipeline.lvs`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L411) | `(tcl=None) -> LVSSignoffReport` | Netgen LVS comparison. |
+| [`Pipeline.pdn`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L197) | `(tcl=None) -> bool` | Power distribution network grid synthesis. |
+| [`Pipeline.place`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L255) | `(density, pad_left, pad_right, timing_driven) -> bool` | Global placement and detailed legalization. |
+| [`Pipeline.route`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L299) | `(congestion_iterations, bottom_layer, top_layer, layer_adjustments) -> bool` | FastRoute global and TritonRoute detailed routing. |
+| [`Pipeline.signoff`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L367) | `(step="pat", tcl=None) -> ReportObject` | Comprehensive signoff verification dispatcher. |
+| [`Pipeline.synthesis`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L115) | `(tcl=None, dft=False) -> bool` | Yosys frontend RTL synthesis. |
+| [`Pipeline.tapcells`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L179) | `(distance=14, endcap_cpp=1) -> bool` | Well-tap and boundary endcap insertion. |
+| [`Pipeline.tapeout`](file:///home/econsystems/silisfoundation/silis/core/sdk/pipeline.py#L426) | `(tcl=None) -> TapeoutManifestReport` | Final GDS packaging and tapeout checklist. |
+| [`Project`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L40) | `class Project(path)` | Represents an ASIC design project directory. |
+| [`Project.get_module_area`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L346) | `(module="core") -> float` | Returns module standard cell area in $\mu\text{m}^2$. |
+| [`Project.get_modules`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L341) | `() -> List[str]` | Lists all hierarchical blocks in the netlist. |
+| [`Project.get_required_area`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L444) | `(module, target_density) -> float` | Computes needed area in $\mu\text{m}^2$ for target utilization. |
+| [`Project.get_sizes`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L314) | `() -> Dict[str, Any]` | Returns parsed `{top}_sizes.json` dictionary. |
+| [`Project.get_utilization`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L388) | `(module_or_region, area=None) -> float` | Computes density ($0.0 - 1.0$) for block or bounding box. |
+| [`Project.load`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L156) | `(path) -> Project` | Factory method to load existing project. |
+| [`Project.save`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L493) | `(path=None) -> str` | Persists `.silisproj` state to disk. |
+| [`Project.suggest_box`](file:///home/econsystems/silisfoundation/silis/core/sdk/project.py#L459) | `(module, origin, target_density, aspect_ratio) -> List[float]` | Computes grid-snapped bounding box `[x1, y1, x2, y2]`. |
+| [`SignoffHandoffIntegrityError`](file:///home/econsystems/silisfoundation/silis/core/sdk/exceptions.py) | `class SignoffHandoffIntegrityError` | Raised when exported tapeout package violates structural completeness. |
+| [`SignoffReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L104) | `class SignoffReport` | Post-route Power, Area, Timing (PAT) report container. |
+| [`SynthesisReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L15) | `class SynthesisReport` | Post-synthesis gate-level metrics container. |
+| [`TapeoutManifestReport`](file:///home/econsystems/silisfoundation/silis/core/sdk/report.py#L500) | `class TapeoutManifestReport` | Foundry tapeout packaging and checklist container. |
+| [`view_gds3d`](file:///home/econsystems/silisfoundation/silis/core/sdk/viewers.py#L45) | `(project_or_gds) -> QMainWindow` | Launches 3D silicon inspection viewer. |
+| [`view_layout`](file:///home/econsystems/silisfoundation/silis/core/sdk/viewers.py#L15) | `(project_or_def) -> QMainWindow` | Launches FastSiliconPeeker 2D DEF layout viewer. |
+| [`view_schematic`](file:///home/econsystems/silisfoundation/silis/core/sdk/viewers.py#L75) | `(html_path) -> QMainWindow` | Launches DigitalJS logic schematic inspector. |
+| [`view_waveforms`](file:///home/econsystems/silisfoundation/silis/core/sdk/viewers.py#L60) | `(vcd_path) -> QMainWindow` | Launches SignalPeeker VCD waveform viewer. |
+

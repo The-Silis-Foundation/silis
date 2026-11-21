@@ -86,3 +86,21 @@ class PipelineExecutionError(SilisEDAError):
         if message:
             err_msg += f" Details: {message}"
         super().__init__(err_msg)
+
+
+class GridLegalizationError(SilisEDAError):
+    """Raised when coordinates violate manufacturing grid quantization rules."""
+    def __init__(self, element: str, x: float, y: float, grid: float = 0.005):
+        self.element = element
+        self.x = x
+        self.y = y
+        self.grid = grid
+        super().__init__(
+            f"Manufacturing grid quantization violation: '{element}' at ({x:.4f}, {y:.4f}) does not snap to grid {grid:.4f} um."
+        )
+
+
+class SignoffHandoffIntegrityError(SilisEDAError):
+    """Raised when exported tapeout package violates structural completeness or artifact integrity."""
+    pass
+
