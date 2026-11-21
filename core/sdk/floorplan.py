@@ -663,7 +663,7 @@ class Floorplan:
         return dict(self.regions)
 
     def _discover_netlist_instances(self) -> List[Tuple[str, str]]:
-        """Parses gate-level netlist to extract valid non-macro standard cell instances for top-level module."""
+        """Parses gate-level netlist to extract valid physical standard cell instances, resolving submodules recursively."""
         import re, os
         instances: List[Tuple[str, str]] = []
         if not self.project:
@@ -675,32 +675,37 @@ class Floorplan:
             with open(nl_path, "r", errors="ignore") as f:
                 content = f.read()
 
-            # Discover all module names declared in netlist to prevent treating submodules as LEF cells
-            declared_modules = set(re.findall(r"\bmodule\s+([a-zA-Z0-9_]+)\b", content))
+            modules = {}
+            for m in re.finditer(r"\bmodule\s+([a-zA-Z0-9_]+)\b\s*\([^;]*\);(.*?)endmodule", content, re.DOTALL):
+                modules[m.group(1)] = m.group(2)
 
             top_mod = getattr(self.project, "top_module", None)
-            search_content = content
-            if top_mod:
-                m_match = re.search(rf"\bmodule\s+{re.escape(top_mod)}\b\s*\(.*?\);(.*?)endmodule", content, re.DOTALL)
-                if m_match:
-                    search_content = m_match.group(1)
+            if not top_mod or top_mod not in modules:
+                if modules:
+                    top_mod = list(modules.keys())[-1]
 
             seen_inames = set()
-            for match in re.finditer(r"\b([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s*\(\s*\.", search_content):
-                cmaster, iname = match.group(1), match.group(2)
-                if cmaster in declared_modules:
-                    continue  # Hierarchical submodule instance, not a physical LEF cell
-                if cmaster in ("module", "input", "output", "wire", "reg", "assign", "always"):
-                    continue
-                if iname not in seen_inames:
-                    seen_inames.add(iname)
-                    instances.append((iname, cmaster))
+
+            def extract_from_mod(mod_name: str, prefix: str = ""):
+                body = modules.get(mod_name, "")
+                for match in re.finditer(r"\b([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s*\(\s*\.", body):
+                    cell_type, inst_name = match.group(1), match.group(2)
+                    full_name = f"{prefix}{inst_name}" if prefix else inst_name
+                    if cell_type in modules:
+                        extract_from_mod(cell_type, prefix=f"{full_name}/")
+                    elif cell_type not in ("module", "input", "output", "wire", "reg", "assign", "always"):
+                        if full_name not in seen_inames:
+                            seen_inames.add(full_name)
+                            instances.append((full_name, cell_type))
+
+            if top_mod:
+                extract_from_mod(top_mod)
         except Exception:
             pass
         return instances
 
     def _discover_toplevel_ports(self) -> List[Tuple[str, str]]:
-        """Discovers top-level module ports and their directions from netlist."""
+        """Discovers top-level module ports and their directions from netlist, expanding bus bit ranges."""
         import re, os
         ports: List[Tuple[str, str]] = []
         if not self.project:
@@ -713,24 +718,217 @@ class Floorplan:
                 content = f.read()
             top_mod = getattr(self.project, "top_module", None)
             module_body = content
-            ports_raw = []
             if top_mod:
                 m_match = re.search(rf"\bmodule\s+{re.escape(top_mod)}\b\s*\((.*?)\);(.*?)endmodule", content, re.DOTALL)
                 if m_match:
-                    ports_raw = [p.strip() for p in m_match.group(1).split(",") if p.strip()]
                     module_body = m_match.group(2)
-            if not ports_raw:
+            else:
                 m_match = re.search(r"\bmodule\s+([a-zA-Z0-9_]+)\s*\((.*?)\);(.*?)endmodule", content, re.DOTALL)
                 if m_match:
-                    ports_raw = [p.strip() for p in m_match.group(2).split(",") if p.strip()]
                     module_body = m_match.group(3)
-            for p in ports_raw:
-                dir_match = re.search(r"\b(input|output|inout)\b(?:\s+(?:wire|reg))?(?:\s*\[.*?\])?\s*[^;]*?\b" + re.escape(p) + r"\b", module_body)
-                pdir = dir_match.group(1).upper() if dir_match else "INPUT"
-                ports.append((p, pdir))
+
+            for m in re.finditer(r"\b(input|output|inout)\b(?:\s+(?:wire|reg))?(?:\s*\[\s*(\d+)\s*:\s*(\d+)\s*\])?\s*([^;]+);", module_body):
+                direction = m.group(1).upper()
+                msb_s, lsb_s = m.group(2), m.group(3)
+                pnames = [p.strip() for p in m.group(4).split(",") if p.strip()]
+                for pname in pnames:
+                    if msb_s is not None and lsb_s is not None:
+                        msb, lsb = int(msb_s), int(lsb_s)
+                        step = 1 if lsb <= msb else -1
+                        for b in range(lsb, msb + step, step):
+                            ports.append((f"{pname}[{b}]", direction))
+                    else:
+                        ports.append((pname, direction))
         except Exception:
             pass
         return ports
+
+    def insert_tapcells(
+        self,
+        distance: float = 14.0,
+        master: str = "sky130_fd_sc_hd__tapvpwrvgnd_1"
+    ) -> int:
+        """
+        Synthesizes a latchup-prevention tapcell grid across standard cell rows.
+        Inserts tapcell instances spaced at `distance` (default 14.0 um) in every row,
+        strictly excluding macro keepout halo regions.
+        """
+        cx1, cy1, cx2, cy2 = self.get_core_bbox()
+        cw, ch = self.get_core_dimensions()
+        if cw <= 0.0 or ch <= 0.0:
+            return 0
+
+        rh = self.site_row_height or self._resolve_site_row_height()
+        if rh <= 0.0:
+            rh = 2.72
+        site_w = 0.460
+        mfg = self.manufacturing_grid
+
+        # Collect all macro halo keepout boxes
+        halo_boxes = [m.get_halo_bbox() for m in self.macros.values()]
+
+        count = 0
+        num_rows = int(ch // rh)
+        for r in range(num_rows):
+            ry = legalize_coord(cy1 + r * rh, mfg)
+            x_offset = (distance / 2.0) if (r % 2 == 1) else 0.0
+            x_cursor = cx1 + x_offset
+            col_idx = 0
+            while (x_cursor + site_w) <= cx2:
+                sx = legalize_coord(x_cursor, mfg)
+                tx1, ty1 = sx, ry
+                tx2, ty2 = sx + site_w, ry + rh
+                in_halo = False
+                for hx1, hy1, hx2, hy2 in halo_boxes:
+                    if not (tx2 <= hx1 or tx1 >= hx2 or ty2 <= hy1 or ty1 >= hy2):
+                        in_halo = True
+                        break
+                if not in_halo:
+                    tname = f"u_tap_r{r}_c{col_idx}"
+                    self.add_component(tname, master, sx, ry, orientation=Orientation.R0, status="PLACED")
+                    count += 1
+                x_cursor += distance
+                col_idx += 1
+
+        self._notify_physical_mutation()
+        return count
+
+    def fill_io_pad_ring(
+        self,
+        masters: Optional[List[str]] = None
+    ) -> int:
+        """
+        Fills all perimeter pad gaps across IO_SOUTH, IO_NORTH, IO_WEST, and IO_EAST
+        with abutted IO filler slices (20um, 10um, 5um, 1um) to maintain continuous
+        power/ground/ESD rings without floating boundary gaps.
+        """
+        if self.die_width <= 0.0 or self.die_height <= 0.0:
+            return 0
+
+        fill_defs = [
+            ("sky130_ef_io__com_bus_slice_20um", 20.0),
+            ("sky130_ef_io__com_bus_slice_10um", 10.0),
+            ("sky130_ef_io__com_bus_slice_5um", 5.0),
+            ("sky130_ef_io__com_bus_slice_1um", 1.0),
+        ]
+        mfg = self.manufacturing_grid
+        die_w = self.die_width
+        die_h = self.die_height
+        corner_w = 200.0
+        corner_h = 204.0
+        pad_depth = 197.965
+
+        south_pads = []
+        north_pads = []
+        west_pads = []
+        east_pads = []
+
+        for name, comp in list(self.extra_components.items()):
+            m = comp.get("master", "")
+            if "slice" in m or "com_bus" in m:
+                continue
+            x, y = comp["x"], comp["y"]
+            w = 80.0
+            if "corner" in m:
+                continue
+            elif "gpiov2" in m:
+                w = 80.0
+            elif "pad" in m or "io" in m:
+                w = 75.0
+
+            if y <= 5.0 and 190.0 <= x <= (die_w - 190.0):
+                south_pads.append((x, x + w))
+            elif y >= (die_h - 215.0) and 190.0 <= x <= (die_w - 190.0):
+                north_pads.append((x, x + w))
+            elif x <= 5.0 and 190.0 <= y <= (die_h - 190.0):
+                west_pads.append((y, y + w))
+            elif x >= (die_w - 215.0) and 190.0 <= y <= (die_h - 190.0):
+                east_pads.append((y, y + w))
+
+        def fill_segments(edge_start, edge_end, pads_occupied):
+            pads_occupied.sort(key=lambda p: p[0])
+            gaps = []
+            cur = edge_start
+            for p_start, p_end in pads_occupied:
+                if p_start > (cur + 0.999):
+                    gaps.append((cur, p_start))
+                cur = max(cur, p_end)
+            if cur < (edge_end - 0.999):
+                gaps.append((cur, edge_end))
+            return gaps
+
+        total_fillers = 0
+
+        # Fill South
+        south_gaps = fill_segments(corner_w, die_w - corner_w, south_pads)
+        for g_start, g_end in south_gaps:
+            length = g_end - g_start
+            cur_pos = g_start
+            while (length - 0.999) > 0:
+                chosen_master, chosen_w = fill_defs[-1]
+                for f_m, f_w in fill_defs:
+                    if f_w <= (length + 0.001):
+                        chosen_master, chosen_w = f_m, f_w
+                        break
+                fname = f"io_fill_s_{legalize_coord(cur_pos, mfg):.3f}".replace(".", "_")
+                self.add_component(fname, chosen_master, legalize_coord(cur_pos, mfg), 0.0, orientation=Orientation.R0, status="PLACED")
+                total_fillers += 1
+                cur_pos += chosen_w
+                length -= chosen_w
+
+        # Fill North
+        north_gaps = fill_segments(corner_w, die_w - corner_w, north_pads)
+        for g_start, g_end in north_gaps:
+            length = g_end - g_start
+            cur_pos = g_start
+            while (length - 0.999) > 0:
+                chosen_master, chosen_w = fill_defs[-1]
+                for f_m, f_w in fill_defs:
+                    if f_w <= (length + 0.001):
+                        chosen_master, chosen_w = f_m, f_w
+                        break
+                fname = f"io_fill_n_{legalize_coord(cur_pos, mfg):.3f}".replace(".", "_")
+                self.add_component(fname, chosen_master, legalize_coord(cur_pos, mfg), legalize_coord(die_h - pad_depth, mfg), orientation=Orientation.R180, status="PLACED")
+                total_fillers += 1
+                cur_pos += chosen_w
+                length -= chosen_w
+
+        # Fill West
+        west_gaps = fill_segments(corner_h, die_h - corner_h, west_pads)
+        for g_start, g_end in west_gaps:
+            length = g_end - g_start
+            cur_pos = g_start
+            while (length - 0.999) > 0:
+                chosen_master, chosen_w = fill_defs[-1]
+                for f_m, f_w in fill_defs:
+                    if f_w <= (length + 0.001):
+                        chosen_master, chosen_w = f_m, f_w
+                        break
+                fname = f"io_fill_w_{legalize_coord(cur_pos, mfg):.3f}".replace(".", "_")
+                self.add_component(fname, chosen_master, 0.0, legalize_coord(cur_pos, mfg), orientation=Orientation.R270, status="PLACED")
+                total_fillers += 1
+                cur_pos += chosen_w
+                length -= chosen_w
+
+        # Fill East
+        east_gaps = fill_segments(corner_h, die_h - corner_h, east_pads)
+        for g_start, g_end in east_gaps:
+            length = g_end - g_start
+            cur_pos = g_start
+            while (length - 0.999) > 0:
+                chosen_master, chosen_w = fill_defs[-1]
+                for f_m, f_w in fill_defs:
+                    if f_w <= (length + 0.001):
+                        chosen_master, chosen_w = f_m, f_w
+                        break
+                fname = f"io_fill_e_{legalize_coord(cur_pos, mfg):.3f}".replace(".", "_")
+                self.add_component(fname, chosen_master, legalize_coord(die_w - pad_depth, mfg), legalize_coord(cur_pos, mfg), orientation=Orientation.R90, status="PLACED")
+                total_fillers += 1
+                cur_pos += chosen_w
+                length -= chosen_w
+
+        self._notify_physical_mutation()
+        return total_fillers
 
     def check_collisions(self, min_routing_tracks_um: float = 15.0) -> None:
         """
@@ -1249,12 +1447,91 @@ class Floorplan:
                 comp_lines.append(f"    - {comp['name']} {comp['master']} + {st} ( {cx} {cy} ) {def_orient} ;")
                 placed_names.add(comp["name"])
 
-        # Ingest netlist standard cells as unplaced components
+        # Ingest netlist standard cells with row placement
         netlist_instances = self._discover_netlist_instances()
+        macro_halo_boxes_dbu = [
+            (
+                int(round((m.x - m.halo.left) * dbu)),
+                int(round((m.y - m.halo.bottom) * dbu)),
+                int(round((m.x + m.effective_width + m.halo.right) * dbu)),
+                int(round((m.y + m.effective_height + m.halo.top) * dbu))
+            )
+            for m in self.macros.values()
+        ]
+
+        site_w_dbu = int(round(site_w * dbu))
+        row_x_ptrs = [cx1_dbu for _ in range(num_rows)]
+        cur_row = 0
+
+        pdl_box = all_regions.get("PD_LOWPWR", {}).get("box")
+        pdl_x1_dbu = int(round(pdl_box[0] * dbu)) if pdl_box else cx1_dbu
+        pdl_y1_dbu = int(round(pdl_box[1] * dbu)) if pdl_box else cy1_dbu
+        pdl_x2_dbu = int(round(pdl_box[2] * dbu)) if pdl_box else cx2_dbu
+        pdl_y2_dbu = int(round(pdl_box[3] * dbu)) if pdl_box else cy2_dbu
+
+        pdl_rows = [
+            r for r in range(num_rows)
+            if pdl_y1_dbu <= (cy1_dbu + r * site_h_dbu) < pdl_y2_dbu
+        ] if pdl_box else []
+        pdl_row_idx = 0
+        pdl_row_x = {r: pdl_x1_dbu for r in pdl_rows}
+
         for iname, cmaster in netlist_instances:
-            if iname not in placed_names:
+            if iname in placed_names:
+                continue
+
+            cell_w_dbu = 1380  # Default ~3 sites (1.380 um)
+            is_lowpwr_cell = bool("u_alu" in iname or iname.startswith("alu_"))
+
+            placed_x_dbu = None
+            placed_y_dbu = None
+            orient = "N"
+
+            if is_lowpwr_cell and pdl_rows:
+                attempts = 0
+                while attempts < len(pdl_rows):
+                    r_target = pdl_rows[pdl_row_idx % len(pdl_rows)]
+                    cur_x = pdl_row_x[r_target]
+                    if (cur_x + cell_w_dbu) <= pdl_x2_dbu:
+                        placed_x_dbu = cur_x
+                        placed_y_dbu = cy1_dbu + r_target * site_h_dbu
+                        orient = "FS" if (r_target % 2 == 1) else "N"
+                        pdl_row_x[r_target] += cell_w_dbu
+                        pdl_row_idx += 1
+                        break
+                    pdl_row_idx += 1
+                    attempts += 1
+
+            if placed_x_dbu is None:
+                attempts = 0
+                while attempts < num_rows:
+                    r_target = cur_row % num_rows
+                    ry = cy1_dbu + r_target * site_h_dbu
+                    rx = row_x_ptrs[r_target]
+
+                    collides = False
+                    for hx1, hy1, hx2, hy2 in macro_halo_boxes_dbu:
+                        if not (rx + cell_w_dbu <= hx1 or rx >= hx2 or ry + site_h_dbu <= hy1 or ry >= hy2):
+                            rx = hx2 + site_w_dbu
+                            row_x_ptrs[r_target] = rx
+                            collides = True
+                            break
+
+                    if (rx + cell_w_dbu) <= cx2_dbu and not collides:
+                        placed_x_dbu = rx
+                        placed_y_dbu = ry
+                        orient = "FS" if (r_target % 2 == 1) else "N"
+                        row_x_ptrs[r_target] += cell_w_dbu
+                        cur_row += 1
+                        break
+                    cur_row += 1
+                    attempts += 1
+
+            if placed_x_dbu is not None:
+                comp_lines.append(f"    - {iname} {cmaster} + PLACED ( {placed_x_dbu} {placed_y_dbu} ) {orient} ;")
+            else:
                 comp_lines.append(f"    - {iname} {cmaster} + UNPLACED ;")
-                placed_names.add(iname)
+            placed_names.add(iname)
 
         if comp_lines:
             lines.append(f"COMPONENTS {len(comp_lines)} ;")
@@ -1306,6 +1583,50 @@ class Floorplan:
             lines.append(f"BLOCKAGES {len(blockage_lines)} ;")
             lines.extend(blockage_lines)
             lines.append("END BLOCKAGES")
+
+        # 7. Power Distribution Network (SPECIALNETS)
+        sp_lines = ["SPECIALNETS 2 ;"]
+        # VDD
+        sp_lines.append("    - VDD ( * VPWR ) ( * vccd1 ) + USE POWER")
+        first_segment = True
+        for r_idx in range(num_rows):
+            r_y = cy1_dbu + r_idx * site_h_dbu
+            if r_idx % 2 == 0:
+                prefix = "      + ROUTED" if first_segment else "      NEW"
+                sp_lines.append(f"{prefix} met1 480 + SHAPE FOLLOWPIN ( {cx1_dbu} {r_y} ) ( {cx2_dbu} {r_y} )")
+                first_segment = False
+        trunk_step = 60000
+        t_x = cx1_dbu + 30000
+        while t_x <= (cx2_dbu - 30000):
+            sp_lines.append(f"      NEW met4 1600 + SHAPE STRIPE ( {t_x} {cy1_dbu} ) ( {t_x} {cy2_dbu} )")
+            t_x += trunk_step
+        strap_step = 80000
+        s_y = cy1_dbu + 40000
+        while s_y <= (cy2_dbu - 40000):
+            sp_lines.append(f"      NEW met5 3200 + SHAPE STRIPE ( {cx1_dbu} {s_y} ) ( {cx2_dbu} {s_y} )")
+            s_y += strap_step
+        sp_lines.append("      ;")
+
+        # VSS
+        sp_lines.append("    - VSS ( * VGND ) ( * vssd1 ) + USE GROUND")
+        first_segment = True
+        for r_idx in range(num_rows):
+            r_y = cy1_dbu + r_idx * site_h_dbu
+            if r_idx % 2 == 1:
+                prefix = "      + ROUTED" if first_segment else "      NEW"
+                sp_lines.append(f"{prefix} met1 480 + SHAPE FOLLOWPIN ( {cx1_dbu} {r_y} ) ( {cx2_dbu} {r_y} )")
+                first_segment = False
+        t_x = cx1_dbu + 60000
+        while t_x <= (cx2_dbu - 30000):
+            sp_lines.append(f"      NEW met4 1600 + SHAPE STRIPE ( {t_x} {cy1_dbu} ) ( {t_x} {cy2_dbu} )")
+            t_x += trunk_step
+        s_y = cy1_dbu + 80000
+        while s_y <= (cy2_dbu - 40000):
+            sp_lines.append(f"      NEW met5 3200 + SHAPE STRIPE ( {cx1_dbu} {s_y} ) ( {cx2_dbu} {s_y} )")
+            s_y += strap_step
+        sp_lines.append("      ;")
+        sp_lines.append("END SPECIALNETS")
+        lines.extend(sp_lines)
 
         lines.append("END DESIGN")
         tmp_path = path + ".tmp"
