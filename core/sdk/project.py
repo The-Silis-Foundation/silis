@@ -549,6 +549,11 @@ class Project:
         """Loads and returns the DRCReport for this project."""
         return DRCReport.load(self.reports_dir, results_dir=self.results_dir)
 
+    def check_drc(self, def_path: Optional[str] = None) -> DRCReport:
+        """Runs physical design rule checking (DRC) on the floorplan via OpenROAD and geometric engines."""
+        fp = self.get_floorplan()
+        return fp.check_drc(def_path=def_path)
+
     def get_antenna_report(self) -> Any:
         """Loads and returns the AntennaSignoffReport for this project."""
         from sdk.report import AntennaSignoffReport

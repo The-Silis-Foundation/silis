@@ -781,6 +781,12 @@ def view_openroad_gui(def_or_odb_path: str, launch: bool = True) -> Optional[sub
                 for sf in os.listdir(sram_dir):
                     if sf.endswith(".lef"):
                         io_lefs.append(os.path.join(sram_dir, sf))
+            for pf in [
+                os.path.join(libs_ref, "sky130_power_switch", "lef", "power_switch.lef"),
+                os.path.join(libs_ref, "sky130_fd_sc_hd", "lef", "sky130_power_switch.lef")
+            ]:
+                if os.path.isfile(pf):
+                    io_lefs.append(pf)
         
         loader_script = os.path.join(os.path.dirname(abs_file), "_openroad_gui_loader.tcl")
         lines = []

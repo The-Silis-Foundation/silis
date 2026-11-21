@@ -60,16 +60,17 @@ def legalize_coord(val: float, grid: float = 0.005) -> float:
     return round(round(val / grid) * grid, 3)
 
 
-def snap_to_site_row(y: float, row_height: float) -> float:
+def snap_to_site_row(y: float, row_height: float, origin_y: float = 0.0) -> float:
     """
-    Quantizes a y-coordinate to legal standard cell site rows.
-    Satisfies: (y mod row_height) == 0.
+    Quantizes a y-coordinate to legal standard cell site rows relative to row origin.
+    Satisfies: ((y - origin_y) mod row_height) == 0.
     """
     if math.isnan(y) or math.isinf(y):
         raise ValueError(f"Invalid coordinate value: {y}")
     if row_height <= 0.0:
         return legalize_coord(y)
-    return round(round(y / row_height) * row_height, 3)
+    rel = y - origin_y
+    return round(origin_y + round(rel / row_height) * row_height, 3)
 
 
 class Margins:
@@ -591,8 +592,18 @@ class Floorplan:
     ) -> Dict[str, Any]:
         """Adds an explicitly placed cell (pad, power switch, tapcell, MBIST collar) to the floorplan."""
         rh = self.site_row_height or self._resolve_site_row_height()
-        sx = legalize_coord(x, self.manufacturing_grid)
-        sy = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y, self.manufacturing_grid)
+        cy1 = self.margins.bottom if self.margins else 0.0
+        cx1 = self.margins.left if self.margins else 0.0
+        site_w = 0.460
+        is_pad_or_filler = "pad" in name or "fill" in name or "sky130_ef_io" in master or "corner" in name
+        if not is_pad_or_filler and rh > 0.0:
+            sy = snap_to_site_row(y, rh, origin_y=cy1)
+            rel_x = max(0.0, x - cx1)
+            sx = round(cx1 + round(rel_x / site_w) * site_w, 3)
+        else:
+            sx = legalize_coord(x, self.manufacturing_grid)
+            sy = legalize_coord(y, self.manufacturing_grid)
+
         comp_info = {
             "name": name,
             "master": master,
@@ -624,7 +635,11 @@ class Floorplan:
         master: str = "sky130_fd_sc_hd__power_switch"
     ) -> Dict[str, Any]:
         """Adds a physical power switch cell inside a switched power domain."""
-        return self.add_component(name=name, master=master, x=x, y=y, orientation=Orientation.R0, status="PLACED")
+        rh = self.site_row_height or self._resolve_site_row_height()
+        cy1 = self.margins.bottom if self.margins else 0.0
+        r_idx = int(round((y - cy1) / rh))
+        orient = Orientation.MX if (r_idx % 2 == 1) else Orientation.R0
+        return self.add_component(name=name, master=master, x=x, y=y, orientation=orient, status="PLACED")
 
     def add_mbist_collar_cell(
         self,
@@ -634,7 +649,11 @@ class Floorplan:
         master: str = "sky130_fd_sc_hd__dfxtp_1"
     ) -> Dict[str, Any]:
         """Adds an MBIST collar scan register adjacent to a memory macro."""
-        return self.add_component(name=name, master=master, x=x, y=y, orientation=Orientation.R0, status="PLACED")
+        rh = self.site_row_height or self._resolve_site_row_height()
+        cy1 = self.margins.bottom if self.margins else 0.0
+        r_idx = int(round((y - cy1) / rh))
+        orient = Orientation.MX if (r_idx % 2 == 1) else Orientation.R0
+        return self.add_component(name=name, master=master, x=x, y=y, orientation=orient, status="PLACED")
 
     def add_region(
         self,
@@ -704,6 +723,41 @@ class Floorplan:
             pass
         return instances
 
+    def _load_standard_cell_sizes(self) -> Dict[str, Tuple[float, float]]:
+        """Parses available standard cell LEFs to map cell master name to (width_um, height_um)."""
+        import os, re
+        sizes: Dict[str, Tuple[float, float]] = {}
+        lef_candidates = []
+        home_dir = os.path.expanduser("~")
+        pdk_base = os.environ.get("PDK_ROOT", os.path.join(home_dir, ".silis", "pdks"))
+        for var in ["sky130A", "sky130B"]:
+            p = os.path.join(pdk_base, var, "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef")
+            if os.path.isfile(p):
+                lef_candidates.append(p)
+            p_psw = os.path.join(pdk_base, var, "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_power_switch.lef")
+            if os.path.isfile(p_psw):
+                lef_candidates.append(p_psw)
+            p_psw2 = os.path.join(pdk_base, var, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef")
+            if os.path.isfile(p_psw2):
+                lef_candidates.append(p_psw2)
+
+        for lef_file in lef_candidates:
+            try:
+                with open(lef_file, "r") as f:
+                    cur_macro = None
+                    for line in f:
+                        m = re.match(r"^\s*MACRO\s+([a-zA-Z0-9_]+)", line)
+                        if m:
+                            cur_macro = m.group(1)
+                        elif cur_macro and "SIZE" in line:
+                            sm = re.search(r"SIZE\s+([\d\.]+)\s+BY\s+([\d\.]+)", line)
+                            if sm:
+                                sizes[cur_macro] = (float(sm.group(1)), float(sm.group(2)))
+                                cur_macro = None
+            except Exception:
+                pass
+        return sizes
+
     def _discover_toplevel_ports(self) -> List[Tuple[str, str]]:
         """Discovers top-level module ports and their directions from netlist, expanding bus bit ranges."""
         import re, os
@@ -766,16 +820,22 @@ class Floorplan:
 
         # Collect all macro halo keepout boxes
         halo_boxes = [m.get_halo_bbox() for m in self.macros.values()]
+        cell_sizes = self._load_standard_cell_sizes()
 
         count = 0
         num_rows = int(ch // rh)
+        sites_per_tap = max(1, int(round(distance / site_w)))
+        stagger_sites = sites_per_tap // 2
+
         for r in range(num_rows):
             ry = legalize_coord(cy1 + r * rh, mfg)
-            x_offset = (distance / 2.0) if (r % 2 == 1) else 0.0
-            x_cursor = cx1 + x_offset
+            orient = Orientation.MX if (r % 2 == 1) else Orientation.R0
+            offset_s = stagger_sites if (r % 2 == 1) else 0
             col_idx = 0
-            while (x_cursor + site_w) <= cx2:
-                sx = legalize_coord(x_cursor, mfg)
+            while True:
+                sx = legalize_coord(cx1 + (offset_s + col_idx * sites_per_tap) * site_w, mfg)
+                if (sx + site_w) > (cx2 + 1e-4):
+                    break
                 tx1, ty1 = sx, ry
                 tx2, ty2 = sx + site_w, ry + rh
                 in_halo = False
@@ -784,10 +844,22 @@ class Floorplan:
                         in_halo = True
                         break
                 if not in_halo:
+                    for comp in self.extra_components.values():
+                        if comp.get("status") in ("PLACED", "FIXED"):
+                            cmaster = comp["master"]
+                            if "pad" in comp["name"] or "fill" in comp["name"]:
+                                continue
+                            cx = comp["x"]
+                            cy = comp["y"]
+                            cw = cell_sizes.get(cmaster, (site_w, rh))[0]
+                            ch_comp = cell_sizes.get(cmaster, (site_w, rh))[1]
+                            if not (tx2 <= cx or tx1 >= (cx + cw) or ty2 <= cy or ty1 >= (cy + ch_comp)):
+                                in_halo = True
+                                break
+                if not in_halo:
                     tname = f"u_tap_r{r}_c{col_idx}"
-                    self.add_component(tname, master, sx, ry, orientation=Orientation.R0, status="PLACED")
+                    self.add_component(tname, master, sx, ry, orientation=orient, status="PLACED")
                     count += 1
-                x_cursor += distance
                 col_idx += 1
 
         self._notify_physical_mutation()
@@ -1101,6 +1173,56 @@ class Floorplan:
 
         return True
 
+    def check_drc(self, def_path: Optional[str] = None) -> Any:
+        """
+        Runs comprehensive physical design rule checking (DRC) on the floorplan.
+        1. Executes strict internal geometric & mathematical pre-flight checks.
+        2. If DEF exists (or is generated) and OpenROAD is installed, executes OpenROAD detailed placement DRC (check_placement).
+        Returns a DRCReport instance (clean=True if 0 violations, raises DRCViolationError if violations are found).
+        """
+        import os, shutil, subprocess
+        from .report import DRCReport
+        self.verify_legal_placement()
+
+        target_def = def_path
+        if not target_def and self.project:
+            target_def = self.project.get_def(stage="floorplan")
+        if not target_def or not os.path.isfile(target_def):
+            return DRCReport(violations_count=0, tool="Floorplan Geometric DRC")
+
+        if shutil.which("openroad"):
+            home_dir = os.path.expanduser("~")
+            pdk_base = os.environ.get("PDK_ROOT", os.path.join(home_dir, ".silis", "pdks"))
+            tlef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
+            sc_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_fd_sc_hd.lef")
+            psw_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_power_switch", "lef", "power_switch.lef")
+            ef_io_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef")
+            fd_io_lef = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef")
+
+            tcl_cmds = []
+            for lf in [tlef, sc_lef, psw_lef, ef_io_lef, fd_io_lef]:
+                if os.path.isfile(lf):
+                    tcl_cmds.append(f'read_lef "{lf}"')
+            if self.project:
+                for m in getattr(self.project, "macros", []):
+                    mf = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_sram_macros", "lef", f"{m}.lef")
+                    if os.path.isfile(mf):
+                        tcl_cmds.append(f'read_lef "{mf}"')
+            tcl_cmds.append(f'read_def "{target_def}"')
+            tcl_cmds.append("check_placement -verbose")
+
+            cmd = ["openroad", "-exit"]
+            res = subprocess.run(cmd, input="\n".join(tcl_cmds), text=True, capture_output=True)
+            viols = []
+            for line in res.stdout.splitlines():
+                if "check failed" in line.lower() or "error:" in line.lower():
+                    viols.append(line.strip())
+            if viols:
+                raise DRCViolationError(len(viols), f"OpenROAD placement DRC check failed: {'; '.join(viols[:3])}")
+            return DRCReport(file_path=target_def, violations_count=0, tool="OpenROAD Detailed Placement DRC")
+
+        return DRCReport(file_path=target_def, violations_count=0, tool="Floorplan Geometric DRC")
+
     def place_peripheral_macros(self, strategy: str = "peripheral_quadrant") -> Dict[str, Any]:
         """
         Places macros along the core perimeter cavity leaving central area clear for standard cells.
@@ -1376,6 +1498,8 @@ class Floorplan:
             r_y = cy1_dbu + r_idx * site_h_dbu
             r_orient = "FS" if (r_idx % 2 == 1) else "N"
             lines.append(f"ROW ROW_{r_idx} {site_name} {cx1_dbu} {r_y} {r_orient} DO {num_sites} BY 1 STEP {site_w_dbu} 0 ;")
+            if r_idx % 2 == 0:
+                lines.append(f"ROW ROW_{r_idx}_dbl unithddbl {cx1_dbu} {r_y} N DO {num_sites} BY 1 STEP {site_w_dbu} 0 ;")
 
         # 2. Manufacturing Routing Tracks (TRACKS)
         tracks_spec = [
@@ -1449,6 +1573,9 @@ class Floorplan:
 
         # Ingest netlist standard cells with row placement
         netlist_instances = self._discover_netlist_instances()
+        cell_sizes = self._load_standard_cell_sizes()
+        site_w_dbu = int(round(site_w * dbu))
+
         macro_halo_boxes_dbu = [
             (
                 int(round((m.x - m.halo.left) * dbu)),
@@ -1459,30 +1586,90 @@ class Floorplan:
             for m in self.macros.values()
         ]
 
-        site_w_dbu = int(round(site_w * dbu))
-        row_x_ptrs = [cx1_dbu for _ in range(num_rows)]
-        cur_row = 0
+        # Extra components obstacle intervals per row
+        extra_row_obstacles: Dict[int, List[Tuple[int, int]]] = {r: [] for r in range(num_rows)}
+        for comp in getattr(self, "extra_components", {}).values():
+            if comp.get("status") in ("PLACED", "FIXED"):
+                cy_um = comp["y"]
+                r_idx = int(round((cy_um - (cy1_dbu / dbu)) / (site_h_dbu / dbu)))
+                if 0 <= r_idx < num_rows:
+                    cx_dbu = int(round(comp["x"] * dbu))
+                    cmaster = comp["master"]
+                    cw_um = cell_sizes.get(cmaster, (site_w, site_h))[0]
+                    cw_dbu = int(round(cw_um * dbu))
+                    extra_row_obstacles[r_idx].append((cx_dbu, cx_dbu + cw_dbu))
 
+        # Power domain lowpwr box
         pdl_box = all_regions.get("PD_LOWPWR", {}).get("box")
-        pdl_x1_dbu = int(round(pdl_box[0] * dbu)) if pdl_box else cx1_dbu
-        pdl_y1_dbu = int(round(pdl_box[1] * dbu)) if pdl_box else cy1_dbu
-        pdl_x2_dbu = int(round(pdl_box[2] * dbu)) if pdl_box else cx2_dbu
-        pdl_y2_dbu = int(round(pdl_box[3] * dbu)) if pdl_box else cy2_dbu
+        pdl_x1_dbu = int(round(pdl_box[0] * dbu)) if pdl_box else None
+        pdl_y1_dbu = int(round(pdl_box[1] * dbu)) if pdl_box else None
+        pdl_x2_dbu = int(round(pdl_box[2] * dbu)) if pdl_box else None
+        pdl_y2_dbu = int(round(pdl_box[3] * dbu)) if pdl_box else None
 
-        pdl_rows = [
-            r for r in range(num_rows)
-            if pdl_y1_dbu <= (cy1_dbu + r * site_h_dbu) < pdl_y2_dbu
-        ] if pdl_box else []
-        pdl_row_idx = 0
-        pdl_row_x = {r: pdl_x1_dbu for r in pdl_rows}
+        def compute_free_intervals(row_x1: int, row_x2: int, obstacles: List[Tuple[int, int]], site_w_int: int) -> List[List[int]]:
+            if not obstacles:
+                return [[row_x1, row_x2]]
+            sorted_obs = sorted(obstacles, key=lambda b: b[0])
+            merged = []
+            for ox1, ox2 in sorted_obs:
+                rel1 = max(0, ox1 - row_x1)
+                rel2 = max(0, ox2 - row_x1)
+                k1 = rel1 // site_w_int
+                k2 = int(math.ceil(rel2 / site_w_int))
+                ox1_snap = min(row_x2, row_x1 + k1 * site_w_int)
+                ox2_snap = min(row_x2, row_x1 + k2 * site_w_int)
+                if ox1_snap >= ox2_snap:
+                    continue
+                if not merged:
+                    merged.append([ox1_snap, ox2_snap])
+                else:
+                    if ox1_snap <= merged[-1][1]:
+                        merged[-1][1] = max(merged[-1][1], ox2_snap)
+                    else:
+                        merged.append([ox1_snap, ox2_snap])
+            free = []
+            curr = row_x1
+            for ox1, ox2 in merged:
+                if ox1 > curr:
+                    free.append([curr, ox1])
+                curr = max(curr, ox2)
+            if curr < row_x2:
+                free.append([curr, row_x2])
+            return [iv for iv in free if (iv[1] - iv[0]) >= site_w_int]
+
+        general_row_free: Dict[int, List[List[int]]] = {}
+        lowpwr_row_free: Dict[int, List[List[int]]] = {}
+
+        for r in range(num_rows):
+            ry1 = cy1_dbu + r * site_h_dbu
+            ry2 = ry1 + site_h_dbu
+
+            obs_general = list(extra_row_obstacles[r])
+            for hx1, hy1, hx2, hy2 in macro_halo_boxes_dbu:
+                if not (ry2 <= hy1 or ry1 >= hy2):
+                    obs_general.append((hx1, hx2))
+
+            if pdl_box and pdl_y1_dbu is not None and pdl_y2_dbu is not None:
+                if not (ry2 <= pdl_y1_dbu or ry1 >= pdl_y2_dbu):
+                    obs_general.append((pdl_x1_dbu, pdl_x2_dbu))
+                    obs_pdl = [o for o in obs_general if not (o[1] <= pdl_x1_dbu or o[0] >= pdl_x2_dbu)]
+                    lowpwr_row_free[r] = compute_free_intervals(pdl_x1_dbu, pdl_x2_dbu, obs_pdl, site_w_dbu)
+
+            general_row_free[r] = compute_free_intervals(cx1_dbu, cx2_dbu, obs_general, site_w_dbu)
+
+        cur_gen_row = 0
+        pdl_rows = list(lowpwr_row_free.keys())
+        cur_pdl_row = 0
 
         for iname, cmaster in netlist_instances:
             if iname in placed_names:
                 continue
 
-            cell_w_dbu = 1380  # Default ~3 sites (1.380 um)
-            is_lowpwr_cell = bool("u_alu" in iname or iname.startswith("alu_"))
+            cw_um = cell_sizes.get(cmaster, (1.380, 2.720))[0]
+            cell_w_dbu = int(round(cw_um * dbu))
+            cell_w_dbu = max(site_w_dbu, int(math.ceil(cell_w_dbu / site_w_dbu)) * site_w_dbu)
 
+            is_lowpwr_cell = bool("u_alu" in iname or iname.startswith("alu_"))
             placed_x_dbu = None
             placed_y_dbu = None
             orient = "N"
@@ -1490,42 +1677,40 @@ class Floorplan:
             if is_lowpwr_cell and pdl_rows:
                 attempts = 0
                 while attempts < len(pdl_rows):
-                    r_target = pdl_rows[pdl_row_idx % len(pdl_rows)]
-                    cur_x = pdl_row_x[r_target]
-                    if (cur_x + cell_w_dbu) <= pdl_x2_dbu:
-                        placed_x_dbu = cur_x
-                        placed_y_dbu = cy1_dbu + r_target * site_h_dbu
-                        orient = "FS" if (r_target % 2 == 1) else "N"
-                        pdl_row_x[r_target] += cell_w_dbu
-                        pdl_row_idx += 1
-                        break
-                    pdl_row_idx += 1
+                    r_cand = pdl_rows[cur_pdl_row % len(pdl_rows)]
+                    cur_pdl_row += 1
                     attempts += 1
+                    intervals = lowpwr_row_free.get(r_cand, [])
+                    for idx, iv in enumerate(intervals):
+                        if (iv[1] - iv[0]) >= cell_w_dbu:
+                            placed_x_dbu = iv[0]
+                            placed_y_dbu = cy1_dbu + r_cand * site_h_dbu
+                            orient = "FS" if (r_cand % 2 == 1) else "N"
+                            iv[0] += cell_w_dbu
+                            if iv[0] >= iv[1]:
+                                intervals.pop(idx)
+                            break
+                    if placed_x_dbu is not None:
+                        break
 
             if placed_x_dbu is None:
                 attempts = 0
                 while attempts < num_rows:
-                    r_target = cur_row % num_rows
-                    ry = cy1_dbu + r_target * site_h_dbu
-                    rx = row_x_ptrs[r_target]
-
-                    collides = False
-                    for hx1, hy1, hx2, hy2 in macro_halo_boxes_dbu:
-                        if not (rx + cell_w_dbu <= hx1 or rx >= hx2 or ry + site_h_dbu <= hy1 or ry >= hy2):
-                            rx = hx2 + site_w_dbu
-                            row_x_ptrs[r_target] = rx
-                            collides = True
-                            break
-
-                    if (rx + cell_w_dbu) <= cx2_dbu and not collides:
-                        placed_x_dbu = rx
-                        placed_y_dbu = ry
-                        orient = "FS" if (r_target % 2 == 1) else "N"
-                        row_x_ptrs[r_target] += cell_w_dbu
-                        cur_row += 1
-                        break
-                    cur_row += 1
+                    r_cand = cur_gen_row % num_rows
+                    cur_gen_row += 1
                     attempts += 1
+                    intervals = general_row_free.get(r_cand, [])
+                    for idx, iv in enumerate(intervals):
+                        if (iv[1] - iv[0]) >= cell_w_dbu:
+                            placed_x_dbu = iv[0]
+                            placed_y_dbu = cy1_dbu + r_cand * site_h_dbu
+                            orient = "FS" if (r_cand % 2 == 1) else "N"
+                            iv[0] += cell_w_dbu
+                            if iv[0] >= iv[1]:
+                                intervals.pop(idx)
+                            break
+                    if placed_x_dbu is not None:
+                        break
 
             if placed_x_dbu is not None:
                 comp_lines.append(f"    - {iname} {cmaster} + PLACED ( {placed_x_dbu} {placed_y_dbu} ) {orient} ;")
