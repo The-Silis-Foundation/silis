@@ -184,12 +184,59 @@ class MacroInstance:
         return self.width if self.orientation.is_rotated_90() else self.height
 
     def move_to(self, x: float, y: float) -> None:
-        """Moves macro origin with manufacturing grid quantization and dynamic site row snapping."""
+        """Moves macro origin with manufacturing grid quantization, site row snapping, and physical non-overlap assertion."""
         rh = 0.0
+        mfg = 0.005
         if self.parent_floorplan:
             rh = getattr(self.parent_floorplan, "site_row_height", 0.0) or self.parent_floorplan._resolve_site_row_height()
-        self.x = legalize_coord(x)
-        self.y = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y)
+            mfg = getattr(self.parent_floorplan, "manufacturing_grid", 0.005)
+        new_x = legalize_coord(x, mfg)
+        new_y = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y, mfg)
+
+        if self.parent_floorplan:
+            # Pre-flight core containment
+            cx1, cy1, cx2, cy2 = self.parent_floorplan.get_core_bbox()
+            cw, ch = self.parent_floorplan.get_core_dimensions()
+            if cw > 0.0 and ch > 0.0:
+                mx1, my1 = new_x, new_y
+                mx2, my2 = mx1 + self.effective_width, my1 + self.effective_height
+                if mx1 < (cx1 - 0.001) or my1 < (cy1 - 0.001) or mx2 > (cx2 + 0.001) or my2 > (cy2 + 0.001):
+                    from .exceptions import PlacementContainmentError
+                    raise PlacementContainmentError(self.name, (mx1, my1, mx2, my2), (cx1, cy1, cx2, cy2), "core")
+
+            # Physical and halo non-overlap assertions against other placed macros
+            new_bbox = (new_x, new_y, new_x + self.effective_width, new_y + self.effective_height)
+            new_halo_bbox = (
+                new_x - self.halo.left,
+                new_y - self.halo.bottom,
+                new_x + self.effective_width + self.halo.right,
+                new_y + self.effective_height + self.halo.top,
+            )
+            for ex_name, ex_m in self.parent_floorplan.macros.items():
+                if ex_name == self.name:
+                    continue
+                ex_bbox = ex_m.get_bbox()
+                ov_x1 = max(new_bbox[0], ex_bbox[0])
+                ov_y1 = max(new_bbox[1], ex_bbox[1])
+                ov_x2 = min(new_bbox[2], ex_bbox[2])
+                ov_y2 = min(new_bbox[3], ex_bbox[3])
+                if ov_x1 < (ov_x2 - 0.001) and ov_y1 < (ov_y2 - 0.001):
+                    from .exceptions import MacroCollisionError
+                    raise MacroCollisionError(self.name, new_bbox, ex_name, ex_bbox, (ov_x1, ov_y1, ov_x2, ov_y2))
+                ex_h_bbox = ex_m.get_halo_bbox()
+                h_ov_x1 = max(new_halo_bbox[0], ex_h_bbox[0])
+                h_ov_y1 = max(new_halo_bbox[1], ex_h_bbox[1])
+                h_ov_x2 = min(new_halo_bbox[2], ex_h_bbox[2])
+                h_ov_y2 = min(new_halo_bbox[3], ex_h_bbox[3])
+                if h_ov_x1 < (h_ov_x2 - 0.001) and h_ov_y1 < (h_ov_y2 - 0.001):
+                    from .exceptions import OverlappingHaloError
+                    raise OverlappingHaloError(
+                        f"Macro halo collision between '{self.name}' halo {new_halo_bbox} and '{ex_name}' halo {ex_h_bbox}. "
+                        f"Keepout overlap: {(h_ov_x1, h_ov_y1, h_ov_x2, h_ov_y2)}."
+                    )
+
+        self.x = new_x
+        self.y = new_y
         if self.parent_floorplan:
             self.parent_floorplan._notify_physical_mutation()
 
@@ -280,6 +327,7 @@ class Floorplan:
             self.margins = Margins(20.0, 20.0, 20.0, 20.0)
         self.macros: Dict[str, MacroInstance] = {}
         self.regions: Dict[str, Dict[str, Any]] = {}
+        self.extra_components: Dict[str, Dict[str, Any]] = {}
         self.site_row_height: float = self._resolve_site_row_height()
         self.manufacturing_grid: float = self._resolve_mfg_grid()
 
@@ -444,6 +492,18 @@ class Floorplan:
             s_orient = def_to_orient.get(s_orient, s_orient)
             actual_orient = Orientation(s_orient)
 
+        if actual_halo is None:
+            actual_halo = Halo(0.0, 0.0, 0.0, 0.0)
+        elif isinstance(actual_halo, (int, float)):
+            actual_halo = Halo(float(actual_halo), float(actual_halo), float(actual_halo), float(actual_halo))
+        elif isinstance(actual_halo, (tuple, list)):
+            if len(actual_halo) == 4:
+                actual_halo = Halo(*actual_halo)
+            elif len(actual_halo) == 2:
+                actual_halo = Halo(actual_halo[0], actual_halo[1], actual_halo[0], actual_halo[1])
+            else:
+                actual_halo = Halo(0.0, 0.0, 0.0, 0.0)
+
         # Manufacturing grid assertion
         diff_x = abs(x - round(x / self.manufacturing_grid) * self.manufacturing_grid)
         if diff_x > 0.0001:
@@ -466,6 +526,39 @@ class Floorplan:
                 if mx1 < (cx1 - 0.001) or my1 < (cy1 - 0.001) or mx2 > (cx2 + 0.001) or my2 > (cy2 + 0.001):
                     from .exceptions import PlacementContainmentError
                     raise PlacementContainmentError(name, (mx1, my1, mx2, my2), (cx1, cy1, cx2, cy2), "core")
+
+        # Physical and halo non-overlap assertions against all existing placed macros
+        new_bbox = (legal_x, snapped_y, legal_x + actual_width, snapped_y + actual_height)
+        new_halo_bbox = (
+            legal_x - actual_halo.left,
+            snapped_y - actual_halo.bottom,
+            legal_x + actual_width + actual_halo.right,
+            snapped_y + actual_height + actual_halo.top,
+        )
+        for exist_name, exist_m in self.macros.items():
+            if exist_name == name:
+                continue
+            ex_bbox = exist_m.get_bbox()
+            ov_x1 = max(new_bbox[0], ex_bbox[0])
+            ov_y1 = max(new_bbox[1], ex_bbox[1])
+            ov_x2 = min(new_bbox[2], ex_bbox[2])
+            ov_y2 = min(new_bbox[3], ex_bbox[3])
+            if ov_x1 < (ov_x2 - 0.001) and ov_y1 < (ov_y2 - 0.001):
+                from .exceptions import MacroCollisionError
+                raise MacroCollisionError(name, new_bbox, exist_name, ex_bbox, (ov_x1, ov_y1, ov_x2, ov_y2))
+            
+            ex_h_bbox = exist_m.get_halo_bbox()
+            h_ov_x1 = max(new_halo_bbox[0], ex_h_bbox[0])
+            h_ov_y1 = max(new_halo_bbox[1], ex_h_bbox[1])
+            h_ov_x2 = min(new_halo_bbox[2], ex_h_bbox[2])
+            h_ov_y2 = min(new_halo_bbox[3], ex_h_bbox[3])
+            if h_ov_x1 < (h_ov_x2 - 0.001) and h_ov_y1 < (h_ov_y2 - 0.001):
+                from .exceptions import OverlappingHaloError
+                raise OverlappingHaloError(
+                    f"Macro halo collision between '{name}' halo {new_halo_bbox} and '{exist_name}' halo {ex_h_bbox}. "
+                    f"Keepout overlap: {(h_ov_x1, h_ov_y1, h_ov_x2, h_ov_y2)}."
+                )
+
         inst = MacroInstance(
             name=name,
             master=master,
@@ -486,6 +579,62 @@ class Floorplan:
 
     def get_macros(self) -> List[MacroInstance]:
         return list(self.macros.values())
+
+    def add_component(
+        self,
+        name: str,
+        master: str,
+        x: float,
+        y: float,
+        orientation: Union[Orientation, str] = Orientation.R0,
+        status: str = "PLACED"
+    ) -> Dict[str, Any]:
+        """Adds an explicitly placed cell (pad, power switch, tapcell, MBIST collar) to the floorplan."""
+        rh = self.site_row_height or self._resolve_site_row_height()
+        sx = legalize_coord(x, self.manufacturing_grid)
+        sy = snap_to_site_row(y, rh) if rh > 0.0 else legalize_coord(y, self.manufacturing_grid)
+        comp_info = {
+            "name": name,
+            "master": master,
+            "x": sx,
+            "y": sy,
+            "orient": orientation if isinstance(orientation, Orientation) else Orientation(orientation),
+            "status": status
+        }
+        self.extra_components[name] = comp_info
+        self._notify_physical_mutation()
+        return comp_info
+
+    def add_pad(
+        self,
+        name: str,
+        master: str,
+        x: float,
+        y: float,
+        orientation: Union[Orientation, str] = Orientation.R0
+    ) -> Dict[str, Any]:
+        """Adds a peripheral I/O bond pad or supply pad."""
+        return self.add_component(name=name, master=master, x=x, y=y, orientation=orientation, status="PLACED")
+
+    def add_power_switch(
+        self,
+        name: str,
+        x: float,
+        y: float,
+        master: str = "sky130_fd_sc_hd__power_switch"
+    ) -> Dict[str, Any]:
+        """Adds a physical power switch cell inside a switched power domain."""
+        return self.add_component(name=name, master=master, x=x, y=y, orientation=Orientation.R0, status="PLACED")
+
+    def add_mbist_collar_cell(
+        self,
+        name: str,
+        x: float,
+        y: float,
+        master: str = "sky130_fd_sc_hd__dfxtp_1"
+    ) -> Dict[str, Any]:
+        """Adds an MBIST collar scan register adjacent to a memory macro."""
+        return self.add_component(name=name, master=master, x=x, y=y, orientation=Orientation.R0, status="PLACED")
 
     def add_region(
         self,
@@ -1088,6 +1237,17 @@ class Floorplan:
             def_orient = orient_to_def.get(raw_orient, "N")
             comp_lines.append(f"    - {inst.name} {inst.master} + PLACED ( {mx} {my} ) {def_orient} ;")
             placed_names.add(inst.name)
+
+        # Ingest explicitly placed extra components (pads, power switches, MBIST collar cells)
+        for comp in getattr(self, "extra_components", {}).values():
+            if comp["name"] not in placed_names:
+                cx = int(round(comp["x"] * dbu))
+                cy = int(round(comp["y"] * dbu))
+                raw_orient = getattr(comp["orient"], "value", str(comp["orient"]))
+                def_orient = orient_to_def.get(raw_orient, "N")
+                st = comp.get("status", "PLACED")
+                comp_lines.append(f"    - {comp['name']} {comp['master']} + {st} ( {cx} {cy} ) {def_orient} ;")
+                placed_names.add(comp["name"])
 
         # Ingest netlist standard cells as unplaced components
         netlist_instances = self._discover_netlist_instances()

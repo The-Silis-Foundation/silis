@@ -736,6 +736,65 @@ class Pipeline:
                         from .exceptions import PlacementContainmentError
                         raise PlacementContainmentError(inst_name, (mx1, my1, mx2, my2), (c_x1, c_y1, c_x2, c_y2), "core")
 
+            # Pairwise macro-to-macro collision and halo keepout non-overlap assertions
+            num_m = len(macros)
+            for i in range(num_m):
+                m1 = macros[i]
+                n1 = m1.get("inst") or m1.get("inst_name") or m1.get("name")
+                loc1 = m1.get("loc") or m1.get("pos") or [m1.get("x", 0), m1.get("y", 0)]
+                w1 = float(m1.get("w") or m1.get("width") or 0.0)
+                h1 = float(m1.get("h") or m1.get("height") or 0.0)
+                if w1 <= 0.0 or h1 <= 0.0:
+                    d1 = self.project.get_macro_dimensions(m1.get("cell") or m1.get("master") or n1)
+                    if d1:
+                        w1, h1 = d1
+                h_val1 = m1.get("halo", (5.0, 5.0, 5.0, 5.0))
+                if isinstance(h_val1, (int, float)):
+                    h_val1 = (float(h_val1), float(h_val1), float(h_val1), float(h_val1))
+                elif len(h_val1) == 2:
+                    h_val1 = (float(h_val1[0]), float(h_val1[1]), float(h_val1[0]), float(h_val1[1]))
+                b1 = (float(loc1[0]), float(loc1[1]), float(loc1[0]) + w1, float(loc1[1]) + h1)
+                hb1 = (b1[0] - h_val1[0], b1[1] - h_val1[1], b1[2] + h_val1[2], b1[3] + h_val1[3])
+
+                for j in range(i + 1, num_m):
+                    m2 = macros[j]
+                    n2 = m2.get("inst") or m2.get("inst_name") or m2.get("name")
+                    loc2 = m2.get("loc") or m2.get("pos") or [m2.get("x", 0), m2.get("y", 0)]
+                    w2 = float(m2.get("w") or m2.get("width") or 0.0)
+                    h2 = float(m2.get("h") or m2.get("height") or 0.0)
+                    if w2 <= 0.0 or h2 <= 0.0:
+                        d2 = self.project.get_macro_dimensions(m2.get("cell") or m2.get("master") or n2)
+                        if d2:
+                            w2, h2 = d2
+                    h_val2 = m2.get("halo", (5.0, 5.0, 5.0, 5.0))
+                    if isinstance(h_val2, (int, float)):
+                        h_val2 = (float(h_val2), float(h_val2), float(h_val2), float(h_val2))
+                    elif len(h_val2) == 2:
+                        h_val2 = (float(h_val2[0]), float(h_val2[1]), float(h_val2[0]), float(h_val2[1]))
+                    b2 = (float(loc2[0]), float(loc2[1]), float(loc2[0]) + w2, float(loc2[1]) + h2)
+                    hb2 = (b2[0] - h_val2[0], b2[1] - h_val2[1], b2[2] + h_val2[2], b2[3] + h_val2[3])
+
+                    # Physical body collision
+                    ov_x1 = max(b1[0], b2[0])
+                    ov_y1 = max(b1[1], b2[1])
+                    ov_x2 = min(b1[2], b2[2])
+                    ov_y2 = min(b1[3], b2[3])
+                    if ov_x1 < (ov_x2 - 0.001) and ov_y1 < (ov_y2 - 0.001):
+                        from .exceptions import MacroCollisionError
+                        raise MacroCollisionError(n1, b1, n2, b2, (ov_x1, ov_y1, ov_x2, ov_y2))
+
+                    # Halo keepout collision
+                    hov_x1 = max(hb1[0], hb2[0])
+                    hov_y1 = max(hb1[1], hb2[1])
+                    hov_x2 = min(hb1[2], hb2[2])
+                    hov_y2 = min(hb1[3], hb2[3])
+                    if hov_x1 < (hov_x2 - 0.001) and hov_y1 < (hov_y2 - 0.001):
+                        from .exceptions import OverlappingHaloError
+                        raise OverlappingHaloError(
+                            f"Macro halo collision between '{n1}' halo {hb1} and '{n2}' halo {hb2}. "
+                            f"Keepout overlap: {(hov_x1, hov_y1, hov_x2, hov_y2)}."
+                        )
+
         self._spec_fps["floorplan"] = {
             "die_area": die_area,
             "core_margin": core_margin,

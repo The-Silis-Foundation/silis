@@ -6,6 +6,7 @@ actionable design and verification exceptions.
 """
 
 import sys
+from typing import Tuple, Union, Optional, List, Dict
 
 # Ensure module alias parity across both 'sdk.exceptions' and 'silis.core.sdk.exceptions'
 if __name__ == "sdk.exceptions":
@@ -106,6 +107,27 @@ class RoutingOverflowError(SilisEDAError):
 class OverlappingHaloError(SilisEDAError):
     """Raised when macro keepouts or routing corridors violate channel spacing."""
     pass
+
+
+class MacroCollisionError(SilisEDAError):
+    """Raised when two placed macros physically overlap in the floorplan."""
+    def __init__(
+        self,
+        inst_a: str,
+        box_a: Tuple[float, float, float, float],
+        inst_b: str,
+        box_b: Tuple[float, float, float, float],
+        overlap_box: Tuple[float, float, float, float]
+    ):
+        self.inst_a = inst_a
+        self.box_a = box_a
+        self.inst_b = inst_b
+        self.box_b = box_b
+        self.overlap_box = overlap_box
+        super().__init__(
+            f"Physical collision detected between macro '{inst_a}' at {box_a} and '{inst_b}' at {box_b}. "
+            f"Intersection overlap: {overlap_box}."
+        )
 
 
 class IllegalVoltageError(SilisEDAError):

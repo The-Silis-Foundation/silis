@@ -36,6 +36,7 @@ from sdk import (
     PipelineStateError,
     PipelineExecutionError,
     OverlappingHaloError,
+    MacroCollisionError,
     PlacementContainmentError,
     IllegalVoltageError,
     Project,

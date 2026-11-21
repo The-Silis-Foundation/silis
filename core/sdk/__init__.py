@@ -45,6 +45,7 @@ from .exceptions import (
     PipelineStateError,
     PipelineExecutionError,
     OverlappingHaloError,
+    MacroCollisionError,
     IllegalVoltageError,
     GridLegalizationError,
     PlacementContainmentError,
