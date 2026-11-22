@@ -47,6 +47,18 @@ def find_project_file(project_arg=None):
         if os.path.isfile(candidate2):
             project_registry.register_project(candidate2)
             return os.path.abspath(candidate2)
+        # Check current directory / projects / project_arg
+        candidate3 = os.path.join(os.getcwd(), "projects", project_arg, "silis.silisproj")
+        if os.path.isfile(candidate3):
+            project_registry.register_project(candidate3)
+            return os.path.abspath(candidate3)
+        cand_pdir = os.path.join(os.getcwd(), "projects", project_arg)
+        if os.path.isdir(cand_pdir):
+            import glob
+            pmatches = glob.glob(os.path.join(cand_pdir, "*.silisproj"))
+            if pmatches:
+                project_registry.register_project(pmatches[0])
+                return os.path.abspath(pmatches[0])
         # Check project_registry (match project name or directory name)
         registered_match = project_registry.find_registered_project(project_arg)
         if registered_match:
@@ -58,8 +70,22 @@ def find_project_file(project_arg=None):
         project_registry.register_project(local)
         return local
 
+    # Check projects/ subdirectories in current directory before searching arbitrary subdirectories
+    proj_dir = os.path.join(os.getcwd(), "projects")
+    if os.path.isdir(proj_dir):
+        import glob
+        proj_matches = glob.glob(os.path.join(proj_dir, "*", "*.silisproj"))
+        if proj_matches:
+            # Sort by modification time descending
+            proj_matches.sort(key=os.path.getmtime, reverse=True)
+            chosen = proj_matches[0]
+            project_registry.register_project(chosen)
+            return os.path.abspath(chosen)
+
     # Search immediate subdirectories
     for d in os.listdir(os.getcwd()):
+        if d in [".git", "node_modules", "third-party", "venv", ".env"]:
+            continue
         cand = os.path.join(os.getcwd(), d, "silis.silisproj")
         if os.path.isfile(cand):
             project_registry.register_project(cand)

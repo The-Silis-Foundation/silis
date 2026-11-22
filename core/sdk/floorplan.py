@@ -1819,6 +1819,18 @@ class Floorplan:
             f.write("\n".join(lines) + "\n")
         os.replace(tmp_path, path)
 
+        # Atomically synchronize results/temp.def if exporting into a project results directory
+        res_dir = os.path.dirname(os.path.abspath(path))
+        if os.path.basename(res_dir) == "results":
+            temp_path = os.path.join(res_dir, "temp.def")
+            if os.path.abspath(temp_path) != os.path.abspath(path):
+                tmp_temp = temp_path + ".tmp"
+                try:
+                    shutil.copy2(path, tmp_temp)
+                    os.replace(tmp_temp, temp_path)
+                except Exception:
+                    pass
+
     def save_session(self, path: Optional[str] = None) -> str:
         """Serializes current floorplan state to .silis_fp_session.json with atomic persistence."""
         import json, os, hashlib

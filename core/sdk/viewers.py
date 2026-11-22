@@ -830,19 +830,38 @@ def view_layers(
     _ensure_desktop_env()
     abs_file = os.path.abspath(def_or_odb_path)
     if os.path.isdir(abs_file):
-        candidates = [
-            os.path.join(abs_file, "results", "temp.def"),
-            os.path.join(abs_file, "results", "temp.odb"),
-            os.path.join(abs_file, "results", "final_routed.def"),
-            os.path.join(abs_file, "results", "routed.def"),
-        ]
-        import glob
-        candidates.extend(glob.glob(os.path.join(abs_file, "results", "*.def")))
-        candidates.extend(glob.glob(os.path.join(abs_file, "*.def")))
-        for cand in candidates:
-            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
-                abs_file = cand
-                break
+        resolved = None
+        try:
+            from .project import Project
+            proj_cand = Project(abs_file)
+            resolved = proj_cand.get_def()
+        except Exception:
+            try:
+                from silis.core.sdk.project import Project
+                proj_cand = Project(abs_file)
+                resolved = proj_cand.get_def()
+            except Exception:
+                pass
+
+        if not resolved or not os.path.isfile(resolved):
+            res_dir = os.path.join(abs_file, "results") if os.path.isdir(os.path.join(abs_file, "results")) else abs_file
+            import glob
+            all_defs = glob.glob(os.path.join(res_dir, "*.def")) + glob.glob(os.path.join(abs_file, "*.def"))
+            valid_defs = list(set([f for f in all_defs if os.path.isfile(f) and os.path.getsize(f) > 0]))
+            if valid_defs:
+                milestone_names = ["filled.def", "routed.def", "cts.def", "placed.def", "floorplan.def", "floorplanned.def"]
+                candidates = []
+                for m in milestone_names:
+                    matched = [f for f in valid_defs if f.endswith(m)]
+                    if matched:
+                        candidates.append(max(matched, key=os.path.getmtime))
+                if candidates:
+                    resolved = max(candidates, key=os.path.getmtime)
+                else:
+                    resolved = max(valid_defs, key=os.path.getmtime)
+
+        if resolved and os.path.isfile(resolved):
+            abs_file = resolved
 
     win_title = title or f"Silis OpenROAD Native Layer Viewer — {os.path.basename(abs_file)}"
 

@@ -37,19 +37,27 @@ class Project:
         # 1. Resolve Project File
         proj_file = find_project_file(path_or_name)
         if not proj_file:
-            # Check within standard silis/projects folder
-            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            # Navigate from silis/core/sdk/project.py up to workspace root and silis root
+            sdk_dir = os.path.dirname(os.path.abspath(__file__))
+            core_dir = os.path.dirname(sdk_dir)
+            silis_dir = os.path.dirname(core_dir)
+            workspace_root = os.path.dirname(silis_dir)
+
+            search_roots = [workspace_root, silis_dir, core_dir]
             if path_or_name:
-                cand = os.path.join(repo_root, "projects", path_or_name, "silis.silisproj")
-                if os.path.isfile(cand):
-                    proj_file = os.path.abspath(cand)
-                else:
-                    cand_dir = os.path.join(repo_root, "projects", path_or_name)
+                for base in search_roots:
+                    cand = os.path.join(base, "projects", path_or_name, "silis.silisproj")
+                    if os.path.isfile(cand):
+                        proj_file = os.path.abspath(cand)
+                        break
+                    cand_dir = os.path.join(base, "projects", path_or_name)
                     if os.path.isdir(cand_dir):
                         for f in os.listdir(cand_dir):
                             if f.endswith(".silisproj"):
                                 proj_file = os.path.abspath(os.path.join(cand_dir, f))
                                 break
+                    if proj_file:
+                        break
 
         if not proj_file or not os.path.isfile(proj_file):
             raise FileNotFoundError(
@@ -343,38 +351,67 @@ class Project:
                 if p in defs:
                     return p
 
-        # Sort all candidates by modification time descending
-        by_mtime = sorted(defs, key=os.path.getmtime, reverse=True)
-        latest_def = by_mtime[0]
-        temp_def = os.path.join(self.results_dir, "temp.def")
-
-        # Milestone progression in descending order of physical completion.
-        # Authoritative milestone deliverables ALWAYS take precedence over intermediate scratch 'temp.def'.
-        milestones = [
-            f"{top}_filled.def" if top else None,
-            "filled.def",
-            f"{top}_routed.def" if top else None,
-            "routed.def",
-            f"{top}_cts.def" if top else None,
-            "cts.def",
-            f"{top}_placed.def" if top else None,
-            "placed.def",
-            f"{top}_floorplan.def" if top else None,
-            "floorplanned.def",
-            "floorplan.def",
+        # Order of pipeline stages (ascending physical progression)
+        # 1: floorplan, 2: placed, 3: cts, 4: routed, 5: filled
+        stage_order = [
+            (1, [f"{top}_floorplan.def" if top else None, "floorplanned.def", "floorplan.def"]),
+            (2, [f"{top}_placed.def" if top else None, "placed.def"]),
+            (3, [f"{top}_cts.def" if top else None, "cts.def"]),
+            (4, [f"{top}_routed.def" if top else None, "routed.def", "final_routed.def"]),
+            (5, [f"{top}_filled.def" if top else None, "filled.def"]),
         ]
-        milestones = [m for m in milestones if m]
 
-        for m in milestones:
-            p = os.path.join(self.results_dir, m)
-            if p in defs:
-                return p
+        # Gather existing milestone files with their stage rank and mtime
+        existing_milestones = []
+        for rank, names in stage_order:
+            for name in names:
+                if not name:
+                    continue
+                p = os.path.join(self.results_dir, name)
+                if p in defs and os.path.isfile(p) and os.path.getsize(p) > 0:
+                    existing_milestones.append({
+                        "path": p,
+                        "rank": rank,
+                        "mtime": os.path.getmtime(p),
+                    })
+                    break  # take preferred name for this rank
 
-        # If no milestone exists, check temp.def
-        if temp_def in defs:
-            return temp_def
+        # Filter out stale downstream milestones:
+        # A milestone at rank B > A is STALE if an upstream milestone A exists with mtime(A) > mtime(B).
+        valid_milestones = []
+        for m in existing_milestones:
+            is_stale = False
+            for other in existing_milestones:
+                if other["rank"] < m["rank"] and other["mtime"] > m["mtime"]:
+                    is_stale = True
+                    break
+            if not is_stale:
+                valid_milestones.append(m)
 
-        return latest_def
+        # Select the milestone with the highest physical stage rank
+        chosen_milestone = None
+        if valid_milestones:
+            # Sort by rank descending, then mtime descending
+            valid_milestones.sort(key=lambda x: (x["rank"], x["mtime"]), reverse=True)
+            chosen_milestone = valid_milestones[0]["path"]
+
+        # Check scratch temp.def
+        temp_def = os.path.join(self.results_dir, "temp.def")
+        if temp_def in defs and os.path.isfile(temp_def) and os.path.getsize(temp_def) > 0:
+            temp_mtime = os.path.getmtime(temp_def)
+            if not chosen_milestone:
+                return temp_def
+            # temp.def only takes precedence over milestone if significantly newer (> 2.0s),
+            # indicating an active PnR run just emitted a new intermediate state.
+            if (temp_mtime - os.path.getmtime(chosen_milestone)) > 2.0:
+                return temp_def
+
+        if chosen_milestone:
+            return chosen_milestone
+
+        # Fallback to the latest modified DEF
+        by_mtime = sorted(defs, key=os.path.getmtime, reverse=True)
+        return by_mtime[0]
 
     def get_gds_files(self) -> List[str]:
         """Returns all stream GDSII files in results/."""
