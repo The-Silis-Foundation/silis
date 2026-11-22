@@ -70,6 +70,13 @@ def find_project_file(project_arg=None):
         project_registry.register_project(local)
         return local
 
+    # If no argument and current directory has no project, prioritize the most recent registered project
+    if not project_arg:
+        recent = project_registry.get_most_recent_project()
+        if recent and recent.get("proj_file") and os.path.isfile(recent["proj_file"]):
+            print(f"[SILIS] Using most recent registered project: '{recent['name']}' at {recent['path']}")
+            return recent["proj_file"]
+
     # Check projects/ subdirectories in current directory before searching arbitrary subdirectories
     proj_dir = os.path.join(os.getcwd(), "projects")
     if os.path.isdir(proj_dir):
@@ -90,13 +97,6 @@ def find_project_file(project_arg=None):
         if os.path.isfile(cand):
             project_registry.register_project(cand)
             return cand
-
-    # If no argument and current directory has no project, fallback to most recent registered project
-    if not project_arg:
-        recent = project_registry.get_most_recent_project()
-        if recent and recent.get("proj_file") and os.path.isfile(recent["proj_file"]):
-            print(f"[SILIS] Using most recent registered project: '{recent['name']}' at {recent['path']}")
-            return recent["proj_file"]
 
     return None
 

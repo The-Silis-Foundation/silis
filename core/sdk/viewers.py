@@ -96,11 +96,77 @@ def _ensure_app() -> QApplication:
     return app
 
 
+def _resolve_viewer_def(target: Any = None) -> str:
+    """Resolves authoritative DEF or ODB file from a Project object, directory, file path, or active session."""
+    if target is None:
+        try:
+            from .project import Project
+            proj = Project()
+            c = proj.get_def()
+            if c and os.path.isfile(c):
+                return os.path.abspath(c)
+        except Exception:
+            pass
+
+    if hasattr(target, "get_def"):
+        c = target.get_def()
+        if c and os.path.isfile(c):
+            return os.path.abspath(c)
+
+    if hasattr(target, "primary_def") and target.primary_def:
+        if os.path.isfile(target.primary_def):
+            return os.path.abspath(target.primary_def)
+
+    if target is None:
+        raise FileNotFoundError("Could not resolve any valid layout DEF file or active project.")
+
+    abs_path = os.path.abspath(str(target))
+    if os.path.isdir(abs_path):
+        resolved = None
+        try:
+            from .project import Project
+            proj_cand = Project(abs_path)
+            resolved = proj_cand.get_def()
+        except Exception:
+            try:
+                from silis.core.sdk.project import Project
+                proj_cand = Project(abs_path)
+                resolved = proj_cand.get_def()
+            except Exception:
+                pass
+
+        if not resolved or not os.path.isfile(resolved):
+            res_dir = os.path.join(abs_path, "results") if os.path.isdir(os.path.join(abs_path, "results")) else abs_path
+            import glob
+            all_defs = glob.glob(os.path.join(res_dir, "*.def")) + glob.glob(os.path.join(abs_path, "*.def"))
+            valid_defs = list(set([f for f in all_defs if os.path.isfile(f) and os.path.getsize(f) > 0]))
+            if valid_defs:
+                temp_cands = [f for f in valid_defs if os.path.basename(f) == "temp.def"]
+                milestone_names = ["filled.def", "routed.def", "cts.def", "placed.def", "floorplan.def", "floorplanned.def"]
+                milestone_matches = []
+                for m in milestone_names:
+                    matched = [f for f in valid_defs if f.endswith(m)]
+                    if matched:
+                        milestone_matches.append(max(matched, key=os.path.getmtime))
+                if temp_cands and (not milestone_matches or os.path.getmtime(temp_cands[0]) >= os.path.getmtime(milestone_matches[0])):
+                    resolved = temp_cands[0]
+                elif milestone_matches:
+                    resolved = max(milestone_matches, key=os.path.getmtime)
+                else:
+                    resolved = max(valid_defs, key=os.path.getmtime)
+
+        if resolved and os.path.isfile(resolved):
+            return os.path.abspath(resolved)
+        return abs_path
+
+    return abs_path
+
+
 # ------------------------------------------------------------------------------
 # 1. Layout Viewer (DEF)
 # ------------------------------------------------------------------------------
 def view_layout(
-    def_path: str,
+    def_path: Optional[Any] = None,
     parent: Optional[QWidget] = None,
     title: Optional[str] = None,
     show: bool = True,
@@ -120,39 +186,7 @@ def view_layout(
     Pass detach=False to construct and return a QMainWindow in-process.
     """
     _ensure_desktop_env()
-    abs_def = os.path.abspath(def_path)
-    if os.path.isdir(abs_def):
-        resolved = None
-        try:
-            from .project import Project
-            proj_cand = Project(abs_def)
-            resolved = proj_cand.get_def()
-        except Exception:
-            try:
-                from silis.core.sdk.project import Project
-                proj_cand = Project(abs_def)
-                resolved = proj_cand.get_def()
-            except Exception:
-                pass
-
-        if not resolved or not os.path.isfile(resolved):
-            import glob
-            res_dir = os.path.join(abs_def, "results")
-            all_defs = glob.glob(os.path.join(res_dir, "*.def")) + glob.glob(os.path.join(abs_def, "*.def"))
-            valid_defs = [f for f in all_defs if os.path.isfile(f) and os.path.getsize(f) > 0]
-            if valid_defs:
-                # Milestone preferences first
-                milestones = ["filled.def", "routed.def", "cts.def", "placed.def", "floorplanned.def", "floorplan.def"]
-                for m in milestones:
-                    matched = [f for f in valid_defs if f.endswith(m)]
-                    if matched:
-                        resolved = max(matched, key=os.path.getmtime)
-                        break
-                if not resolved:
-                    resolved = max(valid_defs, key=os.path.getmtime)
-
-        if resolved and os.path.isfile(resolved):
-            abs_def = resolved
+    abs_def = _resolve_viewer_def(def_path)
 
     win_title = title or f"Silis SiliconPeeker Layout — {os.path.basename(abs_def)}"
 
@@ -811,7 +845,7 @@ def view_openroad_gui(def_or_odb_path: str, launch: bool = True) -> Optional[sub
 # 8. OpenROAD C++ Native Layer Viewer
 # ------------------------------------------------------------------------------
 def view_layers(
-    def_or_odb_path: str,
+    def_or_odb_path: Optional[Any] = None,
     parent: Optional[QWidget] = None,
     title: Optional[str] = None,
     show: bool = True,
@@ -828,40 +862,7 @@ def view_layers(
     Pass detach=False to construct and return a QMainWindow in-process.
     """
     _ensure_desktop_env()
-    abs_file = os.path.abspath(def_or_odb_path)
-    if os.path.isdir(abs_file):
-        resolved = None
-        try:
-            from .project import Project
-            proj_cand = Project(abs_file)
-            resolved = proj_cand.get_def()
-        except Exception:
-            try:
-                from silis.core.sdk.project import Project
-                proj_cand = Project(abs_file)
-                resolved = proj_cand.get_def()
-            except Exception:
-                pass
-
-        if not resolved or not os.path.isfile(resolved):
-            res_dir = os.path.join(abs_file, "results") if os.path.isdir(os.path.join(abs_file, "results")) else abs_file
-            import glob
-            all_defs = glob.glob(os.path.join(res_dir, "*.def")) + glob.glob(os.path.join(abs_file, "*.def"))
-            valid_defs = list(set([f for f in all_defs if os.path.isfile(f) and os.path.getsize(f) > 0]))
-            if valid_defs:
-                milestone_names = ["filled.def", "routed.def", "cts.def", "placed.def", "floorplan.def", "floorplanned.def"]
-                candidates = []
-                for m in milestone_names:
-                    matched = [f for f in valid_defs if f.endswith(m)]
-                    if matched:
-                        candidates.append(max(matched, key=os.path.getmtime))
-                if candidates:
-                    resolved = max(candidates, key=os.path.getmtime)
-                else:
-                    resolved = max(valid_defs, key=os.path.getmtime)
-
-        if resolved and os.path.isfile(resolved):
-            abs_file = resolved
+    abs_file = _resolve_viewer_def(def_or_odb_path)
 
     win_title = title or f"Silis OpenROAD Native Layer Viewer — {os.path.basename(abs_file)}"
 

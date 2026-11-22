@@ -59,10 +59,10 @@ class LayerLoadWorker(QThread):
         if "sky130" in (self.pdk_name or "").lower() or "sky130" in (tlef_path or "").lower():
             pdk_r = pdk_paths.get("pdk_root", self.pdk_base)
             for cand_lef in [
-                os.path.join(pdk_r, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
                 os.path.join(pdk_r, "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
-                os.path.join(pdk_r, "libs.tech", "openlane", "custom_cells", "lef", "sky130_ef_io_core.lef"),
+                os.path.join(pdk_r, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
                 os.path.join(pdk_r, "libs.tech", "openlane", "custom_cells", "lef", "sky130_fd_io_core.lef"),
+                os.path.join(pdk_r, "libs.tech", "openlane", "custom_cells", "lef", "sky130_ef_io_core.lef"),
             ]:
                 if os.path.isfile(cand_lef) and cand_lef not in extra_lefs:
                     extra_lefs.append(cand_lef)

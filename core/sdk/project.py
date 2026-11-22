@@ -155,6 +155,31 @@ class Project:
         return self.get_layout().view_layers(show=show, detach=detach, **kwargs)
 
     @property
+    def primary_verilog(self) -> Optional[str]:
+        """Path to top RTL Verilog source file."""
+        return self.get_verilog()
+
+    @property
+    def primary_netlist(self) -> Optional[str]:
+        """Path to synthesized gate-level netlist."""
+        return self.get_netlist()
+
+    @property
+    def primary_def(self) -> Optional[str]:
+        """Path to authoritative layout DEF file (results/temp.def or stage milestone)."""
+        return self.get_def()
+
+    @property
+    def primary_gds(self) -> Optional[str]:
+        """Path to exported GDSII stream file."""
+        return self.get_gds()
+
+    @property
+    def primary_sdc(self) -> Optional[str]:
+        """Path to timing constraints SDC file."""
+        return self.get_sdc()
+
+    @property
     def db(self):
         """Returns the OpenDBBridge query engine for direct in-memory OpenROAD database introspection."""
         if not hasattr(self, "_db") or self._db is None:
@@ -388,6 +413,36 @@ class Project:
             if not is_stale:
                 valid_milestones.append(m)
 
+        # Filter out milestones containing stale macro instances not in netlist/sizes (GEMINI.md Rule 4.3)
+        valid_macros = None
+        if hasattr(self, "get_sizes"):
+            try:
+                sz = self.get_sizes()
+                if sz and "macros" in sz:
+                    valid_macros = set(sz["macros"].keys())
+            except Exception:
+                pass
+
+        def is_def_macro_consistent(def_path: str) -> bool:
+            if valid_macros is None:
+                return True
+            try:
+                with open(def_path, "r", errors="ignore") as f:
+                    for line in f:
+                        line_s = line.strip()
+                        if line_s.startswith("- ") and ("sky130_sram" in line_s or "sram" in line_s):
+                            parts = line_s.split()
+                            if len(parts) >= 2:
+                                inst_name = parts[1]
+                                if inst_name not in valid_macros:
+                                    return False
+            except Exception:
+                pass
+            return True
+
+        if valid_macros is not None:
+            valid_milestones = [m for m in valid_milestones if is_def_macro_consistent(m["path"])]
+
         # Select the milestone with the highest physical stage rank
         chosen_milestone = None
         if valid_milestones:
@@ -397,13 +452,12 @@ class Project:
 
         # Check scratch temp.def
         temp_def = os.path.join(self.results_dir, "temp.def")
-        if temp_def in defs and os.path.isfile(temp_def) and os.path.getsize(temp_def) > 0:
+        if temp_def in defs and os.path.isfile(temp_def) and os.path.getsize(temp_def) > 0 and is_def_macro_consistent(temp_def):
             temp_mtime = os.path.getmtime(temp_def)
             if not chosen_milestone:
                 return temp_def
-            # temp.def only takes precedence over milestone if significantly newer (> 2.0s),
-            # indicating an active PnR run just emitted a new intermediate state.
-            if (temp_mtime - os.path.getmtime(chosen_milestone)) > 2.0:
+            # temp.def takes precedence over milestone if modified at or after milestone
+            if temp_mtime >= os.path.getmtime(chosen_milestone):
                 return temp_def
 
         if chosen_milestone:
