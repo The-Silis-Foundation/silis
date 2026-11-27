@@ -10,9 +10,9 @@ if {$::tk_version >= 8.5} {
 
 set Opts(cellmgr) 0
 
-magic::tag select   "magic::mgrselect %r"
-magic::tag load     "catch {magic::clearstack}; magic::cellmanager"
-magic::tag getcell  "magic::cellmanager"
+magic::tag add select   "magic::mgrselect %r"
+magic::tag add load     "catch {magic::clearstack}; magic::cellmanager"
+magic::tag add getcell  "magic::cellmanager"
 
 # Callback to the cell manager
 
@@ -34,6 +34,7 @@ proc magic::instcallback {command} {
    if { $cellpath == {} } {
       switch $command {
 	 load {$winname load $rootdef}
+	 place {$winname getcell $rootdef}
 	 default {
 	    magic::select top cell
 	    switch $command {
@@ -51,6 +52,7 @@ proc magic::instcallback {command} {
 
       switch $command {
          load {$winname load $celldef}
+	 place {$winname getcell $celldef}
          default {
 	    # Here: need to check first for the select cell belonging to the
 	    # current loaded root cell (get the first use).
@@ -105,11 +107,17 @@ proc magic::makecellmanager { mgrpath } {
    button ${mgrpath}.actionbar.edit -text "Edit" -command {magic::instcallback edit}
    button ${mgrpath}.actionbar.load -text "Load" -command {magic::instcallback load}
    button ${mgrpath}.actionbar.expand -text "Expand" -command \
- 	   {magic::instcallback expand}
+ 		{magic::instcallback expand}
+   button ${mgrpath}.actionbar.place -text "Place" -command \
+		{magic::instcallback place}
+   button ${mgrpath}.actionbar.refresh -text "Refresh" -command \
+		{magic::cellmanager update}
 
    pack ${mgrpath}.actionbar.load -side left
    pack ${mgrpath}.actionbar.edit -side left
    pack ${mgrpath}.actionbar.expand -side left
+   pack ${mgrpath}.actionbar.place -side left
+   pack ${mgrpath}.actionbar.refresh -side left
    pack ${mgrpath}.actionbar.done -side right
 
    label ${mgrpath}.target.name -text "Target window:"

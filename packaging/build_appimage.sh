@@ -31,22 +31,26 @@ if [ ! -d "${APPDIR}/opt/python" ]; then
 fi
 
 # 3. Install self-contained wheels (PyQt6, WebEngine, QScintilla, gdstk, numpy, Pillow, packaging)
-echo "=== Installing fully self-contained wheels into AppDir Python ==="
-PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
-    PyQt6 \
-    PyQt6-WebEngine \
-    PyQt6-QScintilla \
-    gdstk \
-    numpy \
-    websockify \
-    Pillow \
-    packaging
+if [ ! -d "${APPDIR}/opt/python/lib/python3.12/site-packages/PyQt6" ]; then
+    echo "=== Installing fully self-contained wheels into AppDir Python ==="
+    PYTHONNOUSERSITE=1 "${APPDIR}/opt/python/bin/pip3" install --no-cache-dir \
+        PyQt6 \
+        PyQt6-WebEngine \
+        PyQt6-QScintilla \
+        gdstk \
+        numpy \
+        websockify \
+        Pillow \
+        packaging
+else
+    echo "=== Standalone Python wheels already staged in AppDir/opt/python ==="
+fi
 
 # 4. Copy application core files into AppDir
 echo "=== Staging application codebase into AppDir ==="
 cp -a "${REPO_DIR}/silis.py" "${APPDIR}/silis.py"
 cp -a "${REPO_DIR}/__init__.py" "${APPDIR}/__init__.py"
-rsync -a --delete --exclude='.git' "${REPO_DIR}/core/" "${APPDIR}/core/"
+rsync -a --delete --delete-excluded --exclude='.git' --exclude='CMakeFiles' --exclude='__pycache__' "${REPO_DIR}/core/" "${APPDIR}/core/"
 rm -rf "${APPDIR}/core/core"
 cp -a "${REPO_DIR}/packaging/AppRun" "${APPDIR}/AppRun"
 cp -a "${REPO_DIR}/packaging/silis.desktop" "${APPDIR}/silis.desktop"
@@ -64,12 +68,12 @@ mkdir -p "${APPDIR}/assets/ssa"
 
 for VARIANT in sky130A sky130B gf180mcu; do
     SRC_PDK=""
-    if [ -d "/home/econsystems/.silis_backup_audit/pdks/${VARIANT}" ]; then
-        SRC_PDK="/home/econsystems/.silis_backup_audit/pdks/${VARIANT}"
+    if [ -d "${REPO_DIR}/assets/pdk/${VARIANT}" ]; then
+        SRC_PDK="${REPO_DIR}/assets/pdk/${VARIANT}"
     elif [ -d "${HOME}/.silis/pdks/${VARIANT}" ]; then
         SRC_PDK="${HOME}/.silis/pdks/${VARIANT}"
-    elif [ -d "${REPO_DIR}/assets/pdk/${VARIANT}" ]; then
-        SRC_PDK="${REPO_DIR}/assets/pdk/${VARIANT}"
+    elif [ -d "/home/econsystems/.silis_backup_audit/pdks/${VARIANT}" ]; then
+        SRC_PDK="/home/econsystems/.silis_backup_audit/pdks/${VARIANT}"
     fi
 
     if [ -n "${SRC_PDK}" ] && [ -d "${SRC_PDK}" ]; then
@@ -81,28 +85,44 @@ for VARIANT in sky130A sky130B gf180mcu; do
     fi
 done
 
-# Stage master PDK configuration manifest into AppDir
-if [ -f "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" ]; then
-    cp -a "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
+# Stage master PDK configuration manifest into AppDir (prefer repo assets/pdk or active ~/.silis/pdks first)
+if [ -f "${REPO_DIR}/assets/pdk/pdk_master.json" ]; then
+    cp -a "${REPO_DIR}/assets/pdk/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
 elif [ -f "${HOME}/.silis/pdks/pdk_master.json" ]; then
     cp -a "${HOME}/.silis/pdks/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
-elif [ -f "${REPO_DIR}/assets/pdk/pdk_master.json" ]; then
-    cp -a "${REPO_DIR}/assets/pdk/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
+elif [ -f "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" ]; then
+    cp -a "/home/econsystems/.silis_backup_audit/pdks/pdk_master.json" "${APPDIR}/assets/pdk/pdk_master.json"
 fi
 
-# Stage all SSA drop-in configurations into AppDir
-if [ -d "/home/econsystems/.silis_backup_audit/ssa" ]; then
-    rsync -a --delete "/home/econsystems/.silis_backup_audit/ssa/" "${APPDIR}/assets/ssa/"
-elif [ -d "${REPO_DIR}/assets/ssa" ]; then
+# Stage all SSA drop-in configurations into AppDir (prefer current repo assets/ssa first)
+if [ -d "${REPO_DIR}/assets/ssa" ]; then
     rsync -a --delete "${REPO_DIR}/assets/ssa/" "${APPDIR}/assets/ssa/"
 elif [ -d "${HOME}/.silis/ssa" ]; then
     rsync -a --delete "${HOME}/.silis/ssa/" "${APPDIR}/assets/ssa/"
+elif [ -d "/home/econsystems/.silis_backup_audit/ssa" ]; then
+    rsync -a --delete "/home/econsystems/.silis_backup_audit/ssa/" "${APPDIR}/assets/ssa/"
 fi
 
 # Stage pdk_aliases.json
-if [ -f "${REPO_DIR}/assets/ssa/pdk_aliases.json" ]; then
+if [ -f "${REPO_DIR}/assets/pdk/pdk_aliases.json" ]; then
+    cp -a "${REPO_DIR}/assets/pdk/pdk_aliases.json" "${APPDIR}/assets/pdk/pdk_aliases.json"
+    cp -a "${REPO_DIR}/assets/pdk/pdk_aliases.json" "${APPDIR}/assets/ssa/pdk_aliases.json"
+elif [ -f "${REPO_DIR}/assets/ssa/pdk_aliases.json" ]; then
     cp -a "${REPO_DIR}/assets/ssa/pdk_aliases.json" "${APPDIR}/assets/ssa/pdk_aliases.json"
     cp -a "${REPO_DIR}/assets/ssa/pdk_aliases.json" "${APPDIR}/assets/pdk/pdk_aliases.json"
+fi
+
+if [ -d "${REPO_DIR}/third-party/pdks/volare" ] && [ ! -d "${APPDIR}/assets/pdk/volare" ]; then
+    cp -a "${REPO_DIR}/third-party/pdks/volare" "${APPDIR}/assets/pdk/volare"
+elif [ -d "${HOME}/.silis/pdks/volare" ] && [ ! -d "${APPDIR}/assets/pdk/volare" ]; then
+    cp -a "${HOME}/.silis/pdks/volare" "${APPDIR}/assets/pdk/volare"
+fi
+
+# 6. Copy third-party tools & extensions BEFORE creating third-party/pdks symlinks
+if [ -d "${REPO_DIR}/third-party" ]; then
+    echo "=== Copying third-party tool binaries and plugins ==="
+    mkdir -p "${APPDIR}/third-party"
+    rsync -a --delete --exclude='.git' --exclude='pdks/sky130A' --exclude='pdks/sky130B' --exclude='pdks/gf180mcu' "${REPO_DIR}/third-party/" "${APPDIR}/third-party/"
 fi
 
 # Ensure cross-compatibility symlinks between assets/pdk and third-party/pdks
@@ -112,11 +132,12 @@ mkdir -p "${APPDIR}/third-party/pdks"
 (cd "${APPDIR}/third-party/pdks" && ln -sfn ../../assets/pdk/sky130A sky130A && ln -sfn ../../assets/pdk/sky130B sky130B && ln -sfn ../../assets/pdk/gf180mcu gf180mcu)
 (cd "${APPDIR}/third-party/pdks" && ln -sfn ../../assets/pdk/pdk_master.json pdk_master.json && ln -sfn ../../assets/pdk/pdk_aliases.json pdk_aliases.json)
 
-# 6. Copy third-party tools & extensions if present
-if [ -d "${REPO_DIR}/third-party" ] && [ ! -d "${APPDIR}/third-party" ]; then
-    echo "=== Copying third-party tool binaries and plugins ==="
-    cp -a "${REPO_DIR}/third-party" "${APPDIR}/third-party"
+# Bundle Tcl 8.6 runtime scripts so sta/yosys/magic run on minimal Linux systems lacking tcl8.6 apt package
+if [ -d "/usr/share/tcltk/tcl8.6" ]; then
+    mkdir -p "${APPDIR}/usr/share/tcltk"
+    rsync -a "/usr/share/tcltk/tcl8.6/" "${APPDIR}/usr/share/tcltk/tcl8.6/"
 fi
+rm -rf "${APPDIR}/usr/share/perl5"
 
 # Normalize symlinks to relative targets inside AppDir for zero host path leaks
 if [ -d "${APPDIR}/core/editor" ]; then
@@ -165,7 +186,7 @@ if [ -f "${CACHE_DIR}/runtime-x86_64" ]; then
     RUNTIME_OPT=(--runtime-file "${CACHE_DIR}/runtime-x86_64")
 fi
 
-"${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" -u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage" || "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage"
+APPIMAGE_EXTRACT_AND_RUN=1 "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" -u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage" || APPIMAGE_EXTRACT_AND_RUN=1 "${TOOL_CMD}" -n "${RUNTIME_OPT[@]}" "${APPDIR}" "${OUTPUT_DIR}/Silis-x86_64.AppImage"
 
 if command -v zsyncmake &>/dev/null; then
     echo "=== Generating zsync update metadata ==="

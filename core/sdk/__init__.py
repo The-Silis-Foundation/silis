@@ -24,6 +24,20 @@ for _root in _CANDIDATE_ROOTS:
         _sys.path.insert(0, _sc_cand)
         break
 
+for _root in _CANDIDATE_ROOTS:
+    _tp_bin = _os.path.normpath(_os.path.join(_root, "third-party", "bin"))
+    if _os.path.isdir(_tp_bin):
+        _path_parts = _os.environ.get("PATH", "").split(_os.pathsep) if _os.environ.get("PATH") else []
+        for _tb in [
+            _tp_bin,
+            _os.path.normpath(_os.path.join(_root, "third-party", "OpenSTA", "build")),
+            _os.path.normpath(_os.path.join(_root, "third-party", "OpenROAD", "build", "src")),
+        ]:
+            if _os.path.isdir(_tb) and _tb not in _path_parts:
+                _path_parts.insert(0, _tb)
+        _os.environ["PATH"] = _os.pathsep.join(_path_parts)
+        break
+
 
 try:
     import siliconcompiler as sc

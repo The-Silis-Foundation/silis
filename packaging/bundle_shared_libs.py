@@ -9,18 +9,37 @@ import subprocess
 import sys
 
 def collect_libs(appdir: str):
+    appdir = os.path.abspath(appdir)
     target_lib_dir = os.path.join(appdir, "usr", "lib", "x86_64-linux-gnu")
+    if os.path.exists(target_lib_dir):
+        shutil.rmtree(target_lib_dir)
     os.makedirs(target_lib_dir, exist_ok=True)
     
     python_site = os.path.join(appdir, "opt", "python", "lib", "python3.12", "site-packages")
     if not os.path.exists(python_site):
         print(f"Error: site-packages not found at {python_site}")
         sys.exit(1)
+
+    # Resolve ldd against bundled Qt6, WebEngine, Python, and ordlibs first so host Qt6/Qt5 never leak in
+    ld_paths = [
+        os.path.join(python_site, "PyQt6", "Qt6", "lib"),
+        os.path.join(python_site, "PyQt6_WebEngine", "Qt6", "lib"),
+        os.path.join(appdir, "opt", "python", "lib"),
+        os.path.join(appdir, "third-party", "ordlibs"),
+        os.path.join(appdir, "third-party", "bin"),
+        os.path.join(appdir, "third-party", "plugins"),
+    ]
+    ldd_env = os.environ.copy()
+    ldd_env["LD_LIBRARY_PATH"] = ":".join(p for p in ld_paths if os.path.isdir(p))
         
-    # Find all binary ELF and .so files across opt/python, third-party/bin, core, and GDS3D
+    # Find all binary ELF and .so files across opt/python, third-party tools, core, and GDS3D
     scan_dirs = [
         os.path.join(appdir, "opt", "python"),
         os.path.join(appdir, "third-party", "bin"),
+        os.path.join(appdir, "third-party", "lib"),
+        os.path.join(appdir, "third-party", "plugins"),
+        os.path.join(appdir, "third-party", "OpenSTA", "build"),
+        os.path.join(appdir, "third-party", "OpenROAD", "build", "src"),
         os.path.join(appdir, "core"),
         os.path.join(appdir, "third-party", "GDS3D"),
     ]
@@ -47,11 +66,11 @@ def collect_libs(appdir: str):
                 
     print(f"Found {len(so_binaries)} binary objects inside AppDir to analyze.")
     
-    # Exclude core glibc / kernel interface libraries that must come from host
+    # Exclude core glibc / kernel libs AND wheel-bundled Qt6 (which uses its own versioned ABI in PyQt6/Qt6/lib)
     GLIBC_EXCLUDE = {
         "libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so", 
         "ld-linux-x86-64.so", "libresolv.so", "libutil.so", "libnss_compat.so",
-        "libnss_files.so", "libnss_dns.so"
+        "libnss_files.so", "libnss_dns.so", "libQt6"
     }
     
     # Compute transitive closure of all external library dependencies
@@ -64,7 +83,7 @@ def collect_libs(appdir: str):
             continue
         scanned.add(binary)
         try:
-            out = subprocess.check_output(["ldd", binary], text=True, stderr=subprocess.DEVNULL)
+            out = subprocess.check_output(["ldd", binary], text=True, stderr=subprocess.DEVNULL, env=ldd_env)
             for line in out.splitlines():
                 if "=>" in line and "/" in line:
                     parts = line.split("=>")

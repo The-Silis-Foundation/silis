@@ -8,6 +8,17 @@
 # Revision 1
 # October 29, 2020
 # Revision 2	(names are hashed from properties)
+# March 9, 2021
+# Added spice-to-layout procedure
+# March 4, 2026
+# Changed to make use of new "units" command
+# March 26, 2026
+# Added behavior to handle ideal devices (resistor, capacitor,
+# inductor)
+# April 2, 2026
+# Changed the hash to MurmurHash3, as the existing hash
+# is prone to creating name collisions (rare, but not rare
+# enough).
 #--------------------------------------------------------------
 # Sets up the environment for a toolkit.  The toolkit must
 # supply a namespace that is the "library name".  For each
@@ -103,7 +114,529 @@ magic::macro ^P "magic::gencell {} ; raise .params"
 # Add tag callback to select to update the gencell window
 #-------------------------------------------------------------
 
-magic::tag select "[magic::tag select]; magic::gencell_update %1"
+magic::tag add select "magic::gencell_update %1"
+
+#--------------------------------------------------------------
+# Supporting procedures for netlist_to_layout procedure
+#--------------------------------------------------------------
+
+# move_forward_by_width --
+#
+#    Given an instance name, find the instance and position the
+#    cursor box at the right side of the instance.
+
+proc magic::move_forward_by_width {instname} {
+    select cell $instname
+    set curunits [units]
+    units internal
+    set anum [lindex [array -list count] 1]
+    set xpitch [lindex [array -list pitch] 0]
+    set bbox [box values]
+    set posx [lindex $bbox 0]
+    set posy [lindex $bbox 1]
+    set width [expr [lindex $bbox 2] - $posx]
+    set posx [expr $posx + $width + $xpitch * $anum]
+    box position ${posx} ${posy}
+    units {*}$curunits
+    return [lindex $bbox 3]
+}
+
+# get_and_move_inst --
+#
+#    Given a cell name, creat an instance of the cell named "instname"
+#    at the current cursor box position.  If option "anum" is given
+#    and > 1, then array the cell.
+
+proc magic::get_and_move_inst {cellname instname {anum 1}} {
+    set newinst [getcell $cellname]
+    select cell $newinst
+    if {$newinst == ""} {return}
+    identify $instname
+    if {$anum > 1} {array 1 $anum}
+    set curunits [units]
+    units internal
+    set bbox [box values]
+    set posx [lindex $bbox 2]
+    set posy [lindex $bbox 1]
+    box position ${posx} ${posy}
+    units {*}$curunits
+    return [lindex $bbox 3]
+}
+
+# create_new_pin --
+#
+#    Create a new pin of size 1um x 1um at the current cursor box
+#    location.  If "layer" is given, then create the pin on the
+#    given layer.  Otherwise, the pin is created on the m1 layer.
+
+proc magic::create_new_pin {pinname portnum {layer m1}} {
+    set curunits [units]
+    units microns
+    box size 1 1
+    paint $layer
+    label $pinname FreeSans 1 0 0 0 c $layer
+    port make $portnum
+    box move s 2
+    units {*}$curunits
+}
+
+# generate_layout_add --
+#
+#    Add a new subcircuit to a layout and seed it with components
+#    as found in the list "complist", and add pins according to the
+#    pin names in "subpins".  Each entry in "complist" is a single
+#    device line from a SPICE file.
+
+proc magic::generate_layout_add {subname subpins complist library} {
+    global PDKNAMESPACE
+
+    set curunits [units]
+    units internal
+
+    # Create a new subcircuit.
+    load $subname -quiet
+
+    # In the case where subcells of circuit "subname" do not exist,
+    # delete the placeholders so that they can be regenerated.
+
+    set children [cellname list children $subname]
+    foreach child $children {
+	set flags [cellname flags $child]
+	foreach flag $flags {
+	    if {$flag == "not-found"} {
+		set insts [cellname list instances $child]
+		foreach inst $insts {
+		    select cell $inst
+		    delete
+		}
+		cellname delete $child -noprompt
+	    }
+	}
+    }
+
+    box 0 0 0 0
+
+    # Generate pins.  This routine can be made re-entrant;  if a
+    # cell exists, then its contents are compared to the incoming
+    # netlist contents.  Pins that exist in the netlist but not
+    # the layout are added.  Pins that exist in the layout but not
+    # in the netlist are removed.
+
+    if {[llength $subpins] > 0} {
+	# subpins is already a list.  Splitting its string form again would
+	# leave the list braces in names such as {vout[0]}, so only drop the
+	# empty tokens that repeated spaces in the netlist line leave behind.
+	set pinlist [lsearch -all -inline -not -exact $subpins {}]
+
+	# Determine if this cell already has pins.
+	set existpins []
+	for {set i [port first]} {$i > -1} {set i [port $i next]} {
+            lappend existpins [port $i name]
+	}
+	set addpins []
+	foreach pin $pinlist {
+	    if {[lsearch -exact $existpins $pin] == -1} {
+		lappend addpins $pin
+	    }
+	}
+
+	set rmpins []
+	foreach pin $existpins {
+	    if {[lsearch -exact $pinlist $pin] == -1} {
+		lappend rmpins $pin
+	    }
+	}
+
+	set i 0
+	foreach pin $addpins {
+	    # The name is passed as a value, not through eval, so a bus
+	    # pin such as vout[0] must not be escaped (that would put the
+	    # backslashes into the label text).
+	    magic::create_new_pin $pin $i
+	    incr i
+	}
+	foreach pin $rmpins {
+	    set llayer [goto $pin]
+	    select area $llayer
+	    erase label
+	}
+    }
+
+    # Set initial position for importing cells
+    box size 0 0
+    set posx 0
+    set posy [expr {round(3 / [cif scale out])}]
+    box position ${posx} ${posy}
+
+    # Find all instances in the circuit
+    select top cell
+    set compexist [instance list children]
+    set compcells []
+    # Find the matching cell defs
+    foreach comp $compexist {
+	lappend compcells [instance list celldef $comp]
+    }
+
+    # Diagnostic
+    puts stdout "Cells already in the layout of ${subname}:"
+    for {set i 0} {$i < [llength $compexist]} {incr i} {
+	set comp [lindex $compexist $i]
+	set ccell [lindex $compcells $i]
+	puts stdout "${comp} (${ccell})"
+    }
+    flush stdout
+
+    # Seed layout with components
+    foreach comp $complist {
+	set pinlist {}
+	set paramlist {}
+
+	# NOTE:  This routine deals with subcircuit calls and devices
+	# with models.  There are two exceptions, for toolkits which
+	# wish to implement a way to generate unmodeled capacitors,
+	# resistors, or inductors based on value;  for example, metal
+	# interdigitated capacitors.  For those exceptions, the device
+	# value is recast as a parameter called "value", and the device
+	# is given a model "capacitor", "resistor", or "inductor",
+	# respectively.
+
+	# Parse SPICE line into pins, device name, and parameters.  Make
+	# sure parameters incorporate quoted expressions as {} or ''.
+
+	set rest $comp
+	while {$rest != ""} {
+	    if {[regexp -nocase {^[ \t]*[^= \t]+=[^=]+} $rest]} {
+		break
+	    } elseif {[regexp -nocase {^[ \t]*([^ \t]+)[ \t]*(.*)$} $rest \
+			valid token rest]} {
+		lappend pinlist $token
+	    } else {
+		set rest ""
+	    }
+	}
+
+	while {$rest != ""} {
+	    if {[regexp -nocase {^([^= \t]+)=\'([^\']+)\'[ \t]*(.*)} $rest \
+			valid pname value rest]} {
+		lappend paramlist [list $pname "{$value}"]
+	    } elseif {[regexp -nocase {^([^= \t]+)=\{([^\}]+)\}[ \t]*(.*)} $rest \
+			valid pname value rest]} {
+		lappend paramlist [list $pname "{$value}"]
+	    } elseif {[regexp -nocase {^([^= \t]+)=([^= \t]+)[ \t]*(.*)} $rest \
+			valid pname value rest]} {
+		lappend paramlist [list $pname $value]
+	    } else {
+		puts stderr "Error parsing line \"$comp\""
+		puts stderr "at:  \"$rest\""
+		set rest ""
+	    }
+	}
+
+	if {[llength $pinlist] < 2} {
+	    puts stderr "Error:  No device type found in line \"$comp\""
+	    puts stderr "Tokens found are: \"$pinlist\""
+	    continue
+	}
+
+	set instname [lindex $pinlist 0]
+	set devtype [lindex $pinlist end]
+	set pinlist [lrange $pinlist 0 end-1]
+
+	# Ideal device check:  "devtype" will start with a digit.
+	# The instname will begin with "c", "r", or "l".
+
+	if {[regexp {^([0-9\.]+.*)} $devtype pval]} {
+	    set comptype [string tolower [string range $instname 0 0]]
+	    if {$comptype == "c"} {
+		lappend paramlist [list value $pval]
+		set devtype capacitor
+	    } elseif {$comptype == "r"} {
+		lappend paramlist [list value $pval]
+		set devtype resistor
+	    } elseif {$comptype == "l"} {
+		lappend paramlist [list value $pval]
+		set devtype inductor
+	    }
+	}
+
+	set mult 1
+	foreach param $paramlist {
+	    set parmname [lindex $param 0]
+	    set parmval [lindex $param 1]
+	    if {[string toupper $parmname] == "M"} {
+		if {[catch {set mult [expr {int($parmval)}]}]} {
+		    set mult [expr [string trim $parmval "'"]]
+		}
+	    }
+	}
+
+	# Check if devtype has routines by looking for ${devtype}_defaults.
+	# If not found, do a case-insensitive check against all devices
+	# before deciding that devtype is a subcircuit and not a device.
+	# If found by case-insensitive check, then change the device name
+	# to the one used in the library.
+
+	if {$library != ""} {
+	    set alldevices [namespace eval ::${library} {info procs}]
+	} else {
+	    set alldevices [namespace eval ::${PDKNAMESPACE} {info procs}]
+	}
+	set devdefault [lsearch $alldevices ${devtype}_defaults]
+	if {$devdefault == -1} {
+	    set devdefault [lsearch -nocase $alldevices ${devtype}_defaults]
+	    if {$devdefault != -1} {
+		set devprocname [lindex $alldevices $devdefault]
+		set devproclist [split $devprocname "_"]
+		set devtype [lindex $devproclist 0]
+	    }
+	}
+
+        # devtype is assumed to be in library.  If not, it will attempt to
+	# use 'getcell' on devtype.  Note that this code depends on the
+	# PDK setting varible PDKNAMESPACE.
+
+	if {$library != ""} {
+	    set libdev ${library}::${devtype}
+	} else {
+	    set libdev ${PDKNAMESPACE}::${devtype}
+	}
+
+	set outparts {}
+	# Escape any brackets in the instance name, since it gets passed to "eval"
+	set minstname [string map {[ \\\[ ] \\\]} $instname]
+	lappend outparts "magic::gencell $libdev $minstname"
+
+	# Output all parameters.  Parameters not used by the toolkit are
+	# ignored by the toolkit.
+
+	lappend outparts "-spice"
+	foreach param $paramlist {
+	    lappend outparts [string tolower [lindex $param 0]]
+	    lappend outparts [lindex $param 1]
+	}
+
+	set inst_exists false
+	set existidx [lsearch -exact $compexist $instname]
+	if {$existidx > -1} {
+	    set existcell [lindex $compcells $existidx]
+	    if {$devtype == $existcell} {
+		set inst_exists true
+	    } else {
+		# Instance name exists but is the wrong device type.
+		# To do:  Attempt to maintain the same position
+		pushbox
+		select cell $instname
+		delete
+		popbox
+ 	    }
+	}
+
+	if {$inst_exists == false} {
+	    if {[catch {eval [join $outparts]}]} {
+		# Assume this is not a gencell, and get an instance.
+		magic::get_and_move_inst $devtype $instname $mult
+	    } else {
+		# Move forward for next gencell
+		magic::move_forward_by_width $instname
+	    }
+	}
+    }
+    save $subname
+    units {*}$curunits
+}
+
+#--------------------------------------------------------------
+# Wrapper for generating an initial layout from a SPICE netlist
+# using the defined PDK toolkit procedures
+#
+#    "netfile" is the name of a SPICE netlist
+#    "library" is the name of the PDK library namespace
+#--------------------------------------------------------------
+
+proc magic::netlist_to_layout {netfile library} {
+
+   if {![file exists $netfile]} {
+      puts stderr "No such file $netfile"
+      return
+   }
+
+   # Read data from file.  Remove comment lines and concatenate
+   # continuation lines.
+
+   set topname [file rootname [file tail $netfile]]
+   puts stdout "Creating layout from [file tail $netfile]"
+
+   if {[file ext $netfile] == ".cdl"} {
+      set is_cdl true
+   } else {
+      set is_cdl false
+   }
+
+   if [catch {open $netfile r} fnet] {
+      puts stderr "Error:  Cannot open file \"$netfile\" for reading."
+      return
+   }
+
+   set fdata {}
+   set lastline ""
+   while {[gets $fnet line] >= 0} {
+       # Handle CDL format *.PININFO (convert to .PININFO ...)
+       if {$is_cdl && ([string range $line 0 1] == "*.")} {
+           if {[string tolower [string range $line 2 8]] == "pininfo"} {
+               set line [string range $line 1 end]
+           }
+       }
+       if {[string index $line 0] != "*"} {
+           if {[string index $line 0] == "+"} {
+               if {[string range $line end end] != " "} {
+                  append lastline " "
+               }
+               append lastline [string range $line 1 end]
+           } else {
+               lappend fdata $lastline
+               set lastline $line
+           }
+       }
+   }
+   lappend fdata $lastline
+   close $fnet
+
+   set insub false
+   set incmd false
+   set subname ""
+   set subpins ""
+   set complist {} 
+   set toplist {}
+
+   # suspendall
+
+   set ignorekeys {.global .ic .option .end}
+
+   # Parse the file once and find all subcircuits being defined, to
+   # catch any issues with subcircuits being used before they are
+   # defined.
+   set allsubs {}
+   foreach line $fdata {
+        set ftokens [split $line]
+        set keyword [string tolower [lindex $ftokens 0]]
+        if {$keyword == ".subckt"} {
+	    set subname [lindex $ftokens 1]
+	    lappend allsubs $subname
+	}
+   }
+   # Generate list of pre-existing top level cells
+   set existing [cellname list top]
+   # Pre-generate placeholders for all subcircuits.
+   # Note:  "cellname list self" would return the cell of any selected
+   # instance, so use the cell loaded in the window.
+   set curtop [cellname list window]
+
+   array set existing_cells {}
+   foreach subckt $allsubs {
+        if {$subckt == $curtop || $subckt == $topname} {
+            set existing_cells($subckt) "false"
+            load $subckt -silent
+            continue
+        }
+
+        # "load -fail" reports a missing file but does not raise a Tcl
+        # error and does not create the cell, so check whether the cell
+        # exists.  ("cellname list self" cannot be used here, as it
+        # returns the cell of any selected instance.)
+        load $subckt -fail -silent
+        if {[cellname list exists $subckt] == $subckt} {
+            puts stdout "Subcircuit $subckt successfully loaded."
+            set existing_cells($subckt) "true"
+
+			# Make sure to load all cells into memory to avoid 
+			# corruption when saving all files (files get loaded
+			# without taking the scale into account)
+			select top cell
+            expand
+        } else {
+            puts stdout "Subcircuit $subckt not found. Will generate."
+            set existing_cells($subckt) "false"
+            # Now we load it normally to create the placeholder for the generator
+            load $subckt -silent
+        }
+   }
+
+   load $curtop
+
+   # Parse the file and process all lines
+   foreach line $fdata {
+      if {$incmd} {
+	 if {[regexp -nocase {^[ \t]*\.endc} $line]} {
+	    set incmd false
+	 }
+      } elseif {! $insub} {
+         set ftokens [split $line]
+         set keyword [string tolower [lindex $ftokens 0]]
+
+         if {[lsearch $ignorekeys $keyword] != -1} { 
+	    continue
+         } elseif {$keyword == ".command"} {
+	    set incmd true
+         } elseif {$keyword == ".subckt"} {
+	    set subname [lindex $ftokens 1]
+	    set subpins [lrange $ftokens 2 end]
+	    set insub true
+         } elseif {[regexp -nocase {^[xmcrldq]([^ \t]+)[ \t](.*)$} $line \
+		    valid instname rest]} {
+	    lappend toplist $line
+         } elseif {[regexp -nocase {^[ivbe]([^ \t]+)[ \t](.*)$} $line \
+		    valid instname rest]} {
+	    # These are testbench devices and should be ignored
+	    continue
+         }
+      } else {
+	 if {[regexp -nocase {^[ \t]*\.ends} $line]} {
+	    set insub false
+
+        if {[info exists existing_cells($subname)] && $existing_cells($subname) == "false"} {
+            puts stdout "Cell $subname is empty. Generating initial layout..."
+            magic::generate_layout_add $subname $subpins $complist $library
+        } else {
+            puts stdout "Cell $subname already contains layout. Skipping generation."
+        }
+
+	    set subname ""
+	    set subpins ""
+	    set complist {}
+         } elseif {[regexp -nocase {^[xmcrldq]([^ \t]+)[ \t](.*)$} $line \
+		    valid instname rest]} {
+	    lappend complist $line
+         } elseif {[regexp -nocase {^[ivbe]([^ \t]+)[ \t](.*)$} $line \
+		    valid instname rest]} {
+	    # These are testbench devices and should be ignored
+	    continue
+	 }
+      }
+   }
+
+   # Add in any top-level components (not in subcircuits)
+   if {[llength $toplist] > 0} {
+      # Make sure the top level cell is loaded before adding top-level
+      # components.
+      load $curtop
+      magic::generate_layout_add $topname "" $toplist $library
+   } else {
+      # There was no top level, so load the first new top cell that
+      # was generated by the import.
+      set allcells [cellname list top]
+      foreach cell $allcells {
+	  if {[lsearch -exact $existing $cell] < 0} {
+	      load $cell
+	      break
+	  }
+      }
+   }
+
+   # Do not leave the last generated device selected
+   select clear
+
+   # resumeall
+}
 
 #-------------------------------------------------------------
 # gencell
@@ -184,6 +717,11 @@ proc magic::gencell {gencell_name {instname {}} args} {
 	    set gencell_type $gencell_name
 	}
 
+    	# Check that the device exists as a gencell, or else return an error
+    	if {[namespace eval ::${library} info commands ${gencell_type}_convert] == ""} {
+	    error "No import routine for ${library} library cell ${gencell_type}!"
+    	}
+
 	if {$instname == {}} {
 	    # Case:  Interactive, new device with parameters in args (if any)
 	    if {$spicemode == 1} {
@@ -201,7 +739,7 @@ proc magic::gencell {gencell_name {instname {}} args} {
 	    if {$cellname != ""} {
 		# Case:  Change existing instance, parameters in args (if any)
 		select cell $instname
-		set devparms [cellname list property $gencell_type parameters]
+		set devparms [cellname list property $cellname parameters]
 	        set parameters [magic::gencell_defaults $gencell_type $library $devparms]
 		if {[dict exists $parameters nocell]} {
 		    set arcount [array -list count]
@@ -237,6 +775,7 @@ proc magic::gencell {gencell_name {instname {}} args} {
 	    }
 	}
     }
+    return 0
 }
 
 #-------------------------------------------------------------
@@ -279,13 +818,13 @@ proc magic::gencell_makecell {gencell_fullname args} {
 
 proc magic::gencell_getparams {} {
    set parameters [dict create]
-   set slist [grid slaves .params.edits]
+   set slist [grid slaves .params.body.area.edits]
    foreach s $slist {
-      if {[regexp {^.params.edits.(.*)_ent$} $s valid pname] != 0} {
+      if {[regexp {^\.params\.body\.area\.edits\.(.*)_ent$} $s valid pname] != 0} {
 	 set value [subst \$magic::${pname}_val]
-      } elseif {[regexp {^.params.edits.(.*)_chk$} $s valid pname] != 0} {
+      } elseif {[regexp {^\.params\.body\.area\.edits\.(.*)_chk$} $s valid pname] != 0} {
 	 set value [subst \$magic::${pname}_val]
-      } elseif {[regexp {^.params.edits.(.*)_sel$} $s valid pname] != 0} {
+      } elseif {[regexp {^\.params\.body\.area\.edits\.(.*)_sel$} $s valid pname] != 0} {
 	 set value [subst \$magic::${pname}_val]
       }
       dict set parameters $pname $value
@@ -301,25 +840,25 @@ proc magic::gencell_getparams {} {
 
 proc magic::gencell_setparams {parameters} {
    if {[catch {set state [wm state .params]}]} {return}
-   set slist [grid slaves .params.edits]
+   set slist [grid slaves .params.body.area.edits]
    foreach s $slist {
-      # ignore .params.edits.gencell_sel, as that does not exist in the
+      # ignore .params.body.area.edits.gencell_sel, as that does not exist in the
       # parameters dictionary
-      if {$s == ".params.edits.gencell_sel"} {continue}
-      if {[regexp {^.params.edits.(.*)_ent$} $s valid pname] != 0} {
+      if {$s == ".params.body.area.edits.gencell_sel"} {continue}
+      if {[regexp {^.params.body.area.edits.(.*)_ent$} $s valid pname] != 0} {
 	 set value [dict get $parameters $pname]
          set magic::${pname}_val $value
-      } elseif {[regexp {^.params.edits.(.*)_chk$} $s valid pname] != 0} {
+      } elseif {[regexp {^.params.body.area.edits.(.*)_chk$} $s valid pname] != 0} {
 	 set value [dict get $parameters $pname]
          set magic::${pname}_val $value
-      } elseif {[regexp {^.params.edits.(.*)_sel$} $s valid pname] != 0} {
+      } elseif {[regexp {^.params.body.area.edits.(.*)_sel$} $s valid pname] != 0} {
 	 set value [dict get $parameters $pname]
          set magic::${pname}_val $value
-	 .params.edits.${pname}_sel configure -text $value
-      } elseif {[regexp {^.params.edits.(.*)_txt$} $s valid pname] != 0} {
+	 .params.body.area.edits.${pname}_sel configure -text $value
+      } elseif {[regexp {^.params.body.area.edits.(.*)_txt$} $s valid pname] != 0} {
 	 if {[dict exists $parameters $pname]} {
 	    set value [dict get $parameters $pname]
-	    .params.edits.${pname}_txt configure -text $value
+	    .params.body.area.edits.${pname}_txt configure -text $value
 	 }
       }
    }
@@ -350,11 +889,16 @@ proc magic::gencell_change {instname gencell_type library parameters} {
 	set pdefaults [${library}::${gencell_type}_defaults]
         # Pull user-entered values from dialog
         set parameters [dict merge $pdefaults [magic::gencell_getparams]]
-	set newinstname [.params.title.ient get]
-	if {$newinstname == "(default)"} {set newinstname $instname}
-	if {$newinstname == $instname} {set newinstname $instname}
-	if {[instance list exists $newinstname] != ""} {set newinstname $instname}
     }
+
+    # Attempt to set the new instance name as specified in the dialog.
+    # If the entry is "(default)" or if there is a name collision,
+    # revert the name to the original name.
+
+    set newinstname [.params.title.ient get]
+    if {$newinstname == "(default)"} {set newinstname $instname}
+    if {[instance list exists $newinstname] != ""} {set newinstname $instname}
+
     if {[dict exists $parameters gencell]} {
         # Setting special parameter "gencell" forces the gencell to change type
 	set gencell_type [dict get $parameters gencell]
@@ -372,6 +916,20 @@ proc magic::gencell_change {instname gencell_type library parameters} {
     set gsuffix [magic::get_gencell_hash ${parameters}]
     set gname ${gencell_type}_${gsuffix}
 
+    # Handle instance name changing first.  If no parameters changed, then
+    # we're done.
+    if {$newinstname != $instname} {
+	identify $newinstname
+	# The buttons "Apply" and "Okay" need to be changed for the new
+	# instance name
+	catch {.params.buttons.apply config -command \
+		"magic::gencell_change $newinstname $gencell_type $library {}"}
+	catch {.params.buttons.okay config -command \
+		"magic::gencell_change $newinstname $gencell_type $library {} ;\
+		destroy .params"}
+	set instname $newinstname
+    }
+
     # Guard against instance having been deleted.  Also, if parameters have not
     # changed as evidenced by the cell suffix not changing, then nothing further
     # needs to be done.
@@ -380,8 +938,8 @@ proc magic::gencell_change {instname gencell_type library parameters} {
         return
     }
 
-    set snaptype [snap list]
-    snap internal
+    set curunits [units]
+    units internal
     set savebox [box values]
 
     catch {setpoint 0 0 $Opts(focus)}
@@ -407,18 +965,28 @@ proc magic::gencell_change {instname gencell_type library parameters} {
 	if {$abox != ""} {box values {*}$abox}
 	set newinstname [getcell $gname $orient]
         select cell $newinstname
+	set origname $newinstname
 	expand
 
 	# If the old instance name was not formed from the old cell name,
 	# then keep the old instance name.
 	if {[string first $old_gname $instname] != 0} {
 	    set newinstname $instname
+	} else {
+	    # The buttons "Apply" and "Okay" need to be changed for the new
+	    # instance name
+	    catch {.params.buttons.apply config -command \
+			"magic::gencell_change $newinstname $gencell_type $library {}"}
+	    catch {.params.buttons.okay config -command \
+			"magic::gencell_change $newinstname $gencell_type $library {} ;\
+			destroy .params"}
 	}
 
 	if {[cellname list parents $old_gname] == []} {
 	    # If the original cell has no intances left, delete it.  It can
 	    # be regenerated if and when necessary.
-	    cellname delete $old_gname
+	    cellname delete $old_gname -noprompt
+	    select cell $origname
 	}
 
     } else {
@@ -431,16 +999,33 @@ proc magic::gencell_change {instname gencell_type library parameters} {
 	if {$abox != ""} {box values {*}$abox}
 	set newinstname [magic::gencell_create $gencell_type $library $parameters $orient]
 	select cell $newinstname
+	set origname $newinstname
 
 	# If the old instance name was not formed from the old cell name,
 	# then keep the old instance name.
 	if {[string first $old_gname $instname] != 0} {
 	    set newinstname $instname
+	} else {
+	    # The buttons "Apply" and "Okay" need to be changed for the new
+	    # instance name
+	    catch {.params.buttons.apply config -command \
+			"magic::gencell_change $newinstname $gencell_type $library {}"}
+	    catch {.params.buttons.okay config -command \
+			"magic::gencell_change $newinstname $gencell_type $library {} ;\
+			destroy .params"}
+	}
+
+	# If the old cell is not used anywhere, delete it
+	if {[cellname list parents $old_gname] == []} {
+	    # If the original cell has no intances left, delete it.  It can
+	    # be regenerated if and when necessary.
+	    cellname delete $old_gname -noprompt
+	    select cell $origname
 	}
     }
     identify $newinstname
     eval "box values $savebox"
-    snap $snaptype
+    units {*}$curunits
 
     # Update window
     if {$gname != $old_gname} {
@@ -452,6 +1037,7 @@ proc magic::gencell_change {instname gencell_type library parameters} {
     }
 
     resumeall
+    drc check	;# force a DRC update if DRC is on.
     redraw
 }
 
@@ -498,8 +1084,8 @@ proc magic::gencell_change_orig {instname gencell_type library parameters} {
         return
     }
 
-    set snaptype [snap list]
-    snap internal
+    set curunits [units]
+    units internal
     set savebox [box values]
 
     catch {setpoint 0 0 $Opts(focus)}
@@ -527,7 +1113,7 @@ proc magic::gencell_change_orig {instname gencell_type library parameters} {
     }
     identify $newinstname
     eval "box values $savebox"
-    snap $snaptype
+    units {*}$curunits
     resumeall
     redraw
 }
@@ -566,38 +1152,47 @@ proc magic::get_gencell_name {gencell_type} {
 #   gives a result that is repeatable for the same set of
 #   parameter values with a very low probability of a collision.
 #
-#   The hash function is similar to elfhash but reduced from 32
-#   to 30 bits so that the result can form a 6-character value
-#   in base32 with all characters being valid for a SPICE subcell
-#   name (e.g., alphanumeric only and case-insensitive).
+#   The hash function is murmur3 but reduced from 32 to 30 bits
+#   so that the result can form a 6-character value in base36
+#   with all characters being valid for a SPICE subcell name
+#   (e.g., alphanumeric only and case-insensitive).  This
+#   reduces the space from ~4 billion unique suffixes to ~1
+#   billion;  however, even a complex mixed-signal chip design
+#   is unlikely to have more than a few hundred unique parameter
+#   sets for any given device.
+#
+#   Code courtesy of ChatGPT, derived from my implementation.
 #----------------------------------------------------------------
 
 proc magic::get_gencell_hash {parameters} {
-    set hash 0
-    # Apply hash
-    dict for {key value} $parameters {
-	foreach s [split $value {}] {
-	    set hash [expr {($hash << 4) + [scan $s %c]}]
-	    set high [expr {$hash & 0x03c0000000}]
-	    set hash [expr {$hash ^ ($high >> 30)}]
-	    set hash [expr {$hash & (~$high)}]
-	}
+    # Canonicalize: sort by key
+    set keys [lsort [dict keys $parameters]]
+
+    # Build input string (values only, but delimited)
+    set input ""
+    foreach k $keys {
+	set value [magic::normalize_value [dict get $parameters $k]]
+        append input "${value};"
     }
-    # Divide hash up into 5 bit values and convert to base32
-    # using letters A-Z less I and O, and digits 2-9.
+
+    # Compute Murmur hash
+    set hash [magic::murmur3_32 $input]
+
+    # Convert to 6-character base32
     set cvals ""
     for {set i 0} {$i < 6} {incr i} {
-	set oval [expr {($hash >> ($i * 5)) & 0x1f}]
+        set oval [expr {($hash >> ($i * 5)) & 0x1f}]
+
         if {$oval < 8} {
-	    set bval [expr {$oval + 50}]
-	} elseif {$oval < 16} {
-	    set bval [expr {$oval + 57}]
-	} elseif {$oval < 21} {
-	    set bval [expr {$oval + 58}]
-	} else {
-	    set bval [expr {$oval + 59}]
-	}
-	append cvals [binary format c* $bval]
+            set bval [expr {$oval + 50}]   ;# '2'-'9'
+        } elseif {$oval < 16} {
+            set bval [expr {$oval + 57}]   ;# 'A'-'H'
+        } elseif {$oval < 21} {
+            set bval [expr {$oval + 58}]   ;# 'J'-'N'
+        } else {
+            set bval [expr {$oval + 59}]   ;# 'P'-'Z'
+        }
+        append cvals [binary format c* $bval]
     }
     return $cvals
 }
@@ -650,8 +1245,8 @@ proc magic::gencell_create {gencell_type library parameters {orient 0}} {
 	set parameters [dict remove $parameters gencell]
     }
 
-    set snaptype [snap list]
-    snap internal
+    set curunits [units]
+    units internal
     set savebox [box values]
 
     catch {setpoint 0 0 $Opts(focus)}
@@ -681,7 +1276,7 @@ proc magic::gencell_create {gencell_type library parameters {orient 0}} {
 	identify $newinstname
 	set instname $newinstname
     }
-    snap $snaptype
+    units {*}$curunits
     resumeall
     redraw
     return $instname
@@ -699,31 +1294,30 @@ proc magic::add_entry {pname ptext parameters} {
        set value ""
    }
 
-   set numrows [lindex [grid size .params.edits] 1]
-   label .params.edits.${pname}_lab -text $ptext
-   entry .params.edits.${pname}_ent -background white -textvariable magic::${pname}_val
-   grid .params.edits.${pname}_lab -row $numrows -column 0 \
+   set numrows [lindex [grid size .params.body.area.edits] 1]
+   label .params.body.area.edits.${pname}_lab -text $ptext
+   entry .params.body.area.edits.${pname}_ent -background white -textvariable magic::${pname}_val
+   grid .params.body.area.edits.${pname}_lab -row $numrows -column 0 \
 	-sticky ens -ipadx 5 -ipady 2
-   grid .params.edits.${pname}_ent -row $numrows -column 1 \
+   grid .params.body.area.edits.${pname}_ent -row $numrows -column 1 \
 	-sticky ewns -ipadx 5 -ipady 2
-   .params.edits.${pname}_ent insert end $value
+   .params.body.area.edits.${pname}_ent insert end $value
    set magic::${pname}_val $value
 }
 
 #----------------------------------------------------------
 # Default entry callback, without any dependencies.  Each
-# parameter changed
+# parameter changed causes an update to the dialog.  Also
+# add default callbacks on checkboxes and choice menus,
+# using a null function which does not get executed, but
+# the dialog gets updated afterward.
 #----------------------------------------------------------
 
 proc magic::add_check_callbacks {gencell_type library} {
-    set wlist [winfo children .params.edits]
+    set wlist [winfo children .params.body.area.edits]
     foreach w $wlist {
-        if {[regexp {\.params\.edits\.(.+)_ent} $w valid pname]} {
-	    # Add callback on enter or focus out
-	    bind $w <Return> \
-			"magic::update_dialog {} $pname $gencell_type $library"
-	    bind $w <FocusOut> \
-			"magic::update_dialog {} $pname $gencell_type $library"
+	if {[regexp {\.params\.body\.area\.edits\.(.+)_.+} $w valid pname]} {
+	    magic::add_dependency \{\} $gencell_type $library $pname
 	}
     }
 }
@@ -741,6 +1335,16 @@ proc magic::add_check_callbacks {gencell_type library} {
 # dictionary.
 #
 # Also handle dependencies on checkboxes and selection lists
+#
+# If dependency callbacks exist, then chain them together.
+# A final default dependency will be added to all entries
+# to run the "check" procedure for the device.  Dependencies
+# that are more targeted get run first.
+#
+# NOTE:  The "check" procedure must be the first in the
+# list, as otherwise, any invalid entry that is corrected
+# by the check callback will have been used to evaluate
+# dependent values.
 #----------------------------------------------------------
 
 proc magic::add_dependency {callback gencell_type library args} {
@@ -751,25 +1355,32 @@ proc magic::add_dependency {callback gencell_type library args} {
 			{*}[dict keys $parameters]
 	return
     }
-    set clist [winfo children .params.edits]
+    set clist [winfo children .params.body.area.edits]
     foreach pname $args {
-        if {[lsearch $clist .params.edits.${pname}_ent] >= 0} {
+        if {[lsearch $clist .params.body.area.edits.${pname}_ent] >= 0} {
 	    # Add callback on enter or focus out
-	    bind .params.edits.${pname}_ent <Return> \
-			"magic::update_dialog $callback $pname $gencell_type $library"
-	    bind .params.edits.${pname}_ent <FocusOut> \
-			"magic::update_dialog $callback $pname $gencell_type $library"
-	} elseif {[lsearch $clist .params.edits.${pname}_chk] >= 0} {
+	    set oldbind [bind .params.body.area.edits.${pname}_ent <Return>]
+	    set newbind "magic::update_dialog $callback $pname $gencell_type $library"
+	    if {$oldbind != {}} {set newbind "$oldbind ; $newbind"}
+	    bind .params.body.area.edits.${pname}_ent <Return> $newbind
+	    set oldbind [bind .params.body.area.edits.${pname}_ent <FocusOut>]
+	    set newbind "magic::update_dialog $callback $pname $gencell_type $library"
+	    if {$oldbind != {}} {set newbind "$oldbind ; $newbind"}
+	    bind .params.body.area.edits.${pname}_ent <FocusOut> $newbind
+	} elseif {[lsearch $clist .params.body.area.edits.${pname}_chk] >= 0} {
 	    # Add callback on checkbox change state
-	    .params.edits.${pname}_chk configure -command \
-			"magic::update_dialog $callback $pname $gencell_type $library"
-	} elseif {[lsearch $clist .params.edits.${pname}_sel] >= 0} {
-	    set smenu .params.edits.${pname}_sel.menu
+	    set oldcmd [.params.body.area.edits.${pname}_chk cget -command]
+	    set newcmd "magic::update_dialog $callback $pname $gencell_type $library"
+	    if {$oldcmd != {}} {set newcmd "$oldcmd ; $newcmd"}
+	    .params.body.area.edits.${pname}_chk configure -command $newcmd
+	} elseif {[lsearch $clist .params.body.area.edits.${pname}_sel] >= 0} {
+	    set smenu .params.body.area.edits.${pname}_sel.menu
 	    set sitems [${smenu} index end]
 	    for {set idx 0} {$idx <= $sitems} {incr idx} {
-		set curcommand [${smenu} entrycget $idx -command]
-		${smenu} entryconfigure $idx -command "$curcommand ; \
-		magic::update_dialog $callback $pname $gencell_type $library"
+		set oldcmd [${smenu} entrycget $idx -command]
+		set newcmd "magic::update_dialog $callback $pname $gencell_type $library"
+		if {$oldcmd != {}} {set newcmd "$oldcmd ; $newcmd"}
+		${smenu} entryconfigure $idx -command $newcmd
 	    }
 	}
     }
@@ -790,12 +1401,12 @@ proc magic::update_dialog {callback pname gencell_type library} {
 	set parameters [dict merge $pdefaults [magic::gencell_getparams]]
     }
 
-    if {$callback != {}} {
-       set parameters [$callback $pname $parameters]
-    }
     if {[catch {set parameters [${library}::${gencell_type}_check $parameters]} \
 		checkerr]} {
 	puts stderr $checkerr
+    }
+    if {$callback != {}} {
+       set parameters [$callback $pname $parameters]
     }
     magic::gencell_setparams $parameters
 }
@@ -812,11 +1423,11 @@ proc magic::add_checkbox {pname ptext parameters} {
        set value ""
    }
 
-   set numrows [lindex [grid size .params.edits] 1]
-   label .params.edits.${pname}_lab -text $ptext
-   checkbutton .params.edits.${pname}_chk -variable magic::${pname}_val
-   grid .params.edits.${pname}_lab -row $numrows -column 0 -sticky ens
-   grid .params.edits.${pname}_chk -row $numrows -column 1 -sticky wns
+   set numrows [lindex [grid size .params.body.area.edits] 1]
+   label .params.body.area.edits.${pname}_lab -text $ptext
+   checkbutton .params.body.area.edits.${pname}_chk -variable magic::${pname}_val
+   grid .params.body.area.edits.${pname}_lab -row $numrows -column 0 -sticky ens
+   grid .params.body.area.edits.${pname}_chk -row $numrows -column 1 -sticky wns
    set magic::${pname}_val $value
 }
 
@@ -835,16 +1446,18 @@ proc magic::add_message {pname ptext parameters {color blue}} {
       set value ""
    }
 
-   set numrows [lindex [grid size .params.edits] 1]
-   label .params.edits.${pname}_lab -text $ptext
-   label .params.edits.${pname}_txt -text $value \
+   set numrows [lindex [grid size .params.body.area.edits] 1]
+   label .params.body.area.edits.${pname}_lab -text $ptext
+   label .params.body.area.edits.${pname}_txt -text $value \
 		-foreground $color -textvariable magic::${pname}_val
-   grid .params.edits.${pname}_lab -row $numrows -column 0 -sticky ens
-   grid .params.edits.${pname}_txt -row $numrows -column 1 -sticky wns
+   grid .params.body.area.edits.${pname}_lab -row $numrows -column 0 -sticky ens
+   grid .params.body.area.edits.${pname}_txt -row $numrows -column 1 -sticky wns
 }
 
 #----------------------------------------------------------
 #  Add a selectable-list parameter to the gencell window
+#  (NOTE:  Use magic::add_dependency to add a callback to
+#  the selection list choice.)
 #----------------------------------------------------------
 
 proc magic::add_selectlist {pname ptext all_values parameters {itext ""}} {
@@ -855,17 +1468,18 @@ proc magic::add_selectlist {pname ptext all_values parameters {itext ""}} {
        set value $itext
    }
 
-   set numrows [lindex [grid size .params.edits] 1]
-   label .params.edits.${pname}_lab -text $ptext
-   menubutton .params.edits.${pname}_sel -menu .params.edits.${pname}_sel.menu \
+   set numrows [lindex [grid size .params.body.area.edits] 1]
+   label .params.body.area.edits.${pname}_lab -text $ptext
+   menubutton .params.body.area.edits.${pname}_sel -menu .params.body.area.edits.${pname}_sel.menu \
 		-relief groove -text ${value}
-   grid .params.edits.${pname}_lab -row $numrows -column 0 -sticky ens
-   grid .params.edits.${pname}_sel -row $numrows -column 1 -sticky wns
-   menu .params.edits.${pname}_sel.menu -tearoff 0
+   grid .params.body.area.edits.${pname}_lab -row $numrows -column 0 -sticky ens
+   grid .params.body.area.edits.${pname}_sel -row $numrows -column 1 -sticky wns
+   menu .params.body.area.edits.${pname}_sel.menu -tearoff 0
    foreach item ${all_values} {
-       .params.edits.${pname}_sel.menu add radio -label $item \
+	set cmdtxt ".params.body.area.edits.${pname}_sel configure -text $item"
+	.params.body.area.edits.${pname}_sel.menu add radio -label $item \
 	-variable magic::${pname}_val -value $item \
-	-command ".params.edits.${pname}_sel configure -text $item"
+	-command $cmdtxt
    }
    set magic::${pname}_val $value
 }
@@ -885,18 +1499,18 @@ proc magic::add_selectindex {pname ptext all_values parameters {ival 0}} {
        set value $ival
    }
 
-   set numrows [lindex [grid size .params.edits] 1]
-   label .params.edits.${pname}_lab -text $ptext
-   menubutton .params.edits.${pname}_sel -menu .params.edits.${pname}_sel.menu \
+   set numrows [lindex [grid size .params.body.area.edits] 1]
+   label .params.body.area.edits.${pname}_lab -text $ptext
+   menubutton .params.body.area.edits.${pname}_sel -menu .params.body.area.edits.${pname}_sel.menu \
 		-relief groove -text [lindex ${all_values} ${value}]
-   grid .params.edits.${pname}_lab -row $numrows -column 0 -sticky ens
-   grid .params.edits.${pname}_sel -row $numrows -column 1 -sticky wns
-   menu .params.edits.${pname}_sel.menu -tearoff 0
+   grid .params.body.area.edits.${pname}_lab -row $numrows -column 0 -sticky ens
+   grid .params.body.area.edits.${pname}_sel -row $numrows -column 1 -sticky wns
+   menu .params.body.area.edits.${pname}_sel.menu -tearoff 0
    set idx 0
    foreach item ${all_values} {
-       .params.edits.${pname}_sel.menu add radio -label $item \
+       .params.body.area.edits.${pname}_sel.menu add radio -label $item \
 	-variable magic::${pname}_val -value $idx \
-	-command ".params.edits.${pname}_sel configure -text $item"
+	-command ".params.body.area.edits.${pname}_sel configure -text $item"
        incr idx
    }
    set magic::${pname}_val $value
@@ -937,6 +1551,20 @@ proc magic::gencell_update {{command {}}} {
 	    }
 	}
     }
+}
+
+#-------------------------------------------------------------
+# updateParamsScrollRegion ---
+#
+# Change the canvas size when the parameter window changes
+# size so that the scrollbar works correctly.
+#-------------------------------------------------------------
+
+proc updateParamsScrollRegion {} {
+    set bbox [.params.body.area bbox all]
+    .params.body.area configure -scrollregion $bbox
+    .params.body.area configure -width [lindex $bbox 2]
+    .params.body.area configure -height [lindex $bbox 3]
 }
 
 #-------------------------------------------------------------
@@ -982,11 +1610,22 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
 
    if {$instname != {}} {
       # Remove any array component of the instance name
-      set instname [string map {\\ ""} $instname]
-      if {[regexp {^(.*)\[[0-9,]+\]$} $instname valid instroot]} {
+      set baseinstname [string map {\\ ""} $instname]
+      if {[regexp {^(.*)\[[0-9,]+\]$} $baseinstname valid instroot]} {
+	 set originstname $instname
 	 set instname $instroot
+      } else {
+	 set instroot ""
       }
       set gname [instance list celldef [subst $instname]]
+      if {$gname == ""} {
+	 # Check if name inherited brackets but is not an array
+         if {$instroot != ""} {
+             set testinstname [string map {\[ \\\[ \] \\\]} $baseinstname]
+	     set gname [instance list celldef [subst $testinstname]]
+	     set instname $originstname
+	 }
+      }
       set gencell_type [cellname list property $gname gencell]
       if {$library == {}} {
 	 set library [cellname list property $gname library]
@@ -1030,7 +1669,7 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
        .params.title.glab configure -foreground blue -text "$gname"
        .params.title.ient delete 0 end
        .params.title.ient insert 0 "$itext"
-       foreach child [winfo children .params.edits] {
+       foreach child [winfo children .params.body.area.edits] {
 	  destroy $child
        }
        foreach child [winfo children .params.buttons] {
@@ -1048,7 +1687,9 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
        entry .params.title.ient -foreground brown -background white
        .params.title.ient insert 0 "$itext"
        ttk::separator .params.sep
-       frame .params.edits
+       frame .params.body
+       canvas .params.body.area
+       scrollbar .params.body.sb -command {.params.body.area yview}
        frame .params.buttons
 
        grid .params.title.lab1 -padx 5 -row 0 -column 0
@@ -1062,12 +1703,33 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
        grid .params.title.ient -padx 5 -row 1 -column 3 -sticky ew
        grid columnconfigure .params.title 3 -weight 1
 
-       pack .params.title -fill x -expand true
-       pack .params.sep -fill x -expand true
-       pack .params.edits -side top -fill both -expand true -ipadx 5
-       pack .params.buttons -fill x
+       grid .params.body.area -row 0 -column 0 -sticky nsew
+       grid .params.body.sb -row 0 -column 1 -sticky ns
+       grid columnconfigure .params.body 0 -weight 1
+       grid columnconfigure .params.body 1 -weight 0
+       grid rowconfigure .params.body 0 -weight 1
 
-       grid columnconfigure .params.edits 1 -weight 1
+       grid .params.title -row 0 -column 0 -sticky nsew
+       grid .params.sep -row 1 -column 0 -sticky nsew
+       grid .params.body -row 2 -column 0 -sticky nsew
+       grid .params.buttons -row 3 -column 0 -sticky nsew
+
+       grid rowconfigure .params 0 -weight 0
+       grid rowconfigure .params 1 -weight 0
+       grid rowconfigure .params 2 -weight 1
+       grid rowconfigure .params 3 -weight 0
+       grid columnconfigure .params 0 -weight 1
+
+       frame .params.body.area.edits
+       .params.body.area create window 0 0 -anchor nw -window .params.body.area.edits
+       .params.body.area config -yscrollcommand {.params.body.sb set}
+
+       # Make sure scrollbar tracks any window size changes
+       bind .params <Configure> updateParamsScrollRegion
+
+       # Allow mouse wheel to scroll the window up and down.
+       bind .params.body.area <Button-4> {.params.body.area yview scroll -1 units}
+       bind .params.body.area <Button-5> {.params.body.area yview scroll +1 units}
    }
 
    if {$instname == {}} {
@@ -1081,6 +1743,7 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
 		magic::gencell_dialog \$inst $gencell_type $library {} ; \
 		destroy .params}]
    } else {
+	set instname [string map {\[ \\\[ \] \\\]} $instname]
 	button .params.buttons.apply -text "Apply" -command \
 		"magic::gencell_change $instname $gencell_type $library {}"
 	button .params.buttons.okay -text "Okay" -command \
@@ -1108,3 +1771,99 @@ proc magic::gencell_dialog {instname gencell_type library parameters} {
 }
 
 #-------------------------------------------------------------
+# Implementation of murmur3 hash, 32 bits
+# Code courtesy of ChatGPT.
+#-------------------------------------------------------------
+
+proc magic::murmur3_32 {key {seed 0}} {
+    set length [string length $key]
+
+    set c1 0xcc9e2d51
+    set c2 0x1b873593
+
+    set h1 $seed
+
+    # Body (process 4 bytes at a time)
+    set nblocks [expr {$length / 4}]
+    for {set i 0} {$i < $nblocks} {incr i} {
+        binary scan [string range $key [expr {$i*4}] [expr {$i*4+3}]] i k1
+
+        set k1 [expr {($k1 * $c1) & 0xffffffff}]
+        set k1 [expr {(($k1 << 15) | (($k1 & 0xffffffff) >> 17)) & 0xffffffff}]
+        set k1 [expr {($k1 * $c2) & 0xffffffff}]
+
+        set h1 [expr {$h1 ^ $k1}]
+        set h1 [expr {(($h1 << 13) | (($h1 & 0xffffffff) >> 19)) & 0xffffffff}]
+        set h1 [expr {(($h1 * 5) + 0xe6546b64) & 0xffffffff}]
+    }
+
+    # Tail
+    set k1 0
+    set tail_index [expr {$nblocks * 4}]
+    set tail [string range $key $tail_index end]
+    set remaining [string length $tail]
+
+    if {$remaining >= 3} {
+        binary scan [string index $tail 2] c b
+        set k1 [expr {$k1 ^ (($b & 0xff) << 16)}]
+    }
+    if {$remaining >= 2} {
+        binary scan [string index $tail 1] c b
+        set k1 [expr {$k1 ^ (($b & 0xff) << 8)}]
+    }
+    if {$remaining >= 1} {
+        binary scan [string index $tail 0] c b
+        set k1 [expr {$k1 ^ ($b & 0xff)}]
+        set k1 [expr {($k1 * $c1) & 0xffffffff}]
+        set k1 [expr {(($k1 << 15) | (($k1 & 0xffffffff) >> 17)) & 0xffffffff}]
+        set k1 [expr {($k1 * $c2) & 0xffffffff}]
+        set h1 [expr {$h1 ^ $k1}]
+    }
+
+    # Finalization (fmix)
+    set h1 [expr {$h1 ^ $length}]
+    set h1 [expr {$h1 ^ (($h1 & 0xffffffff) >> 16)}]
+    set h1 [expr {($h1 * 0x85ebca6b) & 0xffffffff}]
+    set h1 [expr {$h1 ^ (($h1 & 0xffffffff) >> 13)}]
+    set h1 [expr {($h1 * 0xc2b2ae35) & 0xffffffff}]
+    set h1 [expr {$h1 ^ (($h1 & 0xffffffff) >> 16)}]
+
+    return $h1
+}
+
+#-------------------------------------------------------------
+# Numerical normalization:  Avoid having different suffixes
+# for cells with the same parameter values due to Tcl handling
+# numerical values as strings, which makes "2", "2.0", and "2e0"
+# all separate values.  If hashed on the verbatim values, then
+# the same device with the same parameters can have many
+# different cell names, even though the layout is exactly the
+# same.  Avoid this by detecting when a parameter value is
+# numeric and enforcing a consistent format (fixed precision,
+# four decimal places).
+#
+# Code courtesy of ChatGPT
+#-------------------------------------------------------------
+
+proc magic::normalize_value {value} {
+    # Detect if value is numeric
+    if {[string is double -strict $value]} {
+        set num [expr {double($value)}]
+
+        # Check if effectively integer
+        if {abs($num - round($num)) < 1e-9} {
+            return [format "%d" [expr {int(round($num))}]]
+        }
+
+        # Otherwise, format to fixed precision (3 decimal places)
+        set str [format "%.3f" $num]
+
+        # Strip trailing zeros
+        regsub {\.?0+$} $str "" str
+
+        return $str
+    }
+
+    # Non-numeric: return as-is
+    return $value
+}

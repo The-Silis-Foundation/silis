@@ -21,7 +21,7 @@ proc magic::suspendall {} {
 	    set framename $window
          }
          if {[incr Winopts(${framename},suspend)] == 1} {
-	    $window update suspend
+	    $window updatedisplay suspend
          }
       }
    }
@@ -42,7 +42,7 @@ proc magic::resumeall {} {
 	    incr Winopts($framename,suspend) -1
 	    if { $Winopts(${framename},suspend) <= 0 } {
 	       unset Winopts(${framename},suspend)
-	       $window update resume
+	       $window updatedisplay resume
 	    }
 	 }
       }
@@ -57,25 +57,64 @@ proc magic::resumeall {} {
 proc magic::makecrashbackup {} {
    global Opts
 
-   *bypass crash save
-   if {$Opts(backupinterval) > 0} {
-      after $Opts(backupinterval) magic::makecrashbackup
+   if {[catch {*bypass crash save} errmsg]} {
+	puts stderr "Crash backup save error:  $errmsg"
+   }
+   if {![catch {set Opts(backupinterval)}]} {
+      if {$Opts(backupinterval) > 0} {
+         after $Opts(backupinterval) magic::makecrashbackup
+      } else {
+	 puts stderr "Warning:  Crash backups halted due to interval of $Opts(backupinterval)"
+      }
+   } else {
+      puts stderr "Warning:  Crash backups halted due to no interval being set."
    }
 }
+
+#----------------------------------------------------------------
+# magic::crashbackups ---
+#
+# Create periodic backups.  Options are:
+#
+#   start:	Begin periodic backups.  If interval is not
+#		specified, then set interval to 10 minutes.
+#
+#   resume:	Resume periodic backups if started and stopped,
+#		but not if disabled or never started.
+#
+#   stop:	Stop periodic backups.
+#
+#   disable:	Disable periodic backups;  set to state of
+#		never having been started.
+#
+#----------------------------------------------------------------
 
 proc magic::crashbackups {{option start}} {
    global Opts
 
    switch -exact $option {
       start {
-         if {[catch set Opts(backupinterval)]} {
+         if {[catch {set Opts(backupinterval)}]} {
             set Opts(backupinterval) 600000
          }
-         after $Opts(backupinterval) magic::makecrashbackup
+	 if {$Opts(backupinterval) > 0} {
+	    after $Opts(backupinterval) magic::makecrashbackup
+	 }
+      }
+      resume {
+         if {![catch {set Opts(backupinterval)}]} {
+	    if {$Opts(backupinterval) > 0} {
+	       after $Opts(backupinterval) magic::makecrashbackup
+	    }
+	 }
       }
       stop -
       cancel {
          after cancel magic::makecrashbackup
+      }
+      disable {
+         after cancel magic::makecrashbackup
+	 unset Opts(backupinterval)
       }
    }
 }
@@ -105,7 +144,11 @@ proc magic::pushstack {{name ""}} {
    if {[catch {lindex $editstack end}]} {
       set editstack {}
    }
+   # Protect against changing units by always using internal units
+   set curunits [units]
+   units internal
    lappend editstack [view get]
+   units {*}$curunits
    lappend editstack [cellname list window]
    set ltag [tag load]
    tag load {}
@@ -123,12 +166,18 @@ proc magic::popstack {} {
    } else {
       set ltag [tag load]
       tag load {}
+      suspendall
       load [lindex $editstack end]
+      # Protect against changing units by always using internal units
+      set curunits [units]
+      units internal
       view [lindex $editstack end-1]
-      tag load $ltag
-      set editstack [lrange $editstack 0 end-2]
+      units {*}$curunits
       catch {magic::cellmanager}
       catch {magic::captions}
+      resumeall
+      tag load $ltag
+      set editstack [lrange $editstack 0 end-2]
    }
    return
 }
@@ -148,8 +197,8 @@ proc magic::clearstack {} {
 
 proc magic::pushbox {{values {}}} {
    global boxstack
-   set snaptype [snap list]
-   snap internal
+   set curunits [units]
+   units internal
    if {[catch {set boxstack}]} {
       set boxstack {}
    }
@@ -158,7 +207,7 @@ proc magic::pushbox {{values {}}} {
    } else {
       lappend boxstack $values
    }
-   snap $snaptype
+   units {*}$curunits
    return
 }
 
@@ -172,8 +221,8 @@ proc magic::pushbox {{values {}}} {
 
 proc magic::popbox {{type values}} {
    global boxstack
-   set snaptype [snap list]
-   snap internal
+   set curunits [units]
+   units internal
    if {[catch {set boxstack}]} {
       error "No stack"
    } elseif {$boxstack == {}} {
@@ -193,7 +242,7 @@ proc magic::popbox {{type values}} {
       }
    }
    set boxstack [lrange $boxstack 0 end-1]
-   snap $snaptype
+   units {*}$curunits
    return $b
 }
 
@@ -317,6 +366,9 @@ proc magic::ruler {{text {}} {orient auto}} {
    set mmx [expr {($llx + $urx) / 2}]
    set mmy [expr {($lly + $ury) / 2}]
 
+   set curunits [units]
+   units internal
+
    if {$orient == "horizontal"} {
       element add line l1_$Opts(rulers) black $llx $lly $llx $ury
       element add line l4_$Opts(rulers) black $urx $lly $urx $ury
@@ -369,6 +421,7 @@ proc magic::ruler {{text {}} {orient auto}} {
 	  element configure l3_$Opts(rulers) flags arrowbottom
       }
    }
+   units {*}$curunits
 }
 
 #---------------------------------------------------------------------
@@ -474,8 +527,59 @@ proc magic::enable_tools {} {
    magic::macro space		{magic::tool}
    magic::macro Shift_space	{magic::tool box}
 
+   # Set these first because the magic::tool command defined
+   # in this script depends on them being valid.
    set Opts(tool) box
    set Opts(motion) {}
+
+   # Set up unique key macros for each individual tool.  This
+   # effectively defines what the tools are, since each tool
+   # is really just a collection of unique key bindings.  The
+   # default bindings are copied from the "box" tool, and
+   # then replacement bindings for button actions are applied.
+   # The user can change these bindings at will by using the
+   # "macro" command when the tool is active.
+
+   # NOTE:  Do not name a tool "netlist" because it will get
+   # confused with the "netlist" window.
+
+   magic::macro copy wiring
+   magic::macro copy nettool
+   magic::macro copy pick
+
+   magic::tool wiring
+   macro  Control_Button1  "magic::trackwire %W current"
+   macro  Button1          "magic::trackwire %W pick"
+   macro  Button2          "magic::trackwire %W done"
+   macro  Button3          "magic::trackwire %W cancel"
+   macro  Shift_Button1    "wire incr type ; wire show"
+   macro  Shift_Button2    "wire switch"
+   macro  Shift_Button3    "wire decr type ; wire show"
+   macro  Button4 "wire incr width ; wire show"
+   macro  Button5 "wire decr width ; wire show"
+
+   magic::tool nettool
+   macro  Button1          "netlist select"
+   macro  Button2          "netlist join"
+   macro  Button3          "netlist terminal"
+   # Remove shift-button bindings
+   macro  Shift_Button1    ""
+   macro  Shift_Button2    ""
+   macro  Shift_Button3    ""
+   macro  Button4 "scroll u .05 w"
+   macro  Button5 "scroll d .05 w"
+
+   magic::tool pick
+   macro  Button1          "magic::keepselect %W"
+   macro  Shift_Button2    "magic::startselect %W copy"
+   macro  Button2          "magic::startselect %W pick"
+   macro  Button3          "magic::cancelselect %W"
+   macro  Shift_Button1    "box corner bl cursor"
+   macro  Shift_Button3    "box move ur cursor"
+   macro  Button4 "scroll u .05 w"
+   macro  Button5 "scroll d .05 w"
+
+   magic::tool box
    set Opts(origin) {0 0}
    set Opts(backupinterval) 60000
    magic::crashbackups start
@@ -494,6 +598,19 @@ proc magic::trackwire {window {option {}}} {
       } elseif {$option == "pick"} {
 	 puts stdout $window
 	 wire type
+	 set Opts(motion) [bind ${window} <Motion>]
+	 bind ${window} <Motion> [subst {$Opts(motion); *bypass wire show}]
+	 if {$Opts(motion) == {}} {set Opts(motion) "null"}
+	 cursor 21
+      } elseif {$option == "current"} {
+	 puts stdout $window
+	 set curunits [units]
+	 units internal
+	 wire type {*}[wire values]
+	 set wiresize [lindex [wire values] 1]
+	 box size $wiresize $wiresize
+	 box move bl cursor
+	 units {*}$curunits
 	 set Opts(motion) [bind ${window} <Motion>]
 	 bind ${window} <Motion> [subst {$Opts(motion); *bypass wire show}]
 	 if {$Opts(motion) == {}} {set Opts(motion) "null"}
@@ -540,9 +657,9 @@ proc magic::startselect {window {option {}}} {
 	    select nocycle
 	 }
       }
-      set Opts(origin) [cursor]
+      set Opts(origin) [cursor internal]
       set Opts(motion) [bind ${window} <Motion>]
-      bind ${window} <Motion> [subst {$Opts(motion); set p \[cursor\]; \
+      bind ${window} <Motion> [subst {$Opts(motion); set p \[cursor internal\]; \
 	set x \[expr {\[lindex \$p 0\] - [lindex $Opts(origin) 0]}\]i; \
 	set y \[expr {\[lindex \$p 1\] - [lindex $Opts(origin) 1]}\]i; \
 	*bypass select move \${x} \${y}}]
@@ -596,12 +713,15 @@ proc magic::tool {{type next}} {
    if {$type == "next"} {
       switch $Opts(tool) {
 	 box { set type wiring }
-	 wiring { set type netlist }
-	 netlist { set type pick }
+	 wiring { set type nettool }
+	 nettool { set type pick }
 	 pick { set type box }
       }
    }
    switch $type {
+      type {
+	 return $Opts(tool)
+      }
       info {
 	 # print information about the current tool.
 	 puts stdout "Current tool is $Opts(tool)."
@@ -633,63 +753,32 @@ proc magic::tool {{type next}} {
 	 if {[llength [macro Control_Button3]] > 0} {
 	    macro Control_Button3
 	 }
+	 if {[llength [macro Button4]] > 0} {
+	    macro Button4
+	 }
+	 if {[llength [macro Button5]] > 0} {
+	    macro Button5
+	 }
       }
       box {
 	 puts stdout {Switching to BOX tool.}
 	 set Opts(tool) box
 	 cursor 0	;# sets the cursor
-	 macro  Button1          "box move bl cursor; magic::boxview %W %1"
-	 macro  Shift_Button1    "box corner bl cursor; magic::boxview %W %1"
-	 macro  Button2          "paint cursor"
-	 macro  Shift_Button2    "erase cursor"
-	 macro  Button3          "box corner ur cursor"
-	 macro  Shift_Button3    "box move ur cursor; magic::boxview %W %1"
-	 macro  Button4 "scroll u .05 w; magic::boxview %W %1"
-	 macro  Button5 "scroll d .05 w; magic::boxview %W %1"
-	 macro  Shift_XK_Pointer_Button4 "scroll r .05 w; magic::boxview %W %1"
-	 macro  Shift_XK_Pointer_Button5 "scroll l .05 w; magic::boxview %W %1"
-
       }
       wiring {
 	 puts stdout {Switching to WIRING tool.}
 	 set Opts(tool) wiring
 	 cursor 19 	;# sets the cursor
-	 macro  Button1          "magic::trackwire %W pick"
-	 macro  Button2          "magic::trackwire %W done"
-	 macro  Button3          "magic::trackwire %W cancel"
-         macro  Shift_Button1    "wire incr type ; wire show"
-	 macro  Shift_Button2    "wire switch"
-	 macro  Shift_Button3    "wire decr type ; wire show"
-	 macro  Button4 "wire incr width ; wire show"
-	 macro  Button5 "wire decr width ; wire show"
-
       }
-      netlist {
+      nettool {
 	 puts stdout {Switching to NETLIST tool.}
-	 set Opts(tool) netlist
+	 set Opts(tool) nettool
 	 cursor 18	;# sets the cursor
-         macro  Button1          "netlist select"
-	 macro  Button2          "netlist join"
-	 macro  Button3          "netlist terminal"
-         # Remove shift-button bindings
-         macro  Shift_Button1    ""
-	 macro  Shift_Button2    ""
-	 macro  Shift_Button3    ""
-	 macro  Button4 "scroll u .05 w"
-	 macro  Button5 "scroll d .05 w"
       }
       pick {
 	 puts stdout {Switching to PICK tool.}
 	 set Opts(tool) pick
 	 cursor 22	;# set the cursor
-         macro  Button1          "magic::keepselect %W"
-	 macro  Shift_Button2    "magic::startselect %W copy"
-	 macro  Button2          "magic::startselect %W pick"
-	 macro  Button3          "magic::cancelselect %W"
-	 macro  Shift_Button1    "box corner bl cursor"
-	 macro  Shift_Button3    "box move ur cursor"
-	 macro  Button4 "scroll u .05 w"
-	 macro  Button5 "scroll d .05 w"
       }
    }
 

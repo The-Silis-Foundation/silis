@@ -52,18 +52,26 @@ def setup_environment():
         except Exception as e:
             print(f"[SILIS] Notice: First-launch PDK initialization: {e}")
 
+    # Preserve caller-supplied external PDK_ROOT so first-boot setup can hydrate ~/.silis/pdks from it
+    ext_pdk = os.environ.get("PDK_ROOT", "")
+    if ext_pdk and os.path.isdir(os.path.join(ext_pdk, "sky130A", "libs.ref")):
+        os.environ.setdefault("SILIS_EXTERNAL_PDK_ROOT", ext_pdk)
+
     # Determine active PDK root with fallback hierarchy:
-    # 1. User local cache (~/.silis/pdks) if populated with standard cell libraries
-    # 2. AppDir bundled assets ($APPDIR/assets/pdk) for zero-latency standalone execution
-    # 3. Source repository third-party pdks
+    # 1. User local cache (~/.silis/pdks) only when actually populated (libs.ref present)
+    # 2. Caller-provided external PDK_ROOT
+    # 3. AppDir bundled assets ($APPDIR/assets/pdk)
+    # 4. Source repository third-party / assets pdks
     appdir = os.environ.get("APPDIR", "")
-    if os.path.isdir(os.path.join(SILIS_PDK_DIR, "sky130A")):
+    if os.path.isdir(os.path.join(SILIS_PDK_DIR, "sky130A", "libs.ref")):
         os.environ["PDK_ROOT"] = SILIS_PDK_DIR
-    elif appdir and os.path.isdir(os.path.join(appdir, "assets", "pdk", "sky130A")):
+    elif ext_pdk and os.path.isdir(os.path.join(ext_pdk, "sky130A", "libs.ref")):
+        os.environ["PDK_ROOT"] = ext_pdk
+    elif appdir and os.path.isdir(os.path.join(appdir, "assets", "pdk", "sky130A", "libs.ref")):
         os.environ["PDK_ROOT"] = os.path.join(appdir, "assets", "pdk")
-    elif os.path.isdir(os.path.join(repo_root, "third-party", "pdks", "sky130A")):
+    elif os.path.isdir(os.path.join(repo_root, "third-party", "pdks", "sky130A", "libs.ref")):
         os.environ["PDK_ROOT"] = os.path.join(repo_root, "third-party", "pdks")
-    elif os.path.isdir(os.path.join(repo_root, "assets", "pdk", "sky130A")):
+    elif os.path.isdir(os.path.join(repo_root, "assets", "pdk", "sky130A", "libs.ref")):
         os.environ["PDK_ROOT"] = os.path.join(repo_root, "assets", "pdk")
     else:
         os.environ["PDK_ROOT"] = SILIS_PDK_DIR

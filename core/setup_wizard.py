@@ -27,28 +27,90 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QFontDatabase
 
 
+def _find_pdk_source_candidates(variant: str, source_pdk_dir=None) -> list:
+    """Returns prioritized candidate directories for a PDK variant, preferring full GDS/Verilog installs."""
+    appdir = os.environ.get("APPDIR", "")
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    ext_pdk = os.environ.get("SILIS_EXTERNAL_PDK_ROOT", "")
+    env_pdk = os.environ.get("PDK_ROOT", "")
+    raw = [
+        os.path.join(source_pdk_dir, variant) if source_pdk_dir else None,
+        os.path.join(appdir, "assets", "pdk", variant) if appdir else None,
+        os.path.join(appdir, "third-party", "pdks", variant) if appdir else None,
+        os.path.join(repo_root, "assets", "pdk", variant),
+        os.path.join(repo_root, "third-party", "pdks", variant),
+        os.path.join(ext_pdk, variant) if ext_pdk else None,
+        os.path.join(env_pdk, variant) if env_pdk else None,
+        os.path.expanduser(f"~/.silis_backup_audit/pdks/{variant}"),
+    ]
+    # Include Volare versioned installs if present
+    volare_glob = sorted(Path(os.path.expanduser("~/.volare")).glob(f"volare/*/versions/*/{variant}")) if os.path.isdir(os.path.expanduser("~/.volare")) else []
+    for vg in volare_glob:
+        raw.append(str(vg))
+    bundled_volare = os.path.join(repo_root, "third-party", "pdks", "volare")
+    if os.path.isdir(bundled_volare):
+        for vg in sorted(Path(bundled_volare).glob(f"*/versions/*/{variant}")):
+            raw.append(str(vg))
+    return [c for c in raw if c and os.path.isdir(c)]
+
+
+def _score_pdk_source(path_str: str) -> int:
+    """Scores a PDK source tree by completeness (LEF/lib + GDS + Verilog + Magic/Netgen tech)."""
+    score = 0
+    if os.path.isdir(os.path.join(path_str, "libs.ref")):
+        score += 10
+    if os.path.isfile(os.path.join(path_str, "gf180mcu_5LM_1TM_9K_9t_sc.lef")):
+        score += 10
+    if os.path.isdir(os.path.join(path_str, "libs.tech", "magic")):
+        score += 20
+    if os.path.isdir(os.path.join(path_str, "libs.tech", "netgen")):
+        score += 20
+    if os.path.isdir(os.path.join(path_str, "libs.ref", "sky130_fd_io", "gds")):
+        score += 40
+    if os.path.isdir(os.path.join(path_str, "libs.ref", "sky130_sram_macros", "gds")):
+        score += 30
+    if os.path.isdir(os.path.join(path_str, "libs.ref", "sky130_fd_sc_hd", "verilog")):
+        score += 30
+    lib_dir = os.path.join(path_str, "libs.ref", "sky130_fd_sc_hd", "lib")
+    if os.path.isdir(lib_dir) and len(os.listdir(lib_dir)) > 1:
+        score += 20
+    return score
+
+
 def is_first_boot_needed() -> bool:
-    """Check if the user environment has already completed first-boot provisioning."""
+    """Check if the user environment has completed full SSAForge-compliant first-boot provisioning."""
     marker = os.path.expanduser("~/.silis/.initialized")
     pdk_a = os.path.expanduser("~/.silis/pdks/sky130A")
     pdk_b = os.path.expanduser("~/.silis/pdks/sky130B")
     ssa_dir = os.path.expanduser("~/.silis/ssa")
+    ssa_sky = os.path.join(ssa_dir, "sky130a", "config.json")
     tlef_a = os.path.join(pdk_a, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
     tlef_b = os.path.join(pdk_b, "libs.ref", "sky130_fd_sc_hd", "techlef", "sky130_fd_sc_hd__nom.tlef")
     sram_a = os.path.join(pdk_a, "libs.ref", "sky130_sram_macros", "lef")
     sram_b = os.path.join(pdk_b, "libs.ref", "sky130_sram_macros", "lef")
     desktop_file = os.path.expanduser("~/.local/share/applications/silis.desktop")
     cli_bin = os.path.expanduser("~/.local/bin/silis")
-    
-    # If marker and PDKs (with techlef and sram macros) and SSA and desktop integration exist, first boot is already done
+
     has_pdk = (
         os.path.isdir(pdk_a) and (os.path.isfile(tlef_a) or os.path.isdir(os.path.join(pdk_a, "libs.tech")))
         and os.path.isdir(pdk_b) and (os.path.isfile(tlef_b) or os.path.isdir(os.path.join(pdk_b, "libs.tech")))
         and os.path.isdir(sram_a) and os.path.isdir(sram_b)
     )
-    has_ssa = os.path.isdir(ssa_dir) and len(os.listdir(ssa_dir)) > 0
+    has_ssa = os.path.isdir(ssa_dir) and os.path.isfile(ssa_sky)
+    if has_ssa:
+        try:
+            with open(ssa_sky, "r") as f:
+                has_ssa = "gds_dirs" in f.read()
+        except Exception:
+            has_ssa = False
+
+    # If installed PDK lacks full GDS/Verilog/Netgen while a richer host/bundle source exists, trigger hydration
+    dest_score = _score_pdk_source(pdk_a) if os.path.isdir(pdk_a) else 0
+    best_src_score = max([_score_pdk_source(c) for c in _find_pdk_source_candidates("sky130A")], default=0)
+    needs_pdk_hydration = best_src_score > dest_score and dest_score < 120
+
     has_desktop = os.path.isfile(desktop_file) and (os.path.isfile(cli_bin) or os.path.islink(cli_bin))
-    return not (os.path.isfile(marker) and has_pdk and has_ssa and has_desktop)
+    return not (os.path.isfile(marker) and has_pdk and has_ssa and has_desktop and not needs_pdk_hydration)
 
 
 class SetupWorker(QThread):
@@ -105,14 +167,8 @@ class SetupWorker(QThread):
             dest_var = os.path.expanduser(f"~/.silis/pdks/{variant}")
             dest_dirs[variant] = dest_var
 
-            candidates = [
-                os.path.join(self.source_pdk_dir, variant) if self.source_pdk_dir else None,
-                os.path.join(appdir, "assets", "pdk", variant) if appdir else None,
-                os.path.join(appdir, "third-party", "pdks", variant) if appdir else None,
-                os.path.join(repo_root, "assets", "pdk", variant),
-                os.path.join(repo_root, "third-party", "pdks", variant),
-                os.path.expanduser(f"~/.silis/pdks/{variant}"),
-            ]
+            candidates = _find_pdk_source_candidates(variant, source_pdk_dir=self.source_pdk_dir)
+            candidates = sorted(candidates, key=_score_pdk_source, reverse=True)
 
             found_src = None
             for c in candidates:
@@ -124,7 +180,7 @@ class SetupWorker(QThread):
                     break
 
             if found_src and os.path.abspath(found_src) != os.path.abspath(dest_var):
-                self.progress_updated.emit(pct_base, f"Installing {variant} from {os.path.basename(found_src)}...")
+                self.progress_updated.emit(pct_base, f"Installing {variant} from {found_src}...")
                 all_files = []
                 for root, _, files in os.walk(found_src):
                     for f in files:
@@ -138,7 +194,7 @@ class SetupWorker(QThread):
                         os.makedirs(os.path.dirname(dst_file), exist_ok=True)
                         if not os.path.exists(dst_file) or os.path.getsize(dst_file) != os.path.getsize(src_file):
                             shutil.copy2(src_file, dst_file)
-                        if idx % 15 == 0:
+                        if idx % 25 == 0:
                             pct = pct_base + int((idx / total_files) * 16)
                             self.progress_updated.emit(pct, f"Installing {variant}: {os.path.basename(rel_path)}")
 

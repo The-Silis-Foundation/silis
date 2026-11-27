@@ -13,9 +13,9 @@
     A.red:active {color: yellow }
   </STYLE>
 </HEAD>
-<TITLE>Magic-7.3 Command Reference</TITLE>
+<TITLE>Magic-8.3 Command Reference</TITLE>
 <BODY BACKGROUND=graphics/blpaper.gif>
-<H1> <IMG SRC=graphics/magic_title2.gif ALT="Magic VLSI Layout Tool Version 7.3">
+<H1> <IMG SRC=graphics/magic_title8_3.png ALT="Magic VLSI Layout Tool Version 8.3">
      <IMG SRC=graphics/magic_OGL_sm.gif ALIGN="top" ALT="*"> </H1>
 
 <H2>property</H2>
@@ -25,9 +25,13 @@ Attach a "property" (string key and value pair) to the edit cell
 
 <H3>Usage:</H3>
    <BLOCKQUOTE>
-      <B>property</B> [<I>key</I> [<I>value</I>]] <BR><BR>
+      <B>property</B> [<I>list</I>] [<I>type</I>] [<I>key</I> [<I>value</I>]] <BR>
+	or
+      <B>property</B> [<B>compat</B>] [<B>true</B>|<B>false</B>] <BR><BR>
       <BLOCKQUOTE>
-         where <I>key</I> and <I>value</I> are any text strings.
+         where <I>key</I> and <I>value</I> are any text strings. <BR>
+	 <I>type</I> may be one of <B>string</B>, <B>integer</B>,
+		<B>dimension</B>, <B>plane</B>, or <B>double</B>.
       </BLOCKQUOTE>
    </BLOCKQUOTE>
 
@@ -35,17 +39,203 @@ Attach a "property" (string key and value pair) to the edit cell
    <BLOCKQUOTE>
       The <B>property</B> command implements a general-purpose method
       of attaching information to a cell definition.  Except for a
-      few properties known to the <B>lef</B> and <B>gds</B> commands
-      (q.v.), properties have no inherent meaning to magic but may be
-      used with other programs or scripts to add additional information
-      about a cell definition. <P>
+      few properties known to the <B>lef</B>, <B>extract</B>, and
+      <B>gds</B> commands (q.v.), properties have no inherent meaning
+      to magic but may be used with other programs or scripts to add
+      additional information about a cell definition. <P>
 
       With no arguments, all properties of the current edit cell are
       listed.  With only the <I>key</I> argument, the value associated
       with the key is returned.  With both arguments, the string
       <I>value</I> is associated with the string <I>key</I> as a
       property of the cell.  If <I>key</I> is an existing key, then
-      its original value will be overwritten.
+      its original value will be overwritten.  <P>
+
+      By default, properties are interpreted as verbatim string values,
+      with exceptions for the reserved types (see below).  To force the
+      values of the property to be interpreted as a specific type, use
+      the <I>type</I> option. <P>
+
+      The <B>property compat</B> setting determines how properties are
+      written out to a .mag file.  The default setting is <B>true</B>
+      (backwards compatibility mode), which writes all properties as
+      type "<TT>string</TT>".  Properties which are reserved names
+      (see below) will be converted to the best type when reading the
+      .mag file.  However, if the user wants to create a property that
+      is handled differently than a string (namely, to be a dimensional
+      value that scales), then comptability mode should be turned off. <P>
+
+      If the argument <I>list</I> is given as the first argument, and
+      <I>value</I> is not present, then if the property <I>key</I>
+      does not exist, then the command will return a NULL object to the
+      interpreter instead of printing an error message.  This is the
+      "quiet" version of the command preferred for scripts that want to
+      query whether or not a specific property exists.
+   </BLOCKQUOTE>
+
+   <BLOCKQUOTE>
+      Types are interpreted as follows:
+      <DL>
+	<DT> <B>string</B> type:
+	<DD> The property value is a character string.  Character strings
+	     may contain spaces, but if so, then the string should be quoted
+	     or in braces, per Tcl syntax.
+	<DT> <B>integer</B> type:
+	<DD> The property value is an integer value or a list of integer
+	     values.  The values are not considered to be measurements and
+	     do not scale.  Multiple values may be passed on the command
+	     line as additional arguments, or the set of values may be
+	     given as a list.
+	<DT> <B>dimension</B> type:
+	<DD> The property value is an integer value or a list of integer
+	     values.  The values are considered to be (linear) dimensional
+	     measurements and therefore scale with the database internal
+	     units.  They are interpreted as having the values currently
+	     specified for <B>units</B>, and display back in the same
+	     units.  Multiple values may be passed on the command line as
+	     additional arguments, or the set of values may be given as a
+	     list.
+	<DT> <B>double</B> type:
+	<DD> The property value is a double-wide (64-bit) integer value or
+	     a list of double-wide integer values.  The values are not
+	     considered to be measurements and do not scale.  Multiple
+	     values may be passed on the command line as additional arguments,
+	     or the set of values may be given as a list.
+	<DT> <B>plane</B> type:
+	<DD> The property itself is saved as a database plane;  when specified
+	     as the value to a <B>property</B> command, it is parsed like a
+	     <B>dimension</B> list (see above).  All lists must be in groups
+	     of four, representing the lower-left and upper-right coordinates
+	     of a rectangle in the plane.
+      </DL>
+   </BLOCKQUOTE>
+
+   <BLOCKQUOTE>
+      Property names reserved by and used by magic (types are <B>string</B>
+      unless otherwise noted):
+      <DL>
+	<DT> <B>GDS_FILE</B>
+	<DD> The value is the name of a GDS file which contains the mask
+	     data for the cell.  The cell is then effectively an abstract
+	     view, because its contents are in the GDS file and do not
+	     necessarily match what is displayed (although they might).
+	     A relative file name is looked for in the same search path
+	     used to find cells, and then relative to the directory of the
+	     cell's own <B>.mag</B> file.  If the file has since been
+	     compressed, the name with "<B>.gz</B>" appended is also tried.
+	<DT> <B>GDS_START</B>
+	<DD> If a <B>GDS_FILE</B> is defined, then this value indicates the
+	     byte position of the start of mask data for this cell definition
+	     in the file.  If set to value <B>0</B>, then the file will be
+	     searched for the data bounds.  This property is always of type
+	     <B>double</B>.
+	<DT> <B>GDS_END</B>
+	<DD> If a <B>GDS_FILE</B> is defined, then this value indicates the
+	     byte position of the end of mask data for this cell definition
+	     in the file.  If <B>GDS_START</B> is set to <B>0</B>, then this
+	     property may be omitted.  This property is always of type
+	     <B>double</B>.
+	<DT> <B>GDS_MAG_SOURCE</B>
+	<DD> If a GDS file contains a magnification scale other than 1.0, magic
+	     cannot represent it directly and instead creates a new cell with
+	     the contents scaled at the specified magnification.  This property
+	     maintains the name of the original (unmagnified) cell.
+	<DT> <B>LEFview</B>
+	<DD> If set to <B>TRUE</B>, this cell is an abstract view such as that
+	     obtained from a LEF macro, and should not be used for extraction
+	     or for writing mask data (unless <B>GDS_FILE</B> is defined).
+	<DT> <B>LEFproperties</B>
+	<DD> If the file was read from a LEF macro, then this property corresponds
+	     to the LEF <B>PROPERTY</B> block values.  All values from the block
+	     are contatenated into the single property string.
+	<DT> <B>LEFsymmetry</B>
+	<DD> If the file was read from a LEF macro, then this property corresponds
+	     to the macro's <B>SYMMETRY</B> value.
+	<DT> <B>LEFclass</B>
+	<DD> If the file was read from a LEF macro, then this property corresponds
+	     to the macro's <B>CLASS</B> value.
+	<DT> <B>LEFsite</B>
+	<DD> If the file was read from a LEF macro, then this property corresponds
+	     to the macro's <B>SITE</B> value.
+	<DT> <B>CIFhier</B>
+	<DD> If defined, then this cell will be written to CIF or GDS
+	     output with hierachical processing regardless of the settings of
+	     the command options "cif *hier write disable" and "cif *array write
+	     disable".  That allows those commands to be used to avoid
+	     time-consuming and unnecessary hierarchical processing of a top-level
+	     chip assembly with mostly correct-by-design components (such as a
+	     digital standard cell layout) while preserving necessary hierarchical
+	     processing on blocks (such as analog circuits) that need them.
+	<DT> <B>FIXED_BBOX</B>
+	<DD> This property value is a space-separated list of four integer values
+	     corresponding to the abutment box of the cell, in magic's internal
+	     units.  The abutment box is automatically read from LEF files, but
+	     may be defined for any file and can be used for placement alignment.
+	     This property is always of type <B>dimension</B> and must contain
+	     exactly four values.
+	<DT> <B>OBS_BBOX</B>
+	<DD> This property value is a space-sparated list of four integer values
+	     corresponding to a bounding box to be used when generating a LEF
+	     file abstract view of a cell.  The area inside the bounding box
+	     will be entirely covered in obstruction layers (unless cut-outs
+	     are required to accommodate pins).  Any set-back applied by the
+	     "lef write -hide <value>" option will be applied to this obstruction
+	     box.  This property is always of type <B>dimension</B> and must
+	     contain exactly four values.
+	<DT> <B>flatten</B>
+	<DD> This property is used in conjunction with the "flatten -doproperty"
+	     command option and marks the cell for flattening.  Cells without
+	     this property defined will not be flattened.
+	<DT> <B>device</B>
+	<DD> This property declares that the cell is a device or contains a
+	     single device that is not a known extractable device defined in
+	     the technology file.  In the first case, the device to be extracted
+	     is a subcircuit and the name of the device is the same as the name
+	     of the cell.  In this case, the property value should begin with
+	     "<B>primitive</B>".  This may be followed by any parameters
+	     associated with the device that need to be output in the netlist;
+	     e.g., "<B>primitive nf=4</B>.  When the cell is recast as a
+	     primitive device, it is necessary for the port order in the cell
+	     to match the port order of the device as it must appear in the
+	     output netlist.  In the second case, the device to be extracted
+	     is either a low-level component type (not a subcircuit), or is a
+	     subcircuit with a different name than the cell.  In that case, the
+	     value string should be the text of the line as it should appear
+	     in a "<B>device</B>" line in the output <TT>.ext</TT> file when the
+	     cell is extracted.  That includes the names of all ports and any
+	     parameters to be output.  As the output device is defined inside
+	     the subcircuit of the cell in which it is defined, the ports may
+	     be reordered between the subcircuit and the instantiation of the
+	     device.  The use of either form of the <B>device</B> property
+	     precludes the generation of parasitics associated with the cell.
+	     All parasitics are assumed to be included in the device model.
+	<DT> <B>parameter</B>
+	<DD> If, when an instance of the cell's subcircuit is generated in the
+	     output netlist, the instance should be passed one or more
+	     parameters, then those parameter <I>key</I><B>=</B><I>value</I>
+	     pairs (as a single, space-separated string) should be defined as
+	     the value to the <B>parameter</B> property.
+        <DT> <B>MASKHINTS_</B><I>type</I>
+	<DD> The value is a string of consecutive sets of four integer values,
+	     each set representing the bounding box of a rectangle defining
+	     the area of CIF type <I>type</I>, in magic's internal units.
+	     This indicates that magic will
+	     always generate mask layer <I>type</I> in the specified rectangle
+	     area when writing GDS or CIF output.  <I>type</I> may be a templayer,
+	     such that <I>type</I> could be defined as the absence of a mask layer,
+	     for example.  This property is always of type <B>plane</B> and
+	     must have a multiple of four values, all of which are parsed as type
+	     <B>dimension</B>. <P>
+	     <I>NOTE</I>:  A mask hint will only appear in the GDS or CIF output
+	     if there is a corresponding "<B>mask-hints</B> <I>type</B>" record in
+	     the tech file's <B>cifoutput</B> section as part of a <B>layer</B> or
+	     <B>templayer</B> which determines when and how the mask hint is handled.  
+	     Usually the mask hint is OR'd with the rest of the layer, but that may
+	     be followed by a grow-shrink operation that fills in narrow gaps.  It
+	     is also possible for the layer to <I>remove</I> material, so be aware
+	     of how the tech file interprets <I>type</I> when using
+	     <B>MASKHINTS_</B><I>type</I>.
+      </DL>
    </BLOCKQUOTE>
 
 <H3>Implementation Notes:</H3>
@@ -55,12 +245,17 @@ Attach a "property" (string key and value pair) to the edit cell
       the cell definition structure.
    </BLOCKQUOTE>
 
+<H3>See Also:</H3>
+   <BLOCKQUOTE>
+      <A HREF=units.html><B>units</B></A> <BR>
+   </BLOCKQUOTE>
+
 <P><IMG SRC=graphics/line1.gif><P>
 <TABLE BORDER=0>
   <TR>
     <TD> <A HREF=commands.html>Return to command index</A>
   </TR>
 </TABLE>
-<P><I>Last updated:</I> December 4, 2005 at 8:05pm <P>
+<P><I>Last updated:</I> October 31, 2026 at 4:57pm <P>
 </BODY>
 </HTML>

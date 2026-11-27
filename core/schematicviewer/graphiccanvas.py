@@ -48,7 +48,6 @@ class SilisSchematic(QWidget):
         if schematic_engine:
             try:
                 self.fast_view = schematic_engine.SchematicViewerCore()
-                import os
                 html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "digitaljs.html"))
                 self.fast_view.init_url(html_path)
                 ptr = self.fast_view.get_ptr()

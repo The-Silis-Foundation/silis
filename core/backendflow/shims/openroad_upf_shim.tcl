@@ -25,6 +25,7 @@ if {[info commands NULL] eq ""} {
 catch {
     # 1. Version & Metadata Commands
     proc upf_version {args} {}
+    proc set_design_top {args} {}
     proc set_design_attributes {args} {}
     proc set_scope {args} {}
 
@@ -157,11 +158,16 @@ catch {
         }
     }
 
-    # 7. set_isolation argument adapter:
+    # 7. set_isolation argument adapter (idempotent on repeated UPF loads):
     # OpenROAD does not accept -isolation_power_net or -isolation_ground_net directly in set_isolation
     if {[info commands _silis_orig_set_isolation] eq ""} {
         rename set_isolation _silis_orig_set_isolation
+        set ::_silis_created_isolations [dict create]
         proc set_isolation {name args} {
+            if {[dict exists $::_silis_created_isolations $name]} {
+                return
+            }
+            dict set ::_silis_created_isolations $name 1
             set clean_args {}
             for {set i 0} {$i < [llength $args]} {incr i} {
                 set a [lindex $args $i]

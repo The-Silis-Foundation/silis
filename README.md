@@ -40,7 +40,7 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
   <img alt="Language" src="https://img.shields.io/badge/Language-Python%203.12%20%7C%20C%2B%2B17-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
-  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre"><img alt="Release" src="https://img.shields.io/badge/Release-v0.1.1--pre-orange.svg?style=for-the-badge"></a>
+  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.2.5-pre"><img alt="Release" src="https://img.shields.io/badge/Release-v0.2.5--pre-orange.svg?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -236,9 +236,9 @@ Downstream engines execute Silis instructions verbatim. All OpenROAD TCL scripts
 
 ---
 
-## Pre-Release Packages (v0.1.1-pre)
+## Pre-Release Packages (v0.2.5-pre)
 
-Standalone release deliverables and manifests are published on [GitHub Releases (v0.1.1-pre)](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.1-pre):
+Standalone release deliverables and manifests are published on [GitHub Releases (v0.2.5-pre)](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.2.5-pre):
 
 <table>
 <thead>
@@ -253,10 +253,10 @@ Standalone release deliverables and manifests are published on [GitHub Releases 
 <tbody>
 <tr>
 <td><strong>Linux x86-64 (64-bit)</strong></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.1-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
 <td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.1-pre.zip">zip</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.zip">zip</a></td>
 </tr>
 </tbody>
 </table>
@@ -275,14 +275,14 @@ chmod +x Silis-x86_64.AppImage
 ```
 
 > [!NOTE]
-> **Ubuntu 24.04 and RHEL 9 Users**: Newer distributions omit `libfuse2` by default. If the AppImage fails to mount, install `libfuse2t64` (Ubuntu/Debian) or `fuse-libs` (RHEL/Fedora), or execute directly with `--appimage-extract-and-run`.
+> **Ubuntu 24.04 and RHEL 9 Users**: On desktop Ubuntu 24.04 with `fuse3`, `./Silis-x86_64.AppImage` executes directly. In minimal containers or cloud images lacking FUSE helpers, execute directly with `--appimage-extract-and-run` or unpack via `--appimage-extract`.
 
 ### Verification & Checksums
 
 | File | Size | MD5 Hash | SHA-256 Checksum |
 | :--- | :--- | :--- | :--- |
-| `Silis-x86_64.AppImage` | 1.4 GB | `70bd6bb25df2f52c7c06fa1d36a8848e` | `169ea3955fc7759ca75e521905ab0cc83ad75f212103c1a89f56bacdf46ba6bd` |
-| `Silis-x86_64.AppImage.zsync` | 2.8 MB | `e4b1fdf907a31ac2a3f44e8147ad4304` | `87a5ae1aedd29e95e66ad75bc2cd9be6efab2136a01b584614a6475cd0951e88` |
+| `Silis-x86_64.AppImage` | 1.4 GB | `15a157058104490be3062bd5286a0d78` | `2bae74d3f6bf37b083834d466ac6bbf558c97e64fc5eadeba8b5ce1b6bf1751f` |
+| `Silis-x86_64.AppImage.zsync` | 2.7 MB | `c7bb0a15a8cb4d923f4ce6f17e3451db` | `9bd76391ff61dd5a700f8c0ec4dd8034901517c0f33997beb2ab0a0bd4a5771c` |
 
 ---
 

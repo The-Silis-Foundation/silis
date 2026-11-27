@@ -767,8 +767,11 @@ class FastSiliconPeeker(QWidget):
 
     def _on_def_loaded(self, parsed_def):
         if parsed_def:
+            was_first = self.first_load
             self.def_data = parsed_def
             self.redraw()
+            if was_first and self.core:
+                QTimer.singleShot(50, self.core.fit_in_view)
             if getattr(self, 'current_heatmap_mode', 0) > 0:
                 self.set_heatmap(self.current_heatmap_mode)
         if self.ide and hasattr(self.ide, 'statusBar'):

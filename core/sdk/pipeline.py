@@ -21,20 +21,22 @@ except ImportError:
     except ImportError:
         pass
 
-from PyQt6.QtCore import QCoreApplication, Qt, QProcess
 try:
-    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-    from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
-    if hasattr(QSGRendererInterface.GraphicsApi, "OpenGLRhi"):
-        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
-except Exception:
-    pass
-try:
-    import PyQt6.QtWebEngineWidgets
-except Exception:
-    pass
-
-from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QCoreApplication, Qt, QProcess
+    try:
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+        from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
+        if hasattr(QSGRendererInterface.GraphicsApi, "OpenGLRhi"):
+            QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
+    except Exception:
+        pass
+    try:
+        import PyQt6.QtWebEngineWidgets
+    except Exception:
+        pass
+    from PyQt6.QtWidgets import QApplication
+except ImportError:
+    QCoreApplication = Qt = QProcess = QApplication = None
 
 # Ensure offscreen platform is set before any Qt widget instantiation if headless
 if "QT_QPA_PLATFORM" not in os.environ:
@@ -51,6 +53,10 @@ except ImportError:
     except ImportError:
         from core.cli.flow import HeadlessASICRunner
 from .project import Project
+try:
+    from pdkmanagers.pdk.manager import SSAForge
+except ImportError:
+    from core.pdkmanagers.pdk.manager import SSAForge
 from .exceptions import (
     SilisEDAError,
     PipelineStateError,
@@ -408,11 +414,18 @@ class DFTBuilder:
         self.config.x_masking = x_masking
         return self
 
-    def with_mbist(self, algorithm: str = "MARCH_C_PLUS", enable_bira: bool = True, clamp_macros: bool = True) -> "DFTBuilder":
+    def with_mbist(
+        self,
+        algorithm: str = "MARCH_C_PLUS",
+        enable_bira: bool = True,
+        clamp_macros: bool = True,
+        macros: Optional[List[str]] = None,
+    ) -> "DFTBuilder":
         self.config.mbist = True
         self.config.march_algorithm = algorithm
         self.config.enable_bira = enable_bira
         self.config.clamp_macros = clamp_macros
+        self.config.mbist_macros = list(macros) if macros is not None else None
         return self
 
     def with_jtag(self, device_id: str = "0x00010001", ir_length: int = 4, export_bsdl: bool = True) -> "DFTBuilder":
@@ -616,6 +629,19 @@ class Pipeline:
             if not (has_vdd and has_vss):
                 raise PowerGridSynthesisError(
                     f"CRITICAL DEFECT: Incomplete PDN grid after step '{step_name}'. Missing VDD or VSS nets."
+                )
+
+        # 2B. Full-Chip Pad Ring Cross-Verification
+        iopins_mode = str(getattr(self, "_spec_fps", {}).get("iopins", {}).get("mode", "")).lower().strip()
+        if step_name.lower() in ["fps", "iopins"] and iopins_mode in (
+            "chip", "ring", "io_ring", "padring", "pad_ring", "pads", "padded", "full_chip"
+        ):
+            has_corner = ("corner_pad" in content) or ("fd_io__cor" in content)
+            has_iopad = ("gpiov2_pad" in content) or ("fd_io__in" in content) or ("fd_io__vccd" in content) or ("fd_io__dvdd" in content)
+            if not (has_corner and has_iopad):
+                raise DRCViolationError(
+                    step_name,
+                    f"CRITICAL DEFECT: Pad ring requested (mode='{iopins_mode}'), but IO pads are missing in {target_def}!",
                 )
 
         # 3. Placement Cross-Verification
@@ -965,6 +991,1052 @@ class Pipeline:
         }
         return self
 
+    @staticmethod
+    def _normalize_iopins_mode(raw_mode: Any) -> str:
+        """Normalizes IO mode strings; raises ValueError instead of silently falling back."""
+        mode = str(raw_mode if raw_mode is not None else "chip").lower().strip()
+        if mode in ("chip", "ring", "io_ring", "padring", "pad_ring", "pads", "padded", "full_chip"):
+            return "chip"
+        if mode in ("block", "pins", "core"):
+            return "block"
+        raise ValueError(
+            f"Invalid spec_iopins mode '{raw_mode}'. Expected 'chip'/'ring'/'padring' or 'block'."
+        )
+
+    def _resolve_power_and_shifter_config(self) -> Dict[str, Any]:
+        """Resolves switched domains, bounding boxes, power switch and level shifter rules from staged FPS/UPF."""
+        spec = getattr(self, "_spec_fps", {})
+        fp_spec = spec.get("floorplan", {})
+        psw_spec = spec.get("power_switches", {})
+        ls_spec = spec.get("level_shifters", {})
+
+        regions = list(fp_spec.get("regions", []))
+        proj_pds = getattr(self, "_configured_power_domains", None) or (
+            self.project.get_power_domains() if hasattr(self.project, "get_power_domains") else []
+        )
+        power_domains = fp_spec.get("power_domains") or proj_pds
+
+        top_voltage = 1.80
+        for pd in power_domains:
+            pd_name = getattr(pd, "name", None) or (pd.get("name") if isinstance(pd, dict) else None)
+            is_top = getattr(pd, "is_top", False) or (pd.get("is_top", False) if isinstance(pd, dict) else False) or pd_name == "PD_TOP"
+            if is_top:
+                top_voltage = float(getattr(pd, "primary_voltage", None) or (pd.get("primary_voltage", 1.80) if isinstance(pd, dict) else 1.80))
+                break
+
+        for pd in power_domains:
+            pd_name = getattr(pd, "name", None) or (pd.get("name") if isinstance(pd, dict) else None)
+            pd_area = getattr(pd, "area", None) or getattr(pd, "area_box", None) or (pd.get("area") or pd.get("box") if isinstance(pd, dict) else None)
+            pd_elems = getattr(pd, "elements", None) or (pd.get("elements", []) if isinstance(pd, dict) else [])
+            is_top = getattr(pd, "is_top", False) or (pd.get("is_top", False) if isinstance(pd, dict) else False)
+            if not is_top and pd_name and pd_area and len(pd_area) == 4:
+                if not any((r.get("name") == pd_name or r.get("module") == pd_name) for r in regions):
+                    elem_name = pd_elems[0] if pd_elems else pd_name
+                    regions.append({
+                        "name": pd_name,
+                        "module": elem_name,
+                        "box": list(pd_area),
+                        "density": 0.60,
+                        "halo": [10.0, 10.0, 10.0, 10.0],
+                    })
+
+        active_pds = []
+        for pd in power_domains:
+            pd_name = getattr(pd, "name", None) or (pd.get("name") if isinstance(pd, dict) else None)
+            is_top = getattr(pd, "is_top", False) or (pd.get("is_top", False) if isinstance(pd, dict) else False) or pd_name == "PD_TOP"
+            if is_top or not pd_name:
+                continue
+            pd_area = getattr(pd, "area_box", None) or getattr(pd, "area", None)
+            if not pd_area or len(pd_area) != 4:
+                for r in regions:
+                    if r.get("name") == pd_name or r.get("module") == pd_name:
+                        pd_area = r.get("box")
+                        break
+            if pd_area and len(pd_area) == 4:
+                elems = list(getattr(pd, "elements", None) or [])
+                for r in regions:
+                    if (r.get("name") == pd_name or r.get("module") == pd_name) and r.get("module") and r.get("module") not in elems:
+                        elems.append(r.get("module"))
+                v = float(getattr(pd, "primary_voltage", None) or (pd.get("primary_voltage", top_voltage) if isinstance(pd, dict) else top_voltage))
+                active_pds.append({
+                    "name": pd_name,
+                    "box": [float(v) for v in pd_area],
+                    "elements": elems,
+                    "primary_voltage": v,
+                    "primary_power_net": f"VDD_{pd_name}",
+                    "sleep_en": getattr(pd, "sleep_en", None) or getattr(pd, "power_switch_ctrl", None) or "",
+                    "iso_en": getattr(pd, "iso_en", None) or "",
+                    "enable_physical_switch": bool(getattr(pd, "enable_physical_switch", False) or (pd_name in psw_spec.get("domains", [])) or psw_spec),
+                    "adaptive_placement": bool(getattr(pd, "adaptive_placement", False) or psw_spec.get("adaptive_placement", False)),
+                })
+
+        ls_rules = list(ls_spec.get("rules", []))
+        if not ls_rules and (ls_spec or any(abs(d["primary_voltage"] - top_voltage) > 0.05 for d in active_pds)):
+            for d in active_pds:
+                if abs(d["primary_voltage"] - top_voltage) > 0.05 or ls_spec:
+                    ls_rules.append({"source": d["name"], "sink": "PD_TOP"})
+
+        return {
+            "regions": regions,
+            "active_pds": active_pds,
+            "psw_spec": psw_spec,
+            "ls_spec": ls_spec,
+            "ls_rules": ls_rules,
+            "top_voltage": top_voltage,
+        }
+
+    def _persist_fps_power_spec(self, resolved: Dict[str, Any]) -> None:
+        import json
+        os.makedirs(self.project.results_dir, exist_ok=True)
+        path = os.path.join(self.project.results_dir, ".silis_fps_power.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(resolved, f, indent=2)
+        os.replace(tmp, path)
+
+    def _load_fps_power_spec(self) -> Dict[str, Any]:
+        if getattr(self, "_spec_fps", None):
+            return self._resolve_power_and_shifter_config()
+        import json
+        path = os.path.join(self.project.results_dir, ".silis_fps_power.json")
+        if os.path.isfile(path):
+            with open(path, "r") as f:
+                return json.load(f)
+        return self._resolve_power_and_shifter_config()
+
+    def _build_sky130_padring_lines(
+        self,
+        io_spec: Dict[str, Any],
+        die_w: float,
+        die_h: float,
+        include_io_lefs: bool = False,
+    ) -> List[str]:
+        """Unified zero-collision Sky130 IO pad ring generator shared by run_fps() and iopins()."""
+        edge_assignments = io_spec.get("edge_assignments")
+        upf_aware = io_spec.get("upf_aware", True)
+        pin_target = io_spec.get("pin_target", "pad_inner")
+        lines = [
+            "# === FULL-CHIP I/O PAD RING GENERATION (Sky130) ===",
+            "make_tracks",
+            "proc _resolve_pin_net {pname} {",
+            "    set blk [ord::get_db_block]",
+            "    set bterm [$blk findBTerm $pname]",
+            '    if {$bterm ne "NULL" && [$bterm getNet] ne "NULL"} {',
+            "        return [[$bterm getNet] getName]",
+            "    }",
+            "    return $pname",
+            "}",
+        ]
+        if include_io_lefs:
+            lines.extend([
+                'set _pdk_base [file normalize [file join $::env(HOME) ".silis" "pdks"]]',
+                'foreach _lef [list [file join $_pdk_base "sky130A" "libs.ref" "sky130_fd_io" "lef" "sky130_ef_io.lef"] [file join $_pdk_base "sky130A" "libs.ref" "sky130_fd_io" "lef" "sky130_fd_io.lef"]] {',
+                '    if {[file exists $_lef]} { read_lef $_lef }',
+                "}",
+            ])
+
+        lines.extend([
+            "set _db [::ord::get_db]",
+            "set _has_site 0",
+            'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_SITE"] != "NULL"} { set _has_site 1; break } }',
+            'if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 200 }',
+            "set _has_csite 0",
+            'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_CSITE"] != "NULL"} { set _has_csite 1; break } }',
+            'if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }',
+            "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
+            "place_corners sky130_ef_io__corner_pad",
+            "",
+        ])
+
+        # Determine supply pad allocation per edge so pads never overlap corners or signal pads
+        # Supply pad width = 75 um; step = 82 um; corner keepout = 210 um each end.
+        # Full ring (vccd, vssd, vddio, vssio) needs 4*82 = 328 um; use on edges >= 1200 um, else 2/edge alternating.
+        lines.extend([
+            "set _block [ord::get_db_block]",
+            "set _dbu [[::ord::get_db_tech] getDbUnitsPerMicron]",
+            "set _die_box [$_block getDieArea]",
+            "set _die_w [expr {([$_die_box xMax] - [$_die_box xMin]) / double($_dbu)}]",
+            "set _die_h [expr {([$_die_box yMax] - [$_die_box yMin]) / double($_dbu)}]",
+            "set _core_box [$_block getCoreArea]",
+            "set _core_x1 [expr {[$_core_box xMin] / double($_dbu)}]",
+            "set _core_y1 [expr {[$_core_box yMin] / double($_dbu)}]",
+            "set _core_x2 [expr {[$_core_box xMax] / double($_dbu)}]",
+            "set _core_y2 [expr {[$_core_box yMax] / double($_dbu)}]",
+            "array set _sig_start {}",
+            "array set _sig_end {}",
+            "foreach _row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+            '    set _elen [expr {($_row eq "IO_NORTH" || $_row eq "IO_SOUTH") ? $_die_w : $_die_h}]',
+            "    set _cur 216.0",
+            "    if {$_elen >= 1200.0} {",
+            "        place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location $_cur pad_vccd_${_row}; set _cur [expr {$_cur + 82.0}]",
+            "        place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location $_cur pad_vssd_${_row}; set _cur [expr {$_cur + 82.0}]",
+            "        place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location $_cur pad_vddio_${_row}; set _cur [expr {$_cur + 82.0}]",
+            "        place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location $_cur pad_vssio_${_row}; set _cur [expr {$_cur + 84.0}]",
+            '    } elseif {$_row eq "IO_NORTH" || $_row eq "IO_SOUTH"} {',
+            "        place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location $_cur pad_vccd_${_row}; set _cur [expr {$_cur + 82.0}]",
+            "        place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location $_cur pad_vssd_${_row}; set _cur [expr {$_cur + 84.0}]",
+            "    } else {",
+            "        place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location $_cur pad_vddio_${_row}; set _cur [expr {$_cur + 82.0}]",
+            "        place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location $_cur pad_vssio_${_row}; set _cur [expr {$_cur + 84.0}]",
+            "    }",
+            "    set _sig_start($_row) $_cur",
+            "    set _sig_end($_row) [expr {$_elen - 216.0 - 80.0}]",
+            "}",
+            "",
+        ])
+
+        if upf_aware:
+            domains = self.project.get_power_domains()
+            for d in domains:
+                is_gated = getattr(d, "gated", False) or getattr(d, "power_switch_master", None) is not None or getattr(d, "enable_physical_switch", False)
+                if is_gated or getattr(d, "is_top", False) or getattr(d, "name", "") == "PD_TOP":
+                    continue
+                d_area = getattr(d, "area_box", None) or getattr(d, "area", None)
+                cx, cy = die_w / 2.0, die_h / 2.0
+                if d_area and len(d_area) == 4:
+                    x1, y1, x2, y2 = d_area
+                    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                dists = {"bottom": cy, "top": die_h - cy, "left": cx, "right": die_w - cx}
+                closest_edge = min(dists, key=dists.get)
+                row_name = {"bottom": "IO_SOUTH", "top": "IO_NORTH", "left": "IO_WEST", "right": "IO_EAST"}[closest_edge]
+                d_clean = d.name.lower()
+                lines.extend([
+                    f"# Dedicated UPF Island Supply Pads for {d.name} ({closest_edge} edge)",
+                    f"place_pad -master sky130_ef_io__vccd_lvc_clamped_pad -row {row_name} -location $_sig_start({row_name}) pad_vdd_{d_clean}",
+                    f"set _sig_start({row_name}) [expr {{$_sig_start({row_name}) + 82.0}}]",
+                    f"place_pad -master sky130_ef_io__vssd_lvc_clamped_pad -row {row_name} -location $_sig_start({row_name}) pad_vss_{d_clean}",
+                    f"set _sig_start({row_name}) [expr {{$_sig_start({row_name}) + 84.0}}]",
+                ])
+
+        lines.extend([
+            "proc _silis_place_sig_pad {_row _bterm _loc _pin_target} {",
+            "    set _block [ord::get_db_block]",
+            "    set _dbu [[::ord::get_db_tech] getDbUnitsPerMicron]",
+            "    set _die_box [$_block getDieArea]",
+            "    set _die_w [expr {([$_die_box xMax] - [$_die_box xMin]) / double($_dbu)}]",
+            "    set _die_h [expr {([$_die_box yMax] - [$_die_box yMin]) / double($_dbu)}]",
+            "    set _core_box [$_block getCoreArea]",
+            "    set _core_x1 [expr {[$_core_box xMin] / double($_dbu)}]",
+            "    set _core_y1 [expr {[$_core_box yMin] / double($_dbu)}]",
+            "    set _core_x2 [expr {[$_core_box xMax] / double($_dbu)}]",
+            "    set _core_y2 [expr {[$_core_box yMax] / double($_dbu)}]",
+            "    set _bname [$_bterm getName]",
+            '    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname "_"]',
+            '    set _pad_inst "pad_${_safe_name}"',
+            "    set _loc [expr {round($_loc / 0.005) * 0.005}]",
+            "    place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row $_row -location $_loc $_pad_inst",
+            "    set _pnet [$_bterm getNet]",
+            "    set _dir [$_bterm getIoType]",
+            "    set _pc [expr {round(($_loc + 40.0) / 0.005) * 0.005}]",
+            '    if {$_row eq "IO_SOUTH"} {',
+            '        set _py [expr {$_pin_target eq "core_boundary" ? $_core_y1 : 210.0}]',
+            '        place_pin -pin_name "$_bname" -layer met2 -location "$_pc $_py"',
+            '    } elseif {$_row eq "IO_NORTH"} {',
+            '        set _py [expr {$_pin_target eq "core_boundary" ? $_core_y2 : ($_die_h - 210.0)}]',
+            '        place_pin -pin_name "$_bname" -layer met2 -location "$_pc $_py"',
+            '    } elseif {$_row eq "IO_WEST"} {',
+            '        set _px [expr {$_pin_target eq "core_boundary" ? $_core_x1 : 210.0}]',
+            '        place_pin -pin_name "$_bname" -layer met3 -location "$_px $_pc"',
+            "    } else {",
+            '        set _px [expr {$_pin_target eq "core_boundary" ? $_core_x2 : ($_die_w - 210.0)}]',
+            '        place_pin -pin_name "$_bname" -layer met3 -location "$_px $_pc"',
+            "    }",
+            "    set _pad_obj [$_block findInst $_pad_inst]",
+            '    if {$_pad_obj ne "NULL" && $_pnet ne "NULL"} {',
+            '        # Connect internal core pin IN/OUT only (PAD is external package bondpad; routing to it causes DRT-0073)',
+            '        set _sig_pin [expr {$_dir eq "OUTPUT" ? "OUT" : "IN"}]',
+            '        set _iterm_sig [$_pad_obj findITerm $_sig_pin]',
+            '        if {$_iterm_sig ne "NULL" && [$_iterm_sig getNet] eq "NULL"} { $_iterm_sig connect $_pnet }',
+            "    }",
+            "}",
+        ])
+
+        if edge_assignments:
+            edge_map_tcl = {"bottom": "IO_SOUTH", "top": "IO_NORTH", "left": "IO_WEST", "right": "IO_EAST"}
+            lines.append("set _assigned_bterms [list]")
+            for edge, sig_patterns in edge_assignments.items():
+                row_name = edge_map_tcl.get(edge.lower(), "IO_SOUTH")
+                pats = " ".join(f'"{s}"' for s in sig_patterns)
+                lines.extend([
+                    f"set _edge_sigs [list {pats}]",
+                    "set _matched [list]",
+                    "foreach _pat $_edge_sigs {",
+                    "    foreach _b [$_block getBTerms] {",
+                    "        set _bn [$_b getName]",
+                    '        if {($_pat eq $_bn || [string match $_pat $_bn]) && [lsearch -exact $_assigned_bterms $_b] == -1} {',
+                    "            lappend _matched $_b; lappend _assigned_bterms $_b",
+                    "        }",
+                    "    }",
+                    "}",
+                    "set _nm [llength $_matched]",
+                    "if {$_nm > 0} {",
+                    f"    set _s0 $_sig_start({row_name}); set _s1 $_sig_end({row_name})",
+                    "    set _span [expr {$_s1 - $_s0}]",
+                    "    if {$_nm > 1 && ($_span / double($_nm - 1)) < 81.0} {",
+                    f'        return -code error "SILIS_PADRING_OVERFLOW: Edge {row_name} span ($_span um) cannot fit $_nm pads without overlap."',
+                    "    }",
+                    "    set _step [expr {$_nm > 1 ? ($_span / double($_nm - 1)) : 0.0}]",
+                    "    if {$_step > 135.0} { set _step 135.0 }",
+                    "    set _i 0",
+                    "    foreach _b $_matched {",
+                    "        set _loc [expr {$_s0 + $_i * $_step}]",
+                    f'        _silis_place_sig_pad {row_name} $_b $_loc "{pin_target}"',
+                    "        incr _i",
+                    "    }",
+                    "}",
+                ])
+        else:
+            lines.extend([
+                "set _all_bterms [$_block getBTerms]",
+                "set _bcount [llength $_all_bterms]",
+                "array set _cap {}",
+                "set _tot_cap 0",
+                "foreach _r {IO_SOUTH IO_EAST IO_NORTH IO_WEST} {",
+                "    set _sp [expr {$_sig_end($_r) - $_sig_start($_r)}]",
+                "    set _c [expr {$_sp >= 0 ? int(floor($_sp / 82.0)) + 1 : 0}]",
+                "    set _cap($_r) $_c",
+                "    incr _tot_cap $_c",
+                "}",
+                "if {$_bcount > $_tot_cap} {",
+                '    return -code error "SILIS_PADRING_OVERFLOW: $_bcount IO pads required, but die perimeter can only fit $_tot_cap non-overlapping pads. Increase die_area."',
+                "}",
+                "# Distribute signals proportionally across the 4 edges within each edge's capacity",
+                "array set _edge_bterms {}",
+                "foreach _r {IO_SOUTH IO_EAST IO_NORTH IO_WEST} { set _edge_bterms($_r) {} }",
+                "set _bi 0",
+                "foreach _r {IO_SOUTH IO_EAST IO_NORTH IO_WEST} {",
+                "    set _want [expr {int(round(($_cap($_r) * 1.0 / $_tot_cap) * $_bcount))}]",
+                "    if {$_want > $_cap($_r)} { set _want $_cap($_r) }",
+                "    for {set _k 0} {$_k < $_want && $_bi < $_bcount} {incr _k} {",
+                "        lappend _edge_bterms($_r) [lindex $_all_bterms $_bi]",
+                "        incr _bi",
+                "    }",
+                "}",
+                "while {$_bi < $_bcount} {",
+                "    foreach _r {IO_SOUTH IO_EAST IO_NORTH IO_WEST} {",
+                "        if {$_bi < $_bcount && [llength $_edge_bterms($_r)] < $_cap($_r)} {",
+                "            lappend _edge_bterms($_r) [lindex $_all_bterms $_bi]",
+                "            incr _bi",
+                "        }",
+                "    }",
+                "}",
+                "foreach _r {IO_SOUTH IO_EAST IO_NORTH IO_WEST} {",
+                "    set _lst $_edge_bterms($_r)",
+                "    set _n [llength $_lst]",
+                "    if {$_n == 0} continue",
+                "    set _s0 $_sig_start($_r); set _s1 $_sig_end($_r)",
+                "    set _span [expr {$_s1 - $_s0}]",
+                "    set _step [expr {$_n > 1 ? min(135.0, $_span / double($_n - 1)) : 0.0}]",
+                "    set _k 0",
+                "    foreach _b $_lst {",
+                f'        _silis_place_sig_pad $_r $_b [expr {{$_s0 + $_k * $_step}}] "{pin_target}"',
+                "        incr _k",
+                "    }",
+                "}",
+            ])
+
+        lines.extend([
+            "",
+            "# Pad Ring Fillers and Abutment",
+            "set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}",
+            "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
+            "    place_io_fill -row $row {*}$pad_fill",
+            "}",
+            "connect_by_abutment",
+            "",
+        ])
+        return lines
+
+    @staticmethod
+    def _tcl_site_snap_helpers() -> List[str]:
+        """Site-grid row snapping helpers aligned strictly to actual OpenDB row origins."""
+        return [
+            "proc _silis_get_core_grid {_blk} {",
+            "    set _rows [$_blk getRows]",
+            "    set _x0 \"\"; set _y0 \"\"; set _y0_r0 \"\"",
+            "    foreach _r $_rows {",
+            "        set _o [$_r getOrigin]",
+            "        set _ox [expr {[lindex $_o 0] / 1000.0}]",
+            "        set _oy [expr {[lindex $_o 1] / 1000.0}]",
+            '        if {$_x0 eq "" || $_ox < $_x0} { set _x0 $_ox }',
+            '        if {$_y0 eq "" || $_oy < $_y0} { set _y0 $_oy }',
+            '        if {[$_r getOrient] eq "R0" && ($_y0_r0 eq "" || $_oy < $_y0_r0)} { set _y0_r0 $_oy }',
+            "    }",
+            '    if {$_x0 ne ""} {',
+            '        if {$_y0_r0 eq ""} { set _y0_r0 $_y0 }',
+            "        return [list $_x0 $_y0 $_y0_r0]",
+            "    }",
+            "    return {0.0 0.0 0.0}",
+            "}",
+            "proc _silis_snap_row_xy {_blk _tx _ty _cell_w {_dbl_row 1}} {",
+            "    set _grid [_silis_get_core_grid $_blk]",
+            "    set _x0 [lindex $_grid 0]",
+            "    set _y_base [expr {$_dbl_row ? [lindex $_grid 2] : [lindex $_grid 1]}]",
+            "    set _rpitch [expr {$_dbl_row ? 5.440 : 2.720}]",
+            "    set _sx [expr {$_x0 + round(($_tx - $_x0) / 0.460) * 0.460}]",
+            "    set _sy [expr {$_y_base + round(($_ty - $_y_base) / $_rpitch) * $_rpitch}]",
+            "    return [list [format \"%.3f\" $_sx] [format \"%.3f\" $_sy]]",
+            "}",
+            "proc _silis_slot_valid {_blk _x _y _w _h {_req_r0 0}} {",
+            "    set _xd [expr {int(round($_x * 1000.0))}]",
+            "    set _yd [expr {int(round($_y * 1000.0))}]",
+            "    set _xd2 [expr {int(round(($_x + $_w) * 1000.0))}]",
+            "    set _has_r 0",
+            "    foreach _r [$_blk getRows] {",
+            "        set _rb [$_r getBBox]",
+            "        if {[$_rb yMin] == $_yd && [$_rb xMin] <= $_xd && [$_rb xMax] >= $_xd2} {",
+            '            if {!$_req_r0 || [$_r getOrient] eq "R0"} { set _has_r 1; break }',
+            "        }",
+            "    }",
+            "    if {!$_has_r} { return 0 }",
+            "    set _yd2 [expr {int(round(($_y + $_h) * 1000.0))}]",
+            "    foreach _inst [$_blk getInsts] {",
+            '        set _iname [$_inst getName]',
+            '        set _st [$_inst getPlacementStatus]',
+            '        set _is_ls [string match "ls_*" $_iname]',
+            '        if {!$_is_ls && $_st ne "FIRM" && $_st ne "COVER" && $_st ne "LOCKED"} continue',
+            '        set _mname [[$_inst getMaster] getName]',
+            '        if {[string match "*tap*" $_mname] && ![string match "*lsbuf*" $_mname]} continue',
+            "        set _bb [$_inst getBBox]",
+            "        if {[$_bb xMin] < $_xd2 && [$_bb xMax] > $_xd && [$_bb yMin] < $_yd2 && [$_bb yMax] > $_yd} {",
+            "            return 0",
+            "        }",
+            "    }",
+            "    return 1",
+            "}",
+        ]
+
+    @staticmethod
+    def _build_power_switch_tcl(resolved: Dict[str, Any], replace_existing: bool = False) -> List[str]:
+        """Builds site-aligned physical POWER_SWITCH placement + full VDDG/VPWR/VGND/SLEEP net wiring."""
+        active_pds = resolved.get("active_pds", [])
+        psw_spec = resolved.get("psw_spec", {})
+        if not active_pds or not psw_spec:
+            return []
+
+        sw_cell_master = psw_spec.get("cell_master", "POWER_SWITCH")
+        sw_cols = int(psw_spec.get("columns", 4))
+        sw_pitch = float(psw_spec.get("pitch_um", 40.0))
+        configured_domains = psw_spec.get("domains", [])
+
+        lines = [
+            "set _db [::ord::get_db]",
+            "set _blk [::ord::get_db_block]",
+            f'set _sw_master [$_db findMaster "{sw_cell_master}"]',
+            'set _dbl_site "NULL"',
+            'foreach _lib [$_db getLibs] { set _s [$_lib findSite "unithddbl"]; if {$_s ne "NULL"} { set _dbl_site $_s; break } }',
+        ]
+
+        for spd in active_pds:
+            spd_name = spd["name"]
+            if not (spd.get("enable_physical_switch") or spd_name in configured_domains or psw_spec):
+                continue
+            rx1, ry1, rx2, ry2 = [float(v) for v in spd["box"]]
+            is_adaptive = bool(spd.get("adaptive_placement") or psw_spec.get("adaptive_placement"))
+            d_pwr = spd.get("primary_power_net") or f"VDD_{spd_name}"
+            sleep_net = spd.get("sleep_en") or ""
+
+            lines.extend([
+                f"\n# Synthesizing Physical Power Switch Matrix for {spd_name}",
+                'if {$_sw_master ne "NULL"} {',
+                f"    set _rx1 {rx1}; set _ry1 {ry1}; set _rx2 {rx2}; set _ry2 {ry2}",
+                f"    set _cols {sw_cols}; set _pitch {sw_pitch}",
+                f'    set _d_pwr "{d_pwr}"; set _sleep_net "{sleep_net}"',
+                '    set _n_vdd [$_blk findNet "VDD"]',
+                '    set _n_vss [$_blk findNet "VSS"]',
+                '    set _n_dpwr [$_blk findNet $_d_pwr]',
+                '    set _n_slp [expr {$_sleep_net ne "" ? [$_blk findNet $_sleep_net] : "NULL"}]',
+                "    set _sw_idx 0",
+            ])
+
+            if replace_existing:
+                lines.extend([
+                    f'    foreach _old [$_blk getInsts] {{',
+                    f'        if {{[string match "sw_{spd_name}_*" [$_old getName]]}} {{',
+                    f'            odb::dbInst_destroy $_old',
+                    f'        }}',
+                    f'    }}',
+                    f'    foreach _oldr [$_blk getRows] {{',
+                    f'        if {{[string match "ROW_SW_{spd_name}_*" [$_oldr getName]]}} {{',
+                    f'            odb::dbRow_destroy $_oldr',
+                    f'        }}',
+                    f'    }}',
+                ])
+
+            if is_adaptive:
+                lines.extend([
+                    "    set _total_x 0.0; set _cell_cnt 0",
+                    "    foreach _i [$_blk getInsts] {",
+                    "        set _m [$_i getMaster]",
+                    '        set _st [$_i getPlacementStatus]',
+                    '        if {[$_m getType] eq "CORE" && ($_st eq "PLACED" || $_st eq "FIRM") && ![string match "*tap*" [$_m getName]] && ![string match "*lsbuf*" [$_m getName]]} {',
+                    "            set _bb [$_i getBBox]",
+                    "            set _cx [expr {([$_bb xMin] + [$_bb xMax]) / 2000.0}]",
+                    "            set _cy [expr {([$_bb yMin] + [$_bb yMax]) / 2000.0}]",
+                    "            if {$_cx >= $_rx1 && $_cx <= $_rx2 && $_cy >= $_ry1 && $_cy <= $_ry2} {",
+                    "                set _total_x [expr {$_total_x + $_cx}]",
+                    "                incr _cell_cnt",
+                    "            }",
+                    "        }",
+                    "    }",
+                    "    set _avail_w [expr {max(10.0, $_rx2 - $_rx1 - 16.0)}]",
+                    "    if {$_cols > 1 && ($_cols - 1) * $_pitch > $_avail_w} { set _pitch [expr {$_avail_w / double($_cols - 1)}] }",
+                    "    set _span [expr {($_cols - 1) * $_pitch}]",
+                    "    if {$_cell_cnt > 0} {",
+                    "        set _cog_x [expr {$_total_x / $_cell_cnt}]",
+                    "        set _start_x [expr {$_cog_x - ($_span / 2.0)}]",
+                    "        if {$_start_x < [expr {$_rx1 + 8.0}]} { set _start_x [expr {$_rx1 + 8.0}] }",
+                    "        if {$_start_x + $_span > [expr {$_rx2 - 8.0}]} { set _start_x [expr {$_rx2 - 8.0 - $_span}] }",
+                    "    } else {",
+                    "        set _start_x [expr {$_rx1 + 8.0}]",
+                    "    }",
+                ])
+            else:
+                lines.extend([
+                    "    set _avail_w [expr {max(10.0, $_rx2 - $_rx1 - 16.0)}]",
+                    "    if {$_cols > 1 && ($_cols - 1) * $_pitch > $_avail_w} { set _pitch [expr {$_avail_w / double($_cols - 1)}] }",
+                    "    set _start_x [expr {$_rx1 + 8.0}]",
+                ])
+
+            lines.extend([
+                "    set _sw_boxes {}",
+                "    for {set _c 0} {$_c < $_cols} {incr _c} {",
+                "        set _raw_x [expr {$_start_x + $_c * $_pitch}]",
+                "        if {$_raw_x > [expr {$_rx2 - 5.0}]} { break }",
+                "        for {set _raw_y [expr {$_ry1 + 2.72}]} {$_raw_y < [expr {$_ry2 - 6.0}]} {set _raw_y [expr {$_raw_y + 10.88}]} {",
+                "            set _snapped [_silis_snap_row_xy $_blk $_raw_x $_raw_y 4.600 1]",
+                "            set _sx [lindex $_snapped 0]; set _sy [lindex $_snapped 1]",
+                "            if {$_sx < $_rx1 || ($_sx + 4.60) > $_rx2 || $_sy < $_ry1 || ($_sy + 5.44) > $_ry2} continue",
+                f'            set _sw_name "sw_{spd_name}_c${{_c}}_r${{_sw_idx}}"',
+                '            set _inst [odb::dbInst_create $_blk $_sw_master $_sw_name]',
+                '            if {$_inst ne "NULL"} {',
+                "                set _sx_d [expr {int(round($_sx * 1000))}]",
+                "                set _sy_d [expr {int(round($_sy * 1000))}]",
+                "                $_inst setOrigin $_sx_d $_sy_d",
+                '                $_inst setOrient "R0"',
+                '                $_inst setPlacementStatus "FIRM"',
+                f'                if {{$_dbl_site ne "NULL"}} {{ odb::dbRow_create $_blk "ROW_SW_{spd_name}_${{_sw_idx}}" $_dbl_site $_sx_d $_sy_d "R0" "HORIZONTAL" 10 460 }}',
+                '                if {$_n_vdd ne "NULL"} { set _it [$_inst findITerm "VDDG"]; if {$_it ne "NULL"} { $_it connect $_n_vdd } }',
+                '                if {$_n_dpwr ne "NULL"} { set _it [$_inst findITerm "VPWR"]; if {$_it ne "NULL"} { $_it connect $_n_dpwr } }',
+                '                if {$_n_vss ne "NULL"} { set _it [$_inst findITerm "VGND"]; if {$_it ne "NULL"} { $_it connect $_n_vss } }',
+                '                if {$_n_slp ne "NULL"} { set _it [$_inst findITerm "SLEEP"]; if {$_it ne "NULL"} { $_it connect $_n_slp } }',
+                "                set _sb [$_inst getBBox]",
+                "                lappend _sw_boxes [list [$_sb xMin] [$_sb yMin] [$_sb xMax] [$_sb yMax]]",
+                "                incr _sw_idx",
+                "            }",
+                "        }",
+                "    }",
+                "    foreach _ti [$_blk getInsts] {",
+                '        set _tm [[$_ti getMaster] getName]',
+                '        if {[string match "*tap*" $_tm] && ![string match "*lsbuf*" $_tm]} {',
+                "            set _tb [$_ti getBBox]",
+                "            foreach _sb $_sw_boxes {",
+                "                if {[$_tb xMin] < [lindex $_sb 2] && [$_tb xMax] > [lindex $_sb 0] && [$_tb yMin] < [lindex $_sb 3] && [$_tb yMax] > [lindex $_sb 1]} {",
+                "                    odb::dbInst_destroy $_ti; break",
+                "                }",
+                "            }",
+                "        }",
+                "    }",
+                f'    puts "SILIS: Synthesized $_sw_idx site-aligned physical power switch cells in {spd_name}"',
+                "}",
+            ])
+        return lines
+
+    @staticmethod
+    def _build_power_switch_pdn_feeders_tcl(resolved: Dict[str, Any], pdk_name: str = "sky130") -> List[str]:
+        """Straps every POWER_SWITCH.VDDG pin physically onto an always-on vertical trunk tied to the core VDD mesh."""
+        active_pds = resolved.get("active_pds", [])
+        psw_spec = resolved.get("psw_spec", {})
+        if not active_pds or not psw_spec:
+            return []
+
+        ic = SSAForge.get_interconnect(pdk_name)
+        rail_layer = ic.get("rail_layer", "met1")
+        trunk_layer = ic.get("trunk_layer", "met4")
+        top_layer = ic.get("top_mesh_layer", "met5")
+
+        lines = [
+            f"\n# === PHYSICAL VDD -> POWER_SWITCH.VDDG TRUNKS & STACKED VIAS ({trunk_layer} -> {rail_layer}) ===",
+            "set _blk_pf [::ord::get_db_block]",
+            "set _tech_pf [::ord::get_db_tech]",
+            'set _n_vdd_pf [$_blk_pf findNet "VDD"]',
+            f'set _l_bot_pf [$_tech_pf findLayer "{rail_layer}"]',
+            f'set _l_trk_pf [$_tech_pf findLayer "{trunk_layer}"]',
+            f'set _l_top_pf [$_tech_pf findLayer "{top_layer}"]',
+            'proc _silis_find_via_for_layers {tech l1_name l2_name} {',
+            '    set _cand_names [list "${l1_name}${l2_name}_PR"]',
+            '    if {$l1_name eq "met1" && $l2_name eq "met2"} { lappend _cand_names "M1M2_PR" }',
+            '    if {$l1_name eq "met2" && $l2_name eq "met3"} { lappend _cand_names "M2M3_PR" }',
+            '    if {$l1_name eq "met3" && $l2_name eq "met4"} { lappend _cand_names "M3M4_PR" }',
+            '    if {$l1_name eq "met4" && $l2_name eq "met5"} { lappend _cand_names "M4M5_PR" }',
+            '    foreach _vn $_cand_names { set _v [$tech findVia $_vn]; if {$_v ne "NULL"} { return $_v } }',
+            '    foreach _v [$tech getVias] {',
+            '        set _b [$_v getBottomLayer]; set _t [$_v getTopLayer]',
+            '        if {$_b ne "NULL" && $_t ne "NULL" && [$_b getName] eq $l1_name && [$_t getName] eq $l2_name} { return $_v }',
+            '    }',
+            '    return "NULL"',
+            '}',
+            'set _v12_pf [_silis_find_via_for_layers $_tech_pf "met1" "met2"]',
+            'set _v23_pf [_silis_find_via_for_layers $_tech_pf "met2" "met3"]',
+            'set _v34_pf [_silis_find_via_for_layers $_tech_pf "met3" "met4"]',
+            f'set _v45_pf [_silis_find_via_for_layers $_tech_pf "{trunk_layer}" "{top_layer}"]',
+            'if {$_n_vdd_pf ne "NULL" && $_l_trk_pf ne "NULL" && $_l_top_pf ne "NULL"} {',
+            '    set _vdd_swires [$_n_vdd_pf getSWires]',
+            '    set _vdd_sw [expr {[llength $_vdd_swires] > 0 ? [lindex $_vdd_swires 0] : [odb::dbSWire_create $_n_vdd_pf "ROUTED"]}]',
+        ]
+
+        for spd in active_pds:
+            spd_name = spd["name"]
+            box = spd.get("box", [])
+            if len(box) != 4:
+                continue
+            sx1, sy1, sx2, sy2 = [float(v) for v in box]
+            lines.extend([
+                f'    set _fx1 [expr {{int(round({sx1:.3f} * 1000))}}]; set _fy1 [expr {{int(round({sy1:.3f} * 1000))}}]',
+                f'    set _fx2 [expr {{int(round({sx2:.3f} * 1000))}}]; set _fy2 [expr {{int(round({sy2:.3f} * 1000))}}]',
+                '    # Purge any stale VDD switch-column feeder sboxes inside this fence so adaptive re-runs stay idempotent',
+                '    foreach _vsw_old [$_n_vdd_pf getSWires] {',
+                '        foreach _vbx_old [$_vsw_old getWires] {',
+                '            set _vx_mid [expr {([$_vbx_old xMin] + [$_vbx_old xMax]) / 2}]',
+                '            set _vy_mid [expr {([$_vbx_old yMin] + [$_vbx_old yMax]) / 2}]',
+                '            if {[$_vbx_old isVia]} {',
+                '                if {$_vx_mid >= $_fx1 && $_vx_mid <= $_fx2 && $_vy_mid >= ($_fy1 - 15000) && $_vy_mid <= ($_fy2 + 15000)} {',
+                '                    odb::dbSBox_destroy $_vbx_old',
+                '                }',
+                '            } elseif {[[$_vbx_old getTechLayer] getName] eq "' + trunk_layer + '"} {',
+                '                if {$_vx_mid >= $_fx1 && $_vx_mid <= $_fx2 && [$_vbx_old yMin] < $_fy2 && [$_vbx_old yMax] > $_fy1} {',
+                '                    odb::dbSBox_destroy $_vbx_old',
+                '                }',
+                '            }',
+                '        }',
+                '    }',
+                '    # Collect non-VDD trunk-layer stripes inside fence to guarantee clean >=0.9 um clearance',
+                '    set _other_trk {}',
+                '    foreach _onet [$_blk_pf getNets] {',
+                '        if {[$_onet getName] eq "VDD"} continue',
+                '        foreach _osw [$_onet getSWires] {',
+                '            foreach _obx [$_osw getWires] {',
+                f'                if {{![$_obx isVia] && [[$_obx getTechLayer] getName] eq "{trunk_layer}"}} {{',
+                '                    if {[$_obx xMax] >= $_fx1 && [$_obx xMin] <= $_fx2 && [$_obx yMax] >= $_fy1 && [$_obx yMin] <= $_fy2} {',
+                '                        lappend _other_trk [list [$_obx xMin] [$_obx xMax]]',
+                '                    }',
+                '                }',
+                '            }',
+                '        }',
+                '    }',
+                '    # Collect always-on VDD top-layer mesh stripes / rings outside the domain',
+                '    set _vdd_top_boxes {}',
+                '    foreach _vsw [$_n_vdd_pf getSWires] {',
+                '        foreach _vbx [$_vsw getWires] {',
+                f'            if {{![$_vbx isVia] && [[$_vbx getTechLayer] getName] eq "{top_layer}"}} {{',
+                '                lappend _vdd_top_boxes [list [$_vbx xMin] [$_vbx yMin] [$_vbx xMax] [$_vbx yMax]]',
+                '            }',
+                '        }',
+                '    }',
+                '    array unset _sw_cols',
+                '    foreach _gi [$_blk_pf getInsts] {',
+                f'        if {{[string match "sw_{spd_name}_*" [$_gi getName]]}} {{',
+                '            set _gbb [$_gi getBBox]',
+                '            set _ckey "[$_gbb xMin]_[$_gbb xMax]"',
+                '            lappend _sw_cols($_ckey) $_gi',
+                '        }',
+                '    }',
+                '    set _pf_contacts 0',
+                '    foreach _ckey [array names _sw_cols] {',
+                '        set _col_insts $_sw_cols($_ckey)',
+                '        set _fbb [[lindex $_col_insts 0] getBBox]',
+                '        set _sw_x1 [$_fbb xMin]; set _sw_x2 [$_fbb xMax]',
+                '        set _x_feed [expr {($_sw_x1 + $_sw_x2) / 2}]',
+                '        for {set _xc [expr {$_sw_x1 + 1100}]} {$_xc <= [expr {$_sw_x2 - 700}]} {incr _xc 200} {',
+                '            set _ok 1',
+                '            foreach _ot $_other_trk {',
+                '                if {($_xc - 450) < ([lindex $_ot 1] + 900) && ($_xc + 450) > ([lindex $_ot 0] - 900)} { set _ok 0; break }',
+                '            }',
+                '            if {$_ok} { set _x_feed $_xc; break }',
+                '        }',
+                '        set _ym_bot ""; set _ym_top ""',
+                '        foreach _tb $_vdd_top_boxes {',
+                '            set _tx1 [lindex $_tb 0]; set _ty1 [lindex $_tb 1]; set _tx2 [lindex $_tb 2]; set _ty2 [lindex $_tb 3]',
+                '            if {$_x_feed >= $_tx1 && $_x_feed <= $_tx2} {',
+                '                set _ym [expr {($_ty1 + $_ty2) / 2}]',
+                '                if {$_ty2 <= $_fy1 && ($_ym_bot eq "" || $_ym > $_ym_bot)} { set _ym_bot $_ym }',
+                '                if {$_ty1 >= $_fy2 && ($_ym_top eq "" || $_ym < $_ym_top)} { set _ym_top $_ym }',
+                '            }',
+                '        }',
+                '        set _min_sw_y ""; set _max_sw_y ""',
+                '        foreach _swi $_col_insts {',
+                '            set _sb [$_swi getBBox]',
+                '            if {$_min_sw_y eq "" || [$_sb yMin] < $_min_sw_y} { set _min_sw_y [$_sb yMin] }',
+                '            if {$_max_sw_y eq "" || [$_sb yMax] > $_max_sw_y} { set _max_sw_y [$_sb yMax] }',
+                '        }',
+                '        set _trk_y1 [expr {$_ym_bot ne "" ? $_ym_bot : $_min_sw_y}]',
+                '        set _trk_y2 [expr {$_ym_top ne "" ? $_ym_top : $_max_sw_y}]',
+                '        odb::dbSBox_create $_vdd_sw $_l_trk_pf [expr {$_x_feed - 450}] $_trk_y1 [expr {$_x_feed + 450}] $_trk_y2 "STRIPE"',
+                '        if {$_v45_pf ne "NULL" && $_ym_bot ne ""} { odb::dbSBox_create $_vdd_sw $_v45_pf $_x_feed $_ym_bot "STRIPE" }',
+                '        if {$_v45_pf ne "NULL" && $_ym_top ne ""} { odb::dbSBox_create $_vdd_sw $_v45_pf $_x_feed $_ym_top "STRIPE" }',
+                '        foreach _swi $_col_insts {',
+                '            set _it_g [$_swi findITerm "VDDG"]',
+                '            if {$_it_g eq "NULL"} continue',
+                '            set _xf [$_swi getTransform]',
+                '            set _mt [$_it_g getMTerm]',
+                '            foreach _mp [$_mt getMPins] {',
+                '                foreach _geo [$_mp getGeometry] {',
+                '                    set _gly [$_geo getTechLayer]',
+                f'                    if {{$_gly eq "NULL" || [$_gly getName] ne "{rail_layer}"}} continue',
+                '                    set _p1 [odb::new_Point [$_geo xMin] [$_geo yMin]]',
+                '                    set _p2 [odb::new_Point [$_geo xMax] [$_geo yMax]]',
+                '                    $_xf apply $_p1; $_xf apply $_p2',
+                '                    set _gx1 [expr {min([$_p1 getX], [$_p2 getX])}]',
+                '                    set _gx2 [expr {max([$_p1 getX], [$_p2 getX])}]',
+                '                    set _gy1 [expr {min([$_p1 getY], [$_p2 getY])}]',
+                '                    set _gy2 [expr {max([$_p1 getY], [$_p2 getY])}]',
+                '                    odb::delete_Point $_p1; odb::delete_Point $_p2',
+                '                    if {$_x_feed >= $_gx1 && $_x_feed <= $_gx2} {',
+                '                        set _vy [expr {($_gy1 + $_gy2) / 2}]',
+                '                        if {$_v12_pf ne "NULL"} { odb::dbSBox_create $_vdd_sw $_v12_pf $_x_feed $_vy "STRIPE" }',
+                '                        if {$_v23_pf ne "NULL"} { odb::dbSBox_create $_vdd_sw $_v23_pf $_x_feed $_vy "STRIPE" }',
+                '                        if {$_v34_pf ne "NULL"} { odb::dbSBox_create $_vdd_sw $_v34_pf $_x_feed $_vy "STRIPE" }',
+                '                        incr _pf_contacts',
+                '                    }',
+                '                }',
+                '            }',
+                '        }',
+                '    }',
+                f'    puts "SILIS: Strapped $_pf_contacts physical VDD -> POWER_SWITCH.VDDG stacked via contacts for {spd_name}"',
+            ])
+        lines.append('}')
+        return lines
+
+    @staticmethod
+    def _build_level_shifter_tcl(resolved: Dict[str, Any]) -> List[str]:
+        """Synthesizes placement-guided, site-aligned level shifters on actual cross-domain nets."""
+        ls_rules = resolved.get("ls_rules", [])
+        active_pds = resolved.get("active_pds", [])
+        ls_spec = resolved.get("ls_spec", {})
+        if not ls_rules or not active_pds:
+            return []
+
+        req_master = ls_spec.get("cell_master", "sky130_fd_sc_hd__lpflow_lsbuf_lh_hl_isowell_tap_4")
+        if req_master.endswith("_tap_1") or req_master.endswith("_lsbuf_1"):
+            req_master = "sky130_fd_sc_hd__lpflow_lsbuf_lh_hl_isowell_tap_4"
+
+        lines = [
+            "\n# === PLACEMENT-GUIDED IEEE 1801 BIDIRECTIONAL LEVEL SHIFTERS ===",
+            "set _db [::ord::get_db]",
+            "set _blk [::ord::get_db_block]",
+            f'set _ls_master [$_db findMaster "{req_master}"]',
+            'if {$_ls_master eq "NULL"} { set _ls_master [$_db findMaster "sky130_fd_sc_hd__lpflow_lsbuf_lh_hl_isowell_tap_4"] }',
+            'if {$_ls_master eq "NULL"} { set _ls_master [$_db findMaster "sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_4"] }',
+            'if {$_ls_master eq "NULL"} {',
+            '    return -code error "SILIS_LS_ERR: No valid site-compatible level shifter master found in LEF."',
+            "}",
+            "set _ls_w [expr {[$_ls_master getWidth] / 1000.0}]",
+            "set _ls_h [expr {[$_ls_master getHeight] / 1000.0}]",
+            "set _ls_lh_idx 0",
+            "set _ls_hl_idx 0",
+            "set _ls_boxes {}",
+            "set _ls_grid [_silis_get_core_grid $_blk]",
+            "set _ls_x0 [lindex $_ls_grid 0]",
+            "set _ls_y0_r0 [lindex $_ls_grid 2]",
+            "array unset _ls_r0_rows",
+            "foreach _r [$_blk getRows] {",
+            '    if {[$_r getOrient] eq "R0"} {',
+            "        set _rb [$_r getBBox]",
+            "        lappend _ls_r0_rows([$_rb yMin]) [list [$_rb xMin] [$_rb xMax]]",
+            "    }",
+            "}",
+            "set _ls_obst_boxes {}",
+            "foreach _inst [$_blk getInsts] {",
+            '    set _iname [$_inst getName]',
+            '    set _st [$_inst getPlacementStatus]',
+            '    if {![string match "ls_*" $_iname] && $_st ne "FIRM" && $_st ne "COVER" && $_st ne "LOCKED"} continue',
+            '    set _mname [[$_inst getMaster] getName]',
+            '    if {[string match "*tap*" $_mname] && ![string match "*lsbuf*" $_mname]} continue',
+            "    set _bb [$_inst getBBox]",
+            "    lappend _ls_obst_boxes [list [$_bb xMin] [$_bb yMin] [$_bb xMax] [$_bb yMax]]",
+            "}",
+            "proc _silis_fast_ls_valid {_lx _ly _mw _mh} {",
+            "    upvar #0 _ls_r0_rows _r0_rows _ls_obst_boxes _obst",
+            "    set _xd [expr {int(round($_lx * 1000.0))}]",
+            "    set _yd [expr {int(round($_ly * 1000.0))}]",
+            "    set _xd2 [expr {int(round(($_lx + $_mw) * 1000.0))}]",
+            "    if {![info exists _r0_rows($_yd)]} { return 0 }",
+            "    set _has_span 0",
+            "    foreach _sp $_r0_rows($_yd) {",
+            "        if {[lindex $_sp 0] <= $_xd && [lindex $_sp 1] >= $_xd2} { set _has_span 1; break }",
+            "    }",
+            "    if {!$_has_span} { return 0 }",
+            "    set _yd2 [expr {int(round(($_ly + $_mh) * 1000.0))}]",
+            "    foreach _ob $_obst {",
+            "        if {[lindex $_ob 0] < $_xd2 && [lindex $_ob 2] > $_xd && [lindex $_ob 1] < $_yd2 && [lindex $_ob 3] > $_yd} { return 0 }",
+            "    }",
+            "    return 1",
+            "}",
+            "proc _silis_place_ls {_blk _master _name _cx_t _cy_t _sx1 _sy1 _sx2 _sy2 _inside} {",
+            "    upvar #0 _ls_obst_boxes _ls_obst_boxes _ls_x0 _gx0 _ls_y0_r0 _gy0",
+            "    set _mw [expr {[$_master getWidth] / 1000.0}]",
+            "    set _mh [expr {[$_master getHeight] / 1000.0}]",
+            "    set _db_b [$_blk getDieArea]",
+            "    set _dw_min [expr {[$_db_b xMin] / 1000.0}]",
+            "    set _dw_max [expr {[$_db_b xMax] / 1000.0}]",
+            "    set _dh_min [expr {[$_db_b yMin] / 1000.0}]",
+            "    set _dh_max [expr {[$_db_b yMax] / 1000.0}]",
+            "    set _step_x [expr {$_mw + 1.84}]",
+            "    for {set _ring 0} {$_ring < 24} {incr _ring} {",
+            "        for {set _dx_s [expr {-$_ring}]} {$_dx_s <= $_ring} {incr _dx_s} {",
+            "            for {set _dy_s [expr {-$_ring}]} {$_dy_s <= $_ring} {incr _dy_s} {",
+            "                if {$_ring > 0 && abs($_dx_s) != $_ring && abs($_dy_s) != $_ring} continue",
+            "                set _lx [expr {$_gx0 + round((($_cx_t + $_dx_s * $_step_x) - $_gx0) / 0.460) * 0.460}]",
+            "                set _ly [expr {$_gy0 + round((($_cy_t + $_dy_s * 5.440) - $_gy0) / 5.440) * 5.440}]",
+            "                if {$_inside} {",
+            "                    if {$_lx < ($_sx1 + 2.0) || ($_lx + $_mw) > ($_sx2 - 2.0) || $_ly < ($_sy1 + 2.0) || ($_ly + $_mh) > ($_sy2 - 2.0)} continue",
+            "                } else {",
+            "                    set _over [expr {!((($_lx + $_mw) <= $_sx1) || ($_lx >= $_sx2) || (($_ly + $_mh) <= $_sy1) || ($_ly >= $_sy2))}]",
+            "                    if {$_over} continue",
+            "                    if {$_lx < $_dw_min || ($_lx + $_mw) > $_dw_max || $_ly < $_dh_min || ($_ly + $_mh) > $_dh_max} continue",
+            "                }",
+            "                if {[_silis_fast_ls_valid $_lx $_ly $_mw $_mh]} {",
+            "                    set _inst [odb::dbInst_create $_blk $_master $_name]",
+            '                    if {$_inst ne "NULL"} {',
+            "                        $_inst setOrigin [expr {int(round($_lx * 1000))}] [expr {int(round($_ly * 1000))}]",
+            '                        $_inst setOrient "R0"',
+            '                        $_inst setPlacementStatus "PLACED"',
+            "                        set _nbb [$_inst getBBox]",
+            "                        lappend _ls_obst_boxes [list [$_nbb xMin] [$_nbb yMin] [$_nbb xMax] [$_nbb yMax]]",
+            "                        return $_inst",
+            "                    }",
+            "                }",
+            "            }",
+            "        }",
+            "    }",
+            "    # Fallback sweep across domain/perimeter R0 rows if local spiral saturated",
+            "    foreach _ry_d [lsort -integer [array names _ls_r0_rows]] {",
+            "        set _ly [expr {$_ry_d / 1000.0}]",
+            "        if {$_inside} {",
+            "            if {$_ly < ($_sy1 + 2.0) || ($_ly + $_mh) > ($_sy2 - 2.0)} continue",
+            "            set _xs $_sx1; set _xe [expr {$_sx2 - $_mw}]",
+            "        } else {",
+            "            set _xs [expr {max($_dw_min, $_sx1 - 120.0)}]; set _xe [expr {min($_dw_max - $_mw, $_sx2 + 120.0)}]",
+            "            if {$_ly < [expr {max($_dh_min, $_sy1 - 120.0)}] || ($_ly + $_mh) > [expr {min($_dh_max, $_sy2 + 120.0)}]} continue",
+            "        }",
+            "        for {set _x_t $_xs} {$_x_t <= $_xe} {set _x_t [expr {$_x_t + $_step_x}]} {",
+            "            set _lx [expr {$_gx0 + round(($_x_t - $_gx0) / 0.460) * 0.460}]",
+            "            if {$_inside} {",
+            "                if {$_lx < ($_sx1 + 2.0) || ($_lx + $_mw) > ($_sx2 - 2.0)} continue",
+            "            } else {",
+            "                set _over [expr {!((($_lx + $_mw) <= $_sx1) || ($_lx >= $_sx2) || (($_ly + $_mh) <= $_sy1) || ($_ly >= $_sy2))}]",
+            "                if {$_over} continue",
+            "                if {$_lx < $_dw_min || ($_lx + $_mw) > $_dw_max} continue",
+            "            }",
+            "            if {[_silis_fast_ls_valid $_lx $_ly $_mw $_mh]} {",
+            "                set _inst [odb::dbInst_create $_blk $_master $_name]",
+            '                if {$_inst ne "NULL"} {',
+            "                    $_inst setOrigin [expr {int(round($_lx * 1000))}] [expr {int(round($_ly * 1000))}]",
+            '                    $_inst setOrient "R0"',
+            '                    $_inst setPlacementStatus "PLACED"',
+            "                    set _nbb [$_inst getBBox]",
+            "                    lappend _ls_obst_boxes [list [$_nbb xMin] [$_nbb yMin] [$_nbb xMax] [$_nbb yMax]]",
+            "                    return $_inst",
+            "                }",
+            "            }",
+            "        }",
+            "    }",
+            '    return "NULL"',
+            "}",
+        ]
+
+        for rule in ls_rules:
+            src_dom = rule.get("source") or rule.get("domain", "")
+            dom_info = next((d for d in active_pds if d["name"] == src_dom), None)
+            if not dom_info:
+                continue
+            sx1, sy1, sx2, sy2 = [float(v) for v in dom_info["box"]]
+            elems = dom_info.get("elements", [])
+            elem_pat = f"{elems[0]}/*" if elems else f"{src_dom}/*"
+            d_pwr = dom_info.get("primary_power_net") or f"VDD_{src_dom}"
+
+            lines.extend([
+                f"set _sx1 {sx1}; set _sy1 {sy1}; set _sx2 {sx2}; set _sy2 {sy2}",
+                f'set _elem_pat "{elem_pat}"',
+                f'set _d_pwr "{d_pwr}"',
+                'set _n_vdd [$_blk findNet "VDD"]',
+                'set _n_vss [$_blk findNet "VSS"]',
+                'set _n_dpwr [$_blk findNet $_d_pwr]',
+                "set _cross_out {}",
+                "set _cross_in {}",
+                "foreach _net [$_blk getNets] {",
+                "    set _st [$_net getSigType]",
+                '    if {$_st ne "SIGNAL"} continue',
+                "    set _nn [$_net getName]",
+                '    if {[string match "*clk*" [string tolower $_nn]] || [string match "*rst*" [string tolower $_nn]] || [string match "net_ls_*" $_nn]} continue',
+                '    set _drv_it ""; set _drv_in 0; set _dcx 0.0; set _dcy 0.0',
+                "    set _out_its {}; set _out_pts {}; set _in_its {}; set _in_pts {}",
+                "    foreach _it [$_net getITerms] {",
+                "        set _inst [$_it getInst]",
+                '        if {[$_inst getPlacementStatus] eq "NONE" || [$_inst getPlacementStatus] eq "UNPLACED"} continue',
+                "        set _iname [$_inst getName]",
+                '        if {[string match "ls_*" $_iname] || [string match "sw_*" $_iname]} continue',
+                "        set _bb [$_inst getBBox]",
+                "        set _cx [expr {([$_bb xMin] + [$_bb xMax]) / 2000.0}]",
+                "        set _cy [expr {([$_bb yMin] + [$_bb yMax]) / 2000.0}]",
+                "        set _in_dom [expr {[string match $_elem_pat $_iname] || ($_cx >= $_sx1 && $_cx <= $_sx2 && $_cy >= $_sy1 && $_cy <= $_sy2)}]",
+                '        if {[$_it getIoType] eq "OUTPUT"} {',
+                "            set _drv_it $_it; set _drv_in $_in_dom; set _dcx $_cx; set _dcy $_cy",
+                "        } elseif {$_in_dom} {",
+                "            lappend _in_its $_it; lappend _in_pts [list $_cx $_cy]",
+                "        } else {",
+                "            lappend _out_its $_it; lappend _out_pts [list $_cx $_cy]",
+                "        }",
+                "    }",
+                "    if {$_drv_in && [llength $_out_its] > 0} {",
+                "        set _pt [lindex $_out_pts 0]",
+                "        lappend _cross_out [list $_net $_dcx $_dcy [lindex $_pt 0] [lindex $_pt 1] $_out_its]",
+                "    } elseif {!$_drv_in && $_drv_it ne \"\" && [llength $_in_its] > 0} {",
+                "        set _pt [lindex $_in_pts 0]",
+                "        lappend _cross_in [list $_net $_dcx $_dcy [lindex $_pt 0] [lindex $_pt 1] $_in_its]",
+                "    }",
+                "}",
+                f'puts "SILIS: Detected [llength $_cross_out] out (L->H) and [llength $_cross_in] in (H->L) cross-domain nets for {src_dom}"',
+                "set _k 0",
+                "foreach _citem $_cross_out {",
+                "    set _onet [lindex $_citem 0]",
+                "    set _dx [lindex $_citem 1]; set _dy [lindex $_citem 2]",
+                "    set _tx [lindex $_citem 3]; set _ty [lindex $_citem 4]",
+                "    set _snk_its [lindex $_citem 5]",
+                "    set _bx [expr {($_tx < $_sx1) ? ($_sx1 - $_ls_w - 2.30) : (($_tx > $_sx2) ? ($_sx2 + 2.30) : max($_sx1, min($_sx2 - $_ls_w, $_dx)))}]",
+                "    set _by [expr {($_ty < $_sy1) ? ($_sy1 - $_ls_h - 2.72) : (($_ty > $_sy2) ? ($_sy2 + 2.72) : (($_dx < $_tx) ? $_dy : ($_sy2 + 2.72)))}]",
+                f'    set _ls_name "ls_{src_dom}_${{_k}}"',
+                '    set _ls_inst [_silis_place_ls $_blk $_ls_master $_ls_name $_bx $_by $_sx1 $_sy1 $_sx2 $_sy2 0]',
+                '    if {$_ls_inst ne "NULL"} {',
+                f'        set _shifted_net [odb::dbNet_create $_blk "net_ls_{src_dom}_${{_k}}"]',
+                '        if {$_shifted_net ne "NULL"} {',
+                '            set _itA [$_ls_inst findITerm "A"]; set _itX [$_ls_inst findITerm "X"]',
+                '            if {$_itA ne "NULL"} { $_itA connect $_onet }',
+                '            if {$_itX ne "NULL"} { $_itX connect $_shifted_net; foreach _sit $_snk_its { $_sit disconnect; $_sit connect $_shifted_net } }',
+                "        }",
+                '        if {$_n_vdd ne "NULL"} { foreach _p {VPWR VPB} { set _it [$_ls_inst findITerm $_p]; if {$_it ne "NULL"} { $_it connect $_n_vdd } } }',
+                '        if {$_n_dpwr ne "NULL"} { foreach _p {VPWRIN LOWLVPWR} { set _it [$_ls_inst findITerm $_p]; if {$_it ne "NULL"} { $_it connect $_n_dpwr } } }',
+                '        if {$_n_vss ne "NULL"} { foreach _p {VGND VNB} { set _it [$_ls_inst findITerm $_p]; if {$_it ne "NULL"} { $_it connect $_n_vss } } }',
+                "        set _sb [$_ls_inst getBBox]",
+                "        lappend _ls_boxes [list [$_sb xMin] [$_sb yMin] [$_sb xMax] [$_sb yMax]]",
+                "        incr _ls_lh_idx",
+                "    }",
+                "    incr _k",
+                "}",
+                "set _kh 0",
+                "foreach _citem $_cross_in {",
+                "    set _onet [lindex $_citem 0]",
+                "    set _sx [lindex $_citem 3]; set _sy [lindex $_citem 4]",
+                "    set _snk_its [lindex $_citem 5]",
+                f'    set _ls_name "ls_hl_{src_dom}_${{_kh}}"',
+                '    set _ls_inst [_silis_place_ls $_blk $_ls_master $_ls_name $_sx $_sy $_sx1 $_sy1 $_sx2 $_sy2 1]',
+                '    if {$_ls_inst ne "NULL"} {',
+                f'        set _shifted_net [odb::dbNet_create $_blk "net_ls_hl_{src_dom}_${{_kh}}"]',
+                '        if {$_shifted_net ne "NULL"} {',
+                '            set _itA [$_ls_inst findITerm "A"]; set _itX [$_ls_inst findITerm "X"]',
+                '            if {$_itA ne "NULL"} { $_itA connect $_onet }',
+                '            if {$_itX ne "NULL"} { $_itX connect $_shifted_net; foreach _sit $_snk_its { $_sit disconnect; $_sit connect $_shifted_net } }',
+                "        }",
+                '        if {$_n_dpwr ne "NULL"} { set _it [$_ls_inst findITerm "VPWR"]; if {$_it ne "NULL"} { $_it connect $_n_dpwr } }',
+                '        if {$_n_vdd ne "NULL"} { foreach _p {VPB VPWRIN LOWLVPWR} { set _it [$_ls_inst findITerm $_p]; if {$_it ne "NULL"} { $_it connect $_n_vdd } } }',
+                '        if {$_n_vss ne "NULL"} { foreach _p {VGND VNB} { set _it [$_ls_inst findITerm $_p]; if {$_it ne "NULL"} { $_it connect $_n_vss } } }',
+                "        set _sb [$_ls_inst getBBox]",
+                "        lappend _ls_boxes [list [$_sb xMin] [$_sb yMin] [$_sb xMax] [$_sb yMax]]",
+                "        incr _ls_hl_idx",
+                "    }",
+                "    incr _kh",
+                "}",
+            ])
+        lines.extend([
+            "foreach _ti [$_blk getInsts] {",
+            '    set _tm [[$_ti getMaster] getName]',
+            '    if {[string match "*tap*" $_tm] && ![string match "*lsbuf*" $_tm]} {',
+            "        set _tb [$_ti getBBox]",
+            "        foreach _sb $_ls_boxes {",
+            "            if {[$_tb xMin] < [lindex $_sb 2] && [$_tb xMax] > [lindex $_sb 0] && [$_tb yMin] < [lindex $_sb 3] && [$_tb yMax] > [lindex $_sb 1]} {",
+            "                odb::dbInst_destroy $_ti; break",
+            "            }",
+            "        }",
+            "    }",
+            "}",
+            'puts "SILIS: Synthesized $_ls_lh_idx L->H (outside) + $_ls_hl_idx H->L (inside) level shifters"',
+        ])
+        return lines
+
+    @staticmethod
+    def _build_global_connect_tcl(resolved: Dict[str, Any], force: bool = True) -> List[str]:
+        """Builds deterministic, domain-first global_connect rules that survive resumed OpenROAD sessions."""
+        active_pds = resolved.get("active_pds", [])
+        lines = [
+            "set _blk_gc [::ord::get_db_block]",
+            'if {[$_blk_gc findNet "VDD"] eq "NULL"} { odb::dbNet_create $_blk_gc "VDD" }',
+            'if {[$_blk_gc findNet "VSS"] eq "NULL"} { odb::dbNet_create $_blk_gc "VSS" }',
+            'if {[$_blk_gc findNet "VDDIO"] eq "NULL"} { odb::dbNet_create $_blk_gc "VDDIO" }',
+            'if {[$_blk_gc findNet "VSSIO"] eq "NULL"} { odb::dbNet_create $_blk_gc "VSSIO" }',
+            "clear_global_connect",
+            "# Register base core rails first so later domain/switch/shifter rules override under -force",
+            "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VPB$|^VDD$|^vccd1$} -power",
+            "add_global_connection -net {VSS} -pin_pattern {^VGND$|^VNB$|^VSS$|^vssd1$} -ground",
+            "add_global_connection -net {VDD} -inst_pattern {.*pad_vccd.*|.*pad_vdd_.*|.*IO_CORNER.*} -pin_pattern {^P_CORE$|^VCCD$|^DRN_LVC[12]$|^OGC_LVC$|^VCCHIB$|^VDDA$} -power",
+            "add_global_connection -net {VSS} -inst_pattern {.*pad_vssd.*|.*pad_vss_.*|.*IO_CORNER.*} -pin_pattern {^G_CORE$|^VSSD$|^SRC_BDY_LVC[12]$|^BDY2_B2B$|^VSSA$} -ground",
+            "add_global_connection -net {VDDIO} -inst_pattern {.*pad_vddio.*} -pin_pattern {^VDDIO$|^VDDIO_Q$|^VSWITCH$} -power",
+            "add_global_connection -net {VSSIO} -inst_pattern {.*pad_vssio.*} -pin_pattern {^VSSIO$|^VSSIO_Q$} -ground",
+        ]
+        for spd in active_pds:
+            spd_name = spd["name"]
+            d_pwr = spd["primary_power_net"]
+            elems = [e for e in spd.get("elements", []) if e]
+            lines.append(f'if {{[$_blk_gc findNet "{d_pwr}"] eq "NULL"}} {{ odb::dbNet_create $_blk_gc "{d_pwr}" }}')
+            lines.extend([
+                f'add_global_connection -net {{VDD}} -inst_pattern {{^sw_{spd_name}_.*}} -pin_pattern {{^VDDG$}} -power',
+                f'add_global_connection -net {{{d_pwr}}} -inst_pattern {{^sw_{spd_name}_.*}} -pin_pattern {{^VPWR$}} -power',
+                f'add_global_connection -net {{VDD}} -inst_pattern {{^ls_{spd_name}_.*}} -pin_pattern {{^VPWR$|^VPB$}} -power',
+                f'add_global_connection -net {{{d_pwr}}} -inst_pattern {{^ls_{spd_name}_.*}} -pin_pattern {{^VPWRIN$|^LOWLVPWR$}} -power',
+                f'add_global_connection -net {{{d_pwr}}} -inst_pattern {{^ls_hl_{spd_name}_.*}} -pin_pattern {{^VPWR$}} -power',
+                f'add_global_connection -net {{VDD}} -inst_pattern {{^ls_hl_{spd_name}_.*}} -pin_pattern {{^VPB$|^VPWRIN$|^LOWLVPWR$}} -power',
+            ])
+            for elem in elems:
+                e_pat = elem.replace("\\", "/")
+                lines.append(f'add_global_connection -net {{{d_pwr}}} -inst_pattern {{^{e_pat}/.*}} -pin_pattern {{^VPWR$|^VDD$}} -power')
+                lines.append(f'add_global_connection -net {{VDD}} -inst_pattern {{^{e_pat}/.*}} -pin_pattern {{^VPB$}} -power')
+        lines.append("global_connect -force" if force else "global_connect")
+        # Align POWER_SWITCH pins + welltap/physical cells sitting on switched domain met1 followpin rails
+        for spd in active_pds:
+            spd_name = spd["name"]
+            d_pwr = spd["primary_power_net"]
+            box = spd.get("box", [])
+            if len(box) != 4:
+                continue
+            sx1, sy1, sx2, sy2 = [float(v) for v in box]
+            lines.extend([
+                f'set _n_dp_gc [$_blk_gc findNet "{d_pwr}"]',
+                f'set _n_vdd_gc [$_blk_gc findNet "VDD"]',
+                'if {$_n_dp_gc ne "NULL"} {',
+                '    foreach _gi [$_blk_gc getInsts] {',
+                '        set _gn [$_gi getName]',
+                f'        if {{[string match "sw_{spd_name}_*" $_gn]}} {{',
+                '            set _git [$_gi findITerm "VPWR"]',
+                '            if {$_git ne "NULL"} { $_git disconnect; $_git connect $_n_dp_gc }',
+                '            set _gddg [$_gi findITerm "VDDG"]',
+                '            if {$_gddg ne "NULL" && $_n_vdd_gc ne "NULL"} { $_gddg disconnect; $_gddg connect $_n_vdd_gc }',
+                '            continue',
+                '        }',
+                f'        if {{[string match "ls_{spd_name}_*" $_gn]}} continue',
+                '        if {[$_gi getPlacementStatus] eq "NONE" || [$_gi getPlacementStatus] eq "UNPLACED"} continue',
+                '        set _gbb [$_gi getBBox]',
+                '        set _gcx [expr {([$_gbb xMin] + [$_gbb xMax]) / 2000.0}]',
+                '        set _gcy [expr {([$_gbb yMin] + [$_gbb yMax]) / 2000.0}]',
+                f'        if {{$_gcx >= {sx1:.3f} && $_gcx <= {sx2:.3f} && $_gcy >= {sy1:.3f} && $_gcy <= {sy2:.3f}}} {{',
+                '            set _git [$_gi findITerm "VPWR"]',
+                '            if {$_git ne "NULL"} { $_git disconnect; $_git connect $_n_dp_gc }',
+                '            set _gpb [$_gi findITerm "VPB"]',
+                '            if {$_gpb ne "NULL" && $_n_vdd_gc ne "NULL"} { $_gpb disconnect; $_gpb connect $_n_vdd_gc }',
+                '        }',
+                '    }',
+                '}',
+            ])
+        return lines
+
     def run_fps(self, tcl_out_path: Optional[str] = None, fresh: bool = True) -> bool:
         """
         Unified FloorPlan Synthesis (FPS) Orchestrator.
@@ -979,10 +2051,19 @@ class Pipeline:
         spec = getattr(self, "_spec_fps", {})
         fp_spec = spec.get("floorplan", {})
         io_spec = spec.get("iopins", {"mode": "chip"})
+        pdk_name = getattr(self.project, "pdk", "sky130") or "sky130"
+        site_cfg = SSAForge.get_site_config(pdk_name)
+        ic_cfg = SSAForge.get_interconnect(pdk_name)
+        tap_aliases = SSAForge.get_alias_category(pdk_name, "tapcells")
         pdn_spec = spec.get("pdn", {"enable_ring": True, "enable_trunks": True, "trunk_width": 3.2})
-        tap_spec = spec.get("tapcells", {"distance": 14.0, "tapcell_master": "sky130_fd_sc_hd__tapvpwrvgnd_1"})
-        psw_spec = spec.get("power_switches", {})
-        ls_spec = spec.get("level_shifters", {})
+        tap_spec = spec.get("tapcells", {
+            "distance": SSAForge.get(pdk_name, "tap_dist", default=14.0),
+            "tapcell_master": tap_aliases.get("default", SSAForge.get(pdk_name, "tap_cell", default="sky130_fd_sc_hd__tapvpwrvgnd_1")),
+        })
+        resolved = self._resolve_power_and_shifter_config()
+        regions = resolved["regions"]
+        active_pds_for_sw = resolved["active_pds"]
+        self._persist_fps_power_spec(resolved)
 
         def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
         fp_tcl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backendflow", "floorplanner", "silis_fp.tcl")).replace("\\", "/")
@@ -1006,26 +2087,6 @@ class Pipeline:
 
         # 1. VOLTAGE ISLAND PHYSICAL AREAS (IEEE 1801 UPF)
         lines.append("# === 1. VOLTAGE ISLAND PHYSICAL AREAS ===")
-        regions = list(fp_spec.get("regions", []))
-        # Also ingest regions from power_domains
-        power_domains = fp_spec.get("power_domains") or getattr(self, "_configured_power_domains", [])
-        for pd in power_domains:
-            pd_name = getattr(pd, "name", None) or (pd.get("name") if isinstance(pd, dict) else None)
-            pd_area = getattr(pd, "area", None) or getattr(pd, "area_box", None) or (pd.get("area") or pd.get("box") if isinstance(pd, dict) else None)
-            pd_elems = getattr(pd, "elements", None) or (pd.get("elements", []) if isinstance(pd, dict) else [])
-            is_top = getattr(pd, "is_top", False) or (pd.get("is_top", False) if isinstance(pd, dict) else False)
-            if not is_top and pd_name and pd_area and len(pd_area) == 4:
-                # Add to regions if not already present
-                if not any((r.get("name") == pd_name or r.get("module") == pd_name) for r in regions):
-                    elem_name = pd_elems[0] if pd_elems else pd_name
-                    regions.append({
-                        "name": pd_name,
-                        "module": elem_name,
-                        "box": list(pd_area),
-                        "density": 0.60,
-                        "halo": [10.0, 10.0, 10.0, 10.0]
-                    })
-
         for r in regions:
             mod = r.get("module") or r.get("name")
             rname = r.get("name") or mod
@@ -1051,7 +2112,7 @@ class Pipeline:
         core_y1 = die_area[1] + cm_b
         core_x2 = die_area[2] - cm_r
         core_y2 = die_area[3] - cm_t
-        site_name = fp_spec.get("site") or "unithd"
+        site_name = fp_spec.get("site") or site_cfg.get("name", "unithd")
 
         lines.extend([
             "",
@@ -1063,7 +2124,6 @@ class Pipeline:
         # 3. MACRO PLACEMENT & HALO ROW CUTTING
         macros = fp_spec.get("macros", [])
         if macros:
-            # Pre-flight DRC Containment Check
             for m in macros:
                 inst_name = m.get("inst") or m.get("inst_name") or m.get("name")
                 cell_name = m.get("cell") or m.get("master") or ""
@@ -1105,13 +2165,11 @@ class Pipeline:
                 density = r.get("density", 0.60)
                 halo = r.get("halo", [10.0, 10.0, 10.0, 10.0])
                 if box:
-                    lines.append(f'create_region -module "{rname}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -type exclusive -density {density} -halo {{{halo[0]} {halo[1]} {halo[2]} {halo[3]}}}')
+                    lines.append(f'create_region -name "{rname}" -module "{mod}" -box {{{box[0]} {box[1]} {box[2]} {box[3]}}} -type exclusive -density {density} -halo {{{halo[0]} {halo[1]} {halo[2]} {halo[3]}}}')
             lines.append("")
 
         # 5. FULL-CHIP I/O PAD RING OR BLOCK PIN GENERATION
-        mode = io_spec.get("mode", "chip").lower()
-        if mode in ("padring", "pad_ring", "pads", "full_chip"):
-            mode = "chip"
+        mode = self._normalize_iopins_mode(io_spec.get("mode", "chip"))
         pdk_str = str(getattr(self.project, "pdk", "") or "").lower()
         is_gf180 = "gf180" in pdk_str or "gf180" in str(fp_spec.get("site", "")).lower()
 
@@ -1138,13 +2196,11 @@ class Pipeline:
                     "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
                     "place_corners gf180mcu_fd_io__cor",
                     "",
-                    "# Dedicated Core Supply Pads for GF180MCU",
                     "place_pad -master gf180mcu_fd_io__dvdd -row IO_SOUTH -location 380.000 pad_vdd_core_s",
                     "place_pad -master gf180mcu_fd_io__dvss -row IO_SOUTH -location 465.000 pad_vss_core_s",
                     "place_pad -master gf180mcu_fd_io__dvdd -row IO_NORTH -location 380.000 pad_vdd_core_n",
                     "place_pad -master gf180mcu_fd_io__dvss -row IO_NORTH -location 465.000 pad_vss_core_n",
                     "",
-                    "# Dynamic Signal Pad & Toplevel Pin Generation",
                     "set _blk [ord::get_db_block]",
                     "set _all_bterms [$_blk getBTerms]",
                     "set _bcount [llength $_all_bterms]",
@@ -1182,7 +2238,6 @@ class Pipeline:
                     "    incr _idx",
                     "}",
                     "",
-                    "# Pad Ring Fillers and Abutment",
                     "set pad_fill {gf180mcu_fd_io__fill10 gf180mcu_fd_io__fill5 gf180mcu_fd_io__fill1}",
                     "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
                     "    place_io_fill -row $row {*}$pad_fill",
@@ -1191,95 +2246,8 @@ class Pipeline:
                     "",
                 ])
             else:
-                lines.extend([
-                    "# === 5. FULL-CHIP I/O PAD RING GENERATION (Sky130) ===",
-                    "make_tracks",
-                    "proc _resolve_pin_net {pname} {",
-                    "    set blk [ord::get_db_block]",
-                    "    set bterm [$blk findBTerm $pname]",
-                    '    if {$bterm ne "NULL" && [$bterm getNet] ne "NULL"} {',
-                    "        return [[$bterm getNet] getName]",
-                    "    }",
-                    "    return $pname",
-                    "}",
-                    "set _db [::ord::get_db]",
-                    "set _has_site 0",
-                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_SITE"] != "NULL"} { set _has_site 1; break } }',
-                    'if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 200 }',
-                    "set _has_csite 0",
-                    'foreach _lib [$_db getLibs] { if {[$_lib findSite "IO_CSITE"] != "NULL"} { set _has_csite 1; break } }',
-                    'if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }',
-                    "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
-                    "place_corners sky130_ef_io__corner_pad",
-                    "",
-                    "# Dedicated Core & IO Supply Pads (Outer Corners clearance: VDD, VSS, VDDIO, VSSIO on each edge)",
-                    "foreach _row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
-                    "    place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location 220.000 pad_vccd_${_row}",
-                    "    place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location 305.000 pad_vssd_${_row}",
-                    "    place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location 390.000 pad_vddio_${_row}",
-                    "    place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location 475.000 pad_vssio_${_row}",
-                    "}",
-                    "",
-                    "# Dynamic Signal Pad & Toplevel Pin Generation",
-                    "set _blk [ord::get_db_block]",
-                    "set _all_bterms [$_blk getBTerms]",
-                    "set _bcount [llength $_all_bterms]",
-                    "set _quarter [expr {int(ceil($_bcount / 4.0))}]",
-                    "set _idx 0",
-                    "foreach _bterm $_all_bterms {",
-                    "    set _bname [$_bterm getName]",
-                    '    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname "_"]',
-                    "    set _side_idx [expr {$_idx / $_quarter}]",
-                    "    set _pos_in_side [expr {$_idx % $_quarter}]",
-                    '    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]',
-                    '    if {$_row eq ""} { set _row "IO_WEST" }',
-                    "    set _da [$_blk getDieArea]",
-                    "    set _die_w_um [expr {[$_da xMax] / 1000.0}]",
-                    "    set _die_h_um [expr {[$_da yMax] / 1000.0}]",
-                    '    set _side_dim [expr {($_row eq "IO_NORTH" || $_row eq "IO_SOUTH") ? $_die_w_um : $_die_h_um}]',
-                    "    set _avail_start 560.0",
-                    "    set _avail_end [expr {$_side_dim - 220.0}]",
-                    "    set _span [expr {$_avail_end - $_avail_start}]",
-                    "    set _pitch [expr {$_quarter > 1 ? ($_span / double($_quarter)) : 85.0}]",
-                    "    if {$_pitch < 82.0} { set _pitch 82.0 }",
-                    "    if {$_pitch > 135.0} { set _pitch 135.0 }",
-                    "    set _loc [expr {round(($_avail_start + $_pos_in_side * $_pitch) / 0.005) * 0.005}]",
-                    '    set _pad_inst "pad_${_safe_name}"',
-                    "    place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row $_row -location $_loc $_pad_inst",
-                    "    set _pnet [$_bterm getNet]",
-                    '    set _pnet_name [expr {$_pnet ne "NULL" ? [$_pnet getName] : $_bname}]',
-                    "    set _dir [$_bterm getIoType]",
-                    "    set _pin_coord [expr {round(($_loc + 40.0) / 0.005) * 0.005}]",
-                    '    if {$_row eq "IO_SOUTH"} {',
-                    '        place_pin -pin_name "$_bname" -layer met2 -location "$_pin_coord 210.0"',
-                    '    } elseif {$_row eq "IO_NORTH"} {',
-                    f'        place_pin -pin_name "$_bname" -layer met2 -location "$_pin_coord [expr {{{die_h} - 210.0}}]"',
-                    '    } elseif {$_row eq "IO_WEST"} {',
-                    '        place_pin -pin_name "$_bname" -layer met3 -location "210.0 $_pin_coord"',
-                    "    } else {",
-                    f'        place_pin -pin_name "$_bname" -layer met3 -location "[expr {{{die_w} - 210.0}}] $_pin_coord"',
-                    "    }",
-                    '    if {$_dir eq "OUTPUT"} {',
-                    '        connect_pin $_pnet_name "$_pad_inst/OUT"',
-                    "    } else {",
-                    '        connect_pin $_pnet_name "$_pad_inst/IN"',
-                    "    }",
-                    "    incr _idx",
-                    "}",
-                    "",
-                    "# Connect bond pads to external IO terminals",
-                    "# (Note: In pure padring mode, internal pins connect to pad IN/OUT; PAD terminal is bondpad)",
-                    "",
-                    "# Pad Ring Fillers and Abutment",
-                    "set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}",
-                    "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
-                    "    place_io_fill -row $row {*}$pad_fill",
-                    "}",
-                    "connect_by_abutment",
-                    "",
-                ])
+                lines.extend(self._build_sky130_padring_lines(io_spec, die_w, die_h, include_io_lefs=False))
         else:
-            # Block mode: standard place_pins on specified routing layers
             hor_lyr = io_spec.get("hor_layers") or "met3"
             ver_lyr = io_spec.get("ver_layers") or "met4"
             corn_avoid = io_spec.get("corner_avoidance", 0.5)
@@ -1296,7 +2264,6 @@ class Pipeline:
         tap_master = tap_spec.get("tapcell_master", "sky130_fd_sc_hd__tapvpwrvgnd_1")
         lines.extend([
             "# === 6. TAPCELL INSERTION ===",
-            "# Deduplicate overlapping rows created by multi-domain row slicing",
             "set _blk [ord::get_db_block]",
             "set _seen_rows [dict create]",
             "foreach _r [$_blk getRows] {",
@@ -1314,328 +2281,10 @@ class Pipeline:
             "",
         ])
 
-        # 6B. PHYSICAL POWER SWITCH & LEVEL SHIFTER CELL INSERTION
-        # Check power domains or psw_spec for switched domains needing physical header switches
-        active_pds_for_sw = [p for p in (fp_spec.get("power_domains") or getattr(self, "_configured_power_domains", []))
-                             if not getattr(p, "is_top", False) and getattr(p, "name", "") and p.name != "PD_TOP"]
-        configured_domains = psw_spec.get("domains", [])
-        sw_cell_master = psw_spec.get("cell_master", "POWER_SWITCH")
-        sw_cols = psw_spec.get("columns", 4)
-        sw_pitch = psw_spec.get("pitch_um", 40.0)
-
-        # Level shifter spec
-        ls_rules = ls_spec.get("rules", [])
-        ls_cell_master = ls_spec.get("cell_master", "sky130_fd_sc_hd__lpflow_lsbuf_lh_hl_isowell_tap_1")
-
-        lines.extend([
-            "# === 6B. PHYSICAL POWER SWITCHES & LEVEL SHIFTERS ===",
-            "set _db [::ord::get_db]",
-            f'set _sw_master [$_db findMaster "{sw_cell_master}"]',
-            f'set _ls_master [$_db findMaster "{ls_cell_master}"]',
-            'if {$_ls_master eq "NULL"} {',
-            '    set _ls_master [$_db findMaster "sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_4"]',
-            '}',
-            'if {$_ls_master eq "NULL"} {',
-            '    set _ls_master [$_db findMaster "sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_1"]',
-            '}',
-        ])
-
-        for spd in active_pds_for_sw:
-            spd_name = getattr(spd, "name", "")
-            is_enabled = getattr(spd, "enable_physical_switch", False) or (spd_name in configured_domains) or bool(psw_spec)
-            if not is_enabled:
-                continue
-
-            spd_area = getattr(spd, "area_box", None) or getattr(spd, "area", None)
-            if not spd_area or len(spd_area) != 4:
-                # Try finding from regions
-                for r in regions:
-                    if r.get("name") == spd_name or r.get("module") == spd_name:
-                        spd_area = r.get("box")
-                        break
-
-            if spd_area and len(spd_area) == 4:
-                rx1, ry1, rx2, ry2 = [float(v) for v in spd_area]
-                sw_c = getattr(spd, "switch_columns", sw_cols)
-                sw_p = getattr(spd, "switch_pitch", sw_pitch)
-                is_adaptive = getattr(spd, "adaptive_placement", False) or psw_spec.get("adaptive_placement", False)
-                use_shrink_wrap = psw_spec.get("shrink_wrap", True)
-                tile_w, tile_h = psw_spec.get("tile_size_um", (24.840, 21.760))
-
-                lines.extend([
-                    f"\n# Synthesizing Power Switch Matrix for {spd_name}",
-                    'if {$_sw_master ne "NULL"} {',
-                    f"    set _rx1 {rx1}; set _ry1 {ry1}; set _rx2 {rx2}; set _ry2 {ry2}",
-                    f"    set _cols {sw_c}; set _pitch {sw_p}",
-                    "    set _sw_idx 0",
-                ])
-
-                if is_adaptive and use_shrink_wrap:
-                    # Tapeout-grade Rectilinear Tile Shrink-Wrap:
-                    # 1. Discretize domain fence into exact site-pitch aligned tiles (W_tile=24.840 um = 54 sites x 0.460 um, H_tile=21.760 um = 8 rows x 2.720 um).
-                    # 2. Map coarse-placed cell instances into occupancy bins.
-                    # 3. Dilate active bins by 1 tile hop (+20 um routing corridor) clipped against legal UPF domain fence.
-                    # 4. Stamp switches strictly inside dilated tiles on 5.44 um even-row boundaries.
-                    # 5. Place placement blockages over empty tiles to prevent logic drift.
-                    lines.extend([
-                        f'    # Rectilinear Tile-Grid Shrink-Wrap for {spd_name}',
-                        f'    set _tw {tile_w}; set _th {tile_h}',
-                        f'    set _nx [expr {{int(ceil(($_rx2 - $_rx1) / $_tw))}}]',
-                        f'    set _ny [expr {{int(ceil(($_ry2 - $_ry1) / $_th))}}]',
-                        '    array unset _tile_occ; array unset _tile_active',
-                        '',
-                        '    # Step 1: Detect occupied bins from cell logic',
-                        '    set _cell_cnt 0',
-                        '    foreach _i [$_blk getInsts] {',
-                        '        set _master [$_i getMaster]',
-                        '        if {[$_master getType] eq "CORE"} {',
-                        '            set _bbox [$_i getBBox]',
-                        '            set _cx [expr {([$_bbox xMin] + [$_bbox xMax]) / 2000.0}]',
-                        '            set _cy [expr {([$_bbox yMin] + [$_bbox yMax]) / 2000.0}]',
-                        '            if {$_cx >= $_rx1 && $_cx <= $_rx2 && $_cy >= $_ry1 && $_cy <= $_ry2} {',
-                        '                set _ti [expr {int(floor(($_cx - $_rx1) / $_tw))}]',
-                        '                set _tj [expr {int(floor(($_cy - $_ry1) / $_th))}]',
-                        '                if {$_ti >= 0 && $_ti < $_nx && $_tj >= 0 && $_tj < $_ny} {',
-                        '                    set _tile_occ($_ti,$_tj) 1',
-                        '                    incr _cell_cnt',
-                        '                }',
-                        '            }',
-                        '        }',
-                        '    }',
-                        '',
-                        '    # Step 2: 1-hop morphological dilation clipped to legal domain fence',
-                        '    if {$_cell_cnt > 0} {',
-                        '        for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
-                        '            for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
-                        '                if {[info exists _tile_occ($_ti,$_tj)]} {',
-                        '                    for {set _di -1} {$_di <= 1} {incr _di} {',
-                        '                        for {set _dj -1} {$_dj <= 1} {incr _dj} {',
-                        '                            set _ni [expr {$_ti + $_di}]',
-                        '                            set _nj [expr {$_tj + $_dj}]',
-                        '                            if {$_ni >= 0 && $_ni < $_nx && $_nj >= 0 && $_nj < $_ny} {',
-                        '                                set _tile_active($_ni,$_nj) 1',
-                        '                            }',
-                        '                        }',
-                        '                    }',
-                        '                }',
-                        '            }',
-                        '        }',
-                        '    } else {',
-                        '        # Fallback if unplaced: activate all tiles in domain',
-                        '        for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
-                        '            for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
-                        '                set _tile_active($_ti,$_tj) 1',
-                        '            }',
-                        '        }',
-                        '    }',
-                        '',
-                        '    # Step 3: Stamp switches strictly inside dilated tiles',
-                        '    # Row snapping to 5.44 um (even 2.72 um site rows) for VPWR/VGND polarity',
-                        '    for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
-                        '        for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
-                        '            if {[info exists _tile_active($_ti,$_tj)]} {',
-                        '                set _bx1 [expr {$_rx1 + $_ti * $_tw}]',
-                        '                set _by1 [expr {$_ry1 + $_tj * $_th}]',
-                        '                set _bx2 [expr {$_bx1 + $_tw}]',
-                        '                set _by2 [expr {$_by1 + $_th}]',
-                        '                if {$_bx2 > $_rx2} { set _bx2 $_rx2 }',
-                        '                if {$_by2 > $_ry2} { set _by2 $_ry2 }',
-                        '                set _mid_x [expr {($_bx1 + $_bx2) / 2.0}]',
-                        '                set _y_start [expr {ceil($_by1 / 5.44) * 5.44}]',
-                        '                for {set _sw_y $_y_start} {$_sw_y < [expr {$_by2 - 4.0}]} {set _sw_y [expr {$_sw_y + 10.88}]} {',
-                        f'                    set _sw_name "sw_{spd_name}_c${{_ti}}_r${{_sw_idx}}"',
-                        '                    set _inst [odb::dbInst_create $_blk $_sw_master $_sw_name]',
-                        '                    if {$_inst ne "NULL"} {',
-                        '                        set _ix_dbu [expr {int(round($_mid_x * 1000))}]',
-                        '                        set _iy_dbu [expr {int(round($_sw_y * 1000))}]',
-                        '                        $_inst setOrigin $_ix_dbu $_iy_dbu',
-                        '                        $_inst setOrient "R0"',
-                        '                        $_inst setPlacementStatus "COVER"',
-                        '                    }',
-                        '                    incr _sw_idx',
-                        '                }',
-                        '            }',
-                        '        }',
-                        '    }',
-                        '',
-                        '    # Step 4: Add soft placement blockages over empty tiles to prevent logic drift',
-                        '    for {set _ti 0} {$_ti < $_nx} {incr _ti} {',
-                        '        for {set _tj 0} {$_tj < $_ny} {incr _tj} {',
-                        '            if {![info exists _tile_active($_ti,$_tj)]} {',
-                        '                set _blk_x1 [expr {$_rx1 + $_ti * $_tw}]',
-                        '                set _blk_y1 [expr {$_ry1 + $_tj * $_th}]',
-                        '                set _blk_x2 [expr {$_blk_x1 + $_tw}]',
-                        '                set _blk_y2 [expr {$_blk_y1 + $_th}]',
-                        '                if {$_blk_x2 > $_rx2} { set _blk_x2 $_rx2 }',
-                        '                if {$_blk_y2 > $_ry2} { set _blk_y2 $_ry2 }',
-                        '                # Mark tile as placement blockage in OpenROAD',
-                        '                catch { create_placement_blockage -soft -name "blk_${spd_name}_${_ti}_${_tj}" -box "$_blk_x1 $_blk_y1 $_blk_x2 $_blk_y2" }',
-                        '            }',
-                        '        }',
-                        '    }',
-                    ])
-                elif is_adaptive:
-                    # Adaptive Centroid Anchoring: Calculate center of gravity (X_CoG, Y_CoG) of standard cells in this domain
-                    lines.extend([
-                        f'    # Adaptive CoG Switch Placement: Center power switch columns around {spd_name} cell centroid',
-                        f'    set _total_x 0.0; set _cell_cnt 0',
-                        f'    foreach _i [$_blk getInsts] {{',
-                        f'        set _master [$_i getMaster]',
-                        f'        if {{[$_master getType] eq "CORE"}} {{',
-                        f'            set _bbox [$_i getBBox]',
-                        f'            set _cx [expr {{([$_bbox xMin] + [$_bbox xMax]) / 2000.0}}]',
-                        f'            set _cy [expr {{([$_bbox yMin] + [$_bbox yMax]) / 2000.0}}]',
-                        f'            if {{$_cx >= $_rx1 && $_cx <= $_rx2 && $_cy >= $_ry1 && $_cy <= $_ry2}} {{',
-                        f'                set _total_x [expr {{$_total_x + $_cx}}]',
-                        f'                incr _cell_cnt',
-                        f'            }}',
-                        f'        }}',
-                        f'    }}',
-                        f'    if {{$_cell_cnt > 0}} {{',
-                        f'        set _cog_x [expr {{$_total_x / $_cell_cnt}}]',
-                        f'        set _span [expr {{($_cols - 1) * $_pitch}}]',
-                        f'        set _start_x [expr {{$_cog_x - ($_span / 2.0)}}]',
-                        f'        if {{$_start_x < [expr {{$_rx1 + 15.0}}]}} {{ set _start_x [expr {{$_rx1 + 15.0}}] }}',
-                        f'        if {{$_start_x + $_span > [expr {{$_rx2 - 15.0}}]}} {{ set _start_x [expr {{$_rx2 - 15.0 - $_span}}] }}',
-                        f'    }} else {{',
-                        f'        set _start_x [expr {{$_rx1 + 15.0}}]',
-                        f'    }}',
-                        f'    for {{set _c 0}} {{$_c < $_cols}} {{incr _c}} {{',
-                        f'        set _sw_x [expr {{$_start_x + $_c * $_pitch}}]',
-                        f'        if {{$_sw_x > [expr {{$_rx2 - 15.0}}]}} {{ break }}',
-                        f'        set _y_start [expr {{ceil($_ry1 / 5.44) * 5.44}}]',
-                        f'        for {{set _sw_y $_y_start}} {{$_sw_y < [expr {{$_ry2 - 6.0}}]}} {{set _sw_y [expr {{$_sw_y + 10.88}}]}} {{',
-                        f'            set _sw_name "sw_{spd_name}_c${{_c}}_r${{_sw_idx}}"',
-                        f'            set _inst [odb::dbInst_create $_blk $_sw_master $_sw_name]',
-                        f'            if {{$_inst ne "NULL"}} {{',
-                        f'                set _ix_dbu [expr {{int(round($_sw_x * 1000))}}]',
-                        f'                set _iy_dbu [expr {{int(round($_sw_y * 1000))}}]',
-                        f'                $_inst setOrigin $_ix_dbu $_iy_dbu',
-                        f'                $_inst setOrient "R0"',
-                        f'                $_inst setPlacementStatus "COVER"',
-                        f'            }}',
-                        f'            incr _sw_idx',
-                        f'        }}',
-                        f'    }}',
-                    ])
-                else:
-                    lines.extend([
-                        "    for {set _c 0} {$_c < $_cols} {incr _c} {",
-                        "        set _sw_x [expr {$_rx1 + 15.0 + $_c * $_pitch}]",
-                        "        if {$_sw_x > [expr {$_rx2 - 15.0}]} { break }",
-                        "        # Rows are at 2.72 um pitch, snap power switch to even rows (5.44 um)",
-                        "        set _y_start [expr {ceil($_ry1 / 5.44) * 5.44}]",
-                        "        for {set _sw_y $_y_start} {$_sw_y < [expr {$_ry2 - 6.0}]} {set _sw_y [expr {$_sw_y + 10.88}]} {",
-                        f'            set _sw_name "sw_{spd_name}_c${{_c}}_r${{_sw_idx}}"',
-                        '            set _inst [odb::dbInst_create $_blk $_sw_master $_sw_name]',
-                        '            if {$_inst ne "NULL"} {',
-                        "                set _ix_dbu [expr {int(round($_sw_x * 1000))}]",
-                        "                set _iy_dbu [expr {int(round($_sw_y * 1000))}]",
-                        "                $_inst setOrigin $_ix_dbu $_iy_dbu",
-                        '                $_inst setOrient "R0"',
-                        '                $_inst setPlacementStatus "COVER"',
-                        "            }",
-                        "            incr _sw_idx",
-                        "        }",
-                        "    }",
-                    ])
-                lines.extend([
-                    f'    puts "SILIS: Synthesized $_sw_idx physical power switch cells in {spd_name}"',
-                    "}",
-                ])
-
-        # Synthesize level shifter cells along domain boundaries
-        if ls_rules:
-            lines.extend([
-                "\n# Synthesizing IEEE 1801 Level Shifters along domain boundaries",
-                'if {$_ls_master ne "NULL"} {',
-                "    set _ls_idx 0",
-            ])
-            for idx, rule in enumerate(ls_rules):
-                src_dom = rule.get("source") or rule.get("domain", "")
-                snk_dom = rule.get("sink") or "PD_TOP"
-                # Find source domain boundary
-                src_area = None
-                for spd in active_pds_for_sw:
-                    if getattr(spd, "name", "") == src_dom:
-                        src_area = getattr(spd, "area_box", None) or getattr(spd, "area", None)
-                        break
-                if not src_area:
-                    for r in regions:
-                        if r.get("name") == src_dom or r.get("module") == src_dom:
-                            src_area = r.get("box")
-                            break
-
-                if src_area and len(src_area) == 4:
-                    sx1, sy1, sx2, sy2 = [float(v) for v in src_area]
-                    lines.extend([
-                        f"    # Crossing-Net Adaptive Snapping for {src_dom} -> {snk_dom}",
-                        f"    set _sx1 {sx1}; set _sy1 {sy1}; set _sx2 {sx2}; set _sy2 {sy2}",
-                        "    # Trace actual cross-domain nets connecting from source domain to target domain",
-                        f'    set _cross_nets {{}}',
-                        f'    foreach _net [$_blk getNets] {{',
-                        f'        set _sig_type [$_net getSigType]',
-                        f'        if {{$_sig_type eq "POWER" || $_sig_type eq "GROUND"}} continue',
-                        f'        set _has_src 0; set _has_snk 0; set _driver_pt ""',
-                        '        foreach _it [$_net getITerms] {',
-                        '            set _inst [$_it getInst]',
-                        '            set _bbox [$_inst getBBox]',
-                        '            set _cx [expr {([$_bbox xMin] + [$_bbox xMax]) / 2000.0}]',
-                        '            set _cy [expr {([$_bbox yMin] + [$_bbox yMax]) / 2000.0}]',
-                        '            set _in_src [expr {$_cx >= $_sx1 && $_cx <= $_sx2 && $_cy >= $_sy1 && $_cy <= $_sy2}]',
-                        '            if {$_in_src} {',
-                        '                set _has_src 1',
-                        '                set _iotype [$_it getIoType]',
-                        '                if {[string match "*output*" $_iotype] || [string match "*OUTPUT*" $_iotype]} {',
-                        '                    set _driver_pt [list $_cx $_cy]',
-                        '                }',
-                        '            } else {',
-                        '                set _has_snk 1',
-                        '            }',
-                        '        }',
-                        f'        if {{$_has_src && $_has_snk && [llength $_driver_pt] == 2}} {{',
-                        f'            lappend _cross_nets $_driver_pt',
-                        f'        }}',
-                        f'    }}',
-                        f'    set _num_cross [llength $_cross_nets]',
-                        f'    if {{$_num_cross == 0}} {{',
-                        f'        # Fallback perimeter default',
-                        f'        for {{set _k 0}} {{$_k < 16}} {{incr _k}} {{',
-                        f'            set _lx [expr {{$_sx1 + 8.0 + $_k * 12.0}}]',
-                        f'            if {{$_lx > [expr {{$_sx2 - 10.0}}]}} {{ set _lx [expr {{$_sx2 - 10.0}}] }}',
-                        f'            lappend _cross_nets [list $_lx [expr {{$_sy1 + 10.0}}]]',
-                        f'        }}',
-                        f'    }}',
-                        f'    set _k 0',
-                        f'    foreach _pt $_cross_nets {{',
-                        f'        set _dcx [lindex $_pt 0]; set _dcy [lindex $_pt 1]',
-                        f'        # Snap to outer tile perimeter of active shrink-wrapped logic cluster facing PD_TOP',
-                        f'        set _lx $_dcx',
-                        f'        set _ly [expr {{$_sy2 - 5.44}}]',
-                        f'        # Site row legalization (0.460 um site pitch, 2.72 um row pitch)',
-                        f'        set _lx [expr {{round($_lx / 0.460) * 0.460}}]',
-                        f'        set _ly [expr {{round($_ly / 2.720) * 2.720}}]',
-                        f'        if {{$_lx < [expr {{$_sx1 + 4.0}}]}} {{ set _lx [expr {{$_sx1 + 4.0}}] }}',
-                        f'        if {{$_lx > [expr {{$_sx2 - 10.0}}]}} {{ set _lx [expr {{$_sx2 - 10.0}}] }}',
-                        f'        set _ls_name "ls_{src_dom}_${{_k}}"',
-                        f'        set _inst [odb::dbInst_create $_blk $_ls_master $_ls_name]',
-                        f'        if {{$_inst ne "NULL"}} {{',
-                        f'            set _lx_dbu [expr {{int(round($_lx * 1000))}}]',
-                        f'            set _ly_dbu [expr {{int(round($_ly * 1000))}}]',
-                        f'            $_inst setOrigin $_lx_dbu $_ly_dbu',
-                        f'            $_inst setOrient "R0"',
-                        f'            $_inst setPlacementStatus "COVER"',
-                        f'            incr _ls_idx',
-                        f'        }}',
-                        f'        incr _k',
-                        f'        if {{$_k >= 32}} break',
-                        f'    }}',
-                    ])
-            lines.extend([
-                '    puts "SILIS: Synthesized $_ls_idx boundary level shifters across voltage islands"',
-                "}",
-                "",
-            ])
+        # 6B. INITIAL SITE-ALIGNED POWER SWITCH SYNTHESIS (Adaptive/Level-Shifter refinement completes post-placement in place())
+        lines.extend(["# === 6B. PHYSICAL POWER SWITCHES ==="])
+        lines.extend(self._tcl_site_snap_helpers())
+        lines.extend(self._build_power_switch_tcl(resolved, replace_existing=False))
 
         # 7. PDN POWER GRID & PAD TRUNK SYNTHESIS
         trunk_w = pdn_spec.get("trunk_width", 3.2)
@@ -1679,39 +2328,24 @@ class Pipeline:
                 '}',
             ])
 
-        lines.extend([
-            "",
-            "# Power Net Bindings & Supply Pads",
-            'if {[$_blk findNet "VDD"] eq "NULL"} { odb::dbNet_create $_blk "VDD" }',
-            'if {[$_blk findNet "VSS"] eq "NULL"} { odb::dbNet_create $_blk "VSS" }',
-            "add_global_connection -net {VDD} -inst_pattern {.*pad_v.*|.*IO_CORNER.*} -pin_pattern {^P_CORE$|^VCCD$|^DRN_LVC[12]$|^OGC_LVC$|^VCCHIB$|^VDDA$} -power",
-            "add_global_connection -net {VSS} -inst_pattern {.*pad_v.*|.*IO_CORNER.*} -pin_pattern {^G_CORE$|^VSSD$|^SRC_BDY_LVC[12]$|^BDY2_B2B$|^VSSA$} -ground",
-            "add_global_connection -net {VDDIO} -inst_pattern {.*} -pin_pattern {^VDDIO$|^VDDIO_Q$|^VSWITCH$} -power",
-            "add_global_connection -net {VSSIO} -inst_pattern {.*} -pin_pattern {^VSSIO$|^VSSIO_Q$} -ground",
-            "add_global_connection -net {VDD} -pin_pattern {^VPWR$|^VDD$|^vccd1$} -power",
-            "add_global_connection -net {VSS} -pin_pattern {^VGND$|^VSS$|^vssd1$} -ground",
-        ])
-
-        # Switched Power Domains
-        proj_pds = getattr(self, "_configured_power_domains", None) or (self.project.get_power_domains() if hasattr(self.project, "get_power_domains") else [])
-        switched_pds = [p for p in proj_pds if not getattr(p, "is_top", False) and getattr(p, "name", "") and p.name != "PD_TOP"]
-        for spd in switched_pds:
-            d_pwr = f"VDD_{spd.name}"
-            spd_area = getattr(spd, "area", None) or getattr(spd, "area_box", None) or []
+        for spd in active_pds_for_sw:
+            spd_name = spd["name"]
+            spd_area = spd["box"]
             if len(spd_area) == 4:
                 x1, y1, x2, y2 = spd_area
                 lines.extend([
-                    f'if {{[$_blk findRegion "{spd.name}"] eq "NULL"}} {{',
-                    f'    set _r [odb::dbRegion_create $_blk "{spd.name}"]',
+                    f'if {{[$_blk findRegion "{spd_name}"] eq "NULL"}} {{',
+                    f'    set _r [odb::dbRegion_create $_blk "{spd_name}"]',
                     f'    set _dbu [[::ord::get_db_tech] getDbUnitsPerMicron]',
-                    f'    catch {{ odb::dbBox_create $_r [expr {{int({x1:.3f} * $_dbu)}}] [expr {{int({y1:.3f} * $_dbu)}}] [expr {{int({x2:.3f} * $_dbu)}}] [expr {{int({y2:.3f} * $_dbu)}}] }}',
+                    f'    odb::dbBox_create $_r [expr {{int({x1:.3f} * $_dbu)}}] [expr {{int({y1:.3f} * $_dbu)}}] [expr {{int({x2:.3f} * $_dbu)}}] [expr {{int({y2:.3f} * $_dbu)}}]',
                     f'}}',
                 ])
-            lines.extend([
-                f'if {{[$_blk findNet "{d_pwr}"] eq "NULL"}} {{ odb::dbNet_create $_blk "{d_pwr}" }}',
-                f'add_global_connection -net {{{d_pwr}}} -region {{{spd.name}}} -pin_pattern {{^VPWR$|^VDD$}} -power',
-                f'add_global_connection -net {{VSS}} -region {{{spd.name}}} -pin_pattern {{^VGND$|^VSS$}} -ground',
-            ])
+
+        lines.extend([
+            "",
+            "# Power Net Bindings & Supply Pads (Domain-First Priority)",
+        ])
+        lines.extend(self._build_global_connect_tcl(resolved))
 
         s_width = stripe_w_cfg if stripe_w_cfg is not None else 1.6
         s_pitch = stripe_p_cfg if stripe_p_cfg is not None else 27.2
@@ -1727,7 +2361,6 @@ class Pipeline:
             r_width_val = 0.48
 
         lines.extend([
-            "global_connect",
             "",
             "# Core Top PDN Grid & Peripheral Power Ring",
             "set_voltage_domain -name {Core} -power {VDD} -ground {VSS}",
@@ -1748,7 +2381,6 @@ class Pipeline:
                 f'add_pdn_connect -grid {{grid_top}} -layers "{ring_v} {ring_h}"',
             ])
         else:
-            # Block mode: generate followpin standard-cell power rails and explicit orthogonal trunk stripes for both VDD and VSS
             off_vss = s_offset + (s_pitch / 2.0)
             lines.extend([
                 f'add_pdn_stripe -grid {{grid_top}} -layer $_pdn_bot -width {{{r_width_val}}} -followpins',
@@ -1757,22 +2389,17 @@ class Pipeline:
                 'add_pdn_connect -grid {grid_top} -layers "$_pdn_bot $_pdn_top"',
             ])
 
-        for spd in switched_pds:
-            grid_n = f"grid_{spd.name.lower()}"
-            d_pwr = f"VDD_{spd.name}"
-            # Check domain width to avoid PDN-0185
-            spd_area = getattr(spd, "area_box", None) or getattr(spd, "area", None)
-            if not spd_area or len(spd_area) != 4:
-                for r in regions:
-                    if r.get("name") == spd.name or r.get("module") == spd.name:
-                        spd_area = r.get("box")
-                        break
-            spd_w = (float(spd_area[2]) - float(spd_area[0])) if (spd_area and len(spd_area) == 4) else 100.0
+        for spd in active_pds_for_sw:
+            spd_name = spd["name"]
+            grid_n = f"grid_{spd_name.lower()}"
+            d_pwr = spd["primary_power_net"]
+            spd_area = spd["box"]
+            spd_w = float(spd_area[2]) - float(spd_area[0])
 
             lines.extend([
-                f"\n# Dedicated PDN Grid for {spd.name}",
-                f'set_voltage_domain -name {{{spd.name}}} -power {{{d_pwr}}} -ground {{VSS}} -region {{{spd.name}}}',
-                f'define_pdn_grid -name {{{grid_n}}} -voltage_domains {{{spd.name}}}',
+                f"\n# Dedicated PDN Grid for {spd_name}",
+                f'set_voltage_domain -name {{{spd_name}}} -power {{{d_pwr}}} -ground {{VSS}} -region {{{spd_name}}}',
+                f'define_pdn_grid -name {{{grid_n}}} -voltage_domains {{{spd_name}}}',
             ])
             if spd_w >= 40.0:
                 lines.extend([
@@ -1796,6 +2423,7 @@ class Pipeline:
             "pdngen",
             "",
         ])
+        lines.extend(self._build_power_switch_pdn_feeders_tcl(resolved, pdk_name=pdk_name))
 
         if enable_trunks and mode == "chip":
             lines.extend([
@@ -1823,7 +2451,6 @@ class Pipeline:
                 "    array set r_west_y1 {};  array set r_west_y2 {}",
                 "    array set r_east_y1 {};  array set r_east_y2 {}",
                 "",
-                "    # Discover all 4 legs of the core power ring for VDD and VSS",
                 "    foreach net_name {VDD VSS} {",
                 "        set net [$blk findNet $net_name]",
                 '        if {$net eq "NULL"} { continue }',
@@ -1843,27 +2470,19 @@ class Pipeline:
                 '                        if {$lyname eq "met5" && $len_x > $len_y} {',
                 "                            set ym [expr {($y1 + $y2) / 2}]",
                 "                            if {$r_south_y($net_name) == 0 || $ym < $r_south_y($net_name)} {",
-                "                                set r_south_y($net_name) $ym",
-                "                                set r_south_x1($net_name) $x1",
-                "                                set r_south_x2($net_name) $x2",
+                "                                set r_south_y($net_name) $ym; set r_south_x1($net_name) $x1; set r_south_x2($net_name) $x2",
                 "                            }",
                 "                            if {$r_north_y($net_name) == 0 || $ym > $r_north_y($net_name)} {",
-                "                                set r_north_y($net_name) $ym",
-                "                                set r_north_x1($net_name) $x1",
-                "                                set r_north_x2($net_name) $x2",
+                "                                set r_north_y($net_name) $ym; set r_north_x1($net_name) $x1; set r_north_x2($net_name) $x2",
                 "                            }",
                 "                        }",
                 '                        if {$lyname eq "met4" && $len_y > $len_x} {',
                 "                            set xm [expr {($x1 + $x2) / 2}]",
                 "                            if {$r_west_x($net_name) == 0 || $xm < $r_west_x($net_name)} {",
-                "                                set r_west_x($net_name) $xm",
-                "                                set r_west_y1($net_name) $y1",
-                "                                set r_west_y2($net_name) $y2",
+                "                                set r_west_x($net_name) $xm; set r_west_y1($net_name) $y1; set r_west_y2($net_name) $y2",
                 "                            }",
                 "                            if {$r_east_x($net_name) == 0 || $xm > $r_east_x($net_name)} {",
-                "                                set r_east_x($net_name) $xm",
-                "                                set r_east_x1($net_name) $x1",
-                "                                set r_east_x2($net_name) $x2",
+                "                                set r_east_x($net_name) $xm; set r_east_y1($net_name) $y1; set r_east_y2($net_name) $y2",
                 "                            }",
                 "                        }",
                 "                    }",
@@ -1875,8 +2494,8 @@ class Pipeline:
                 "    set hw [expr {$trunk_width_dbu / 2}]",
                 "    foreach inst [$blk getInsts] {",
                 "        set mname [[$inst getMaster] getName]",
-                '        set is_vdd [string match "*power*" $mname]',
-                '        set is_vss [string match "*ground*" $mname]',
+                '        set is_vdd [string match "*vccd*" $mname]',
+                '        set is_vss [string match "*vssd*" $mname]',
                 "        if {!$is_vdd && !$is_vss} { continue }",
                 "",
                 '        set net_name [expr {$is_vdd ? "VDD" : "VSS"}]',
@@ -1891,47 +2510,80 @@ class Pipeline:
                 "        set pcx [expr {($px1 + $px2) / 2}]",
                 "        set pcy [expr {($py1 + $py2) / 2}]",
                 "",
-                "        set d_south $py1",
-                "        set d_north [expr {$die_h - $py2}]",
-                "        set d_west  $px1",
-                "        set d_east  [expr {$die_w - $px2}]",
-                "",
-                "        set min_d $d_south",
-                '        set pad_side "SOUTH"',
+                "        set d_south $py1; set d_north [expr {$die_h - $py2}]; set d_west $px1; set d_east [expr {$die_w - $px2}]",
+                '        set min_d $d_south; set pad_side "SOUTH"',
                 '        if {$d_north < $min_d} { set min_d $d_north; set pad_side "NORTH" }',
                 '        if {$d_west < $min_d}  { set min_d $d_west;  set pad_side "WEST"  }',
                 '        if {$d_east < $min_d}  { set min_d $d_east;  set pad_side "EAST"  }',
                 "",
+                "        # Locate actual core-facing power/ground metal pin geometry inside the IO pad to avoid blind center OBS shorts",
+                "        set xf [$inst getTransform]",
+                "        set tx $pcx; set ty $pcy; set pin_ly \"met3\"",
+                "        set best_area 0; set best_score -1",
+                "        foreach _pit [$inst getITerms] {",
+                "            set _pn [$_pit getNet]",
+                "            if {$_pn eq \"NULL\" || [$_pn getName] ne $net_name} continue",
+                "            foreach _mp [[$_pit getMTerm] getMPins] {",
+                "                foreach _geo [$_mp getGeometry] {",
+                "                    set _gl [$_geo getTechLayer]",
+                "                    if {$_gl eq \"NULL\"} continue",
+                "                    set _gln [$_gl getName]",
+                "                    if {$_gln ne \"met3\" && $_gln ne \"met4\" && $_gln ne \"met5\"} continue",
+                "                    set _p1 [odb::new_Point [$_geo xMin] [$_geo yMin]]; set _p2 [odb::new_Point [$_geo xMax] [$_geo yMax]]",
+                "                    $xf apply $_p1; $xf apply $_p2",
+                "                    set _gx1 [expr {min([$_p1 getX], [$_p2 getX])}]; set _gx2 [expr {max([$_p1 getX], [$_p2 getX])}]",
+                "                    set _gy1 [expr {min([$_p1 getY], [$_p2 getY])}]; set _gy2 [expr {max([$_p1 getY], [$_p2 getY])}]",
+                "                    odb::delete_Point $_p1; odb::delete_Point $_p2",
+                "                    set _gw [expr {$_gx2 - $_gx1}]; set _gh [expr {$_gy2 - $_gy1}]",
+                "                    if {$_gw >= 2000 && $_gh >= 2000} {",
+                "                        set _cx_g [expr {($_gx1 + $_gx2) / 2}]; set _cy_g [expr {($_gy1 + $_gy2) / 2}]",
+                "                        # Prefer pads near core-facing inner edge and wide enough for full trunk width + overhang",
+                "                        set _edge_pref 0",
+                "                        if {$pad_side eq \"SOUTH\"} { set _edge_pref $_gy2 }",
+                "                        if {$pad_side eq \"NORTH\"} { set _edge_pref [expr {-$_gy1}] }",
+                "                        if {$pad_side eq \"WEST\"}  { set _edge_pref $_gx2 }",
+                "                        if {$pad_side eq \"EAST\"}  { set _edge_pref [expr {-$_gx1}] }",
+                "                        set _sc [expr {($_gw * $_gh / 1000000.0) + ($_edge_pref / 1000.0)}]",
+                "                        if {$best_score < 0 || $_sc > $best_score} {",
+                "                            set best_score $_sc; set tx $_cx_g; set ty $_cy_g; set pin_ly $_gln",
+                "                        }",
+                "                    }",
+                "                }",
+                "            }",
+                "        }",
+                "        set _vh 400",
                 '        if {$pad_side eq "SOUTH"} {',
-                "            set ring_y  $r_south_y($net_name)",
-                "            set ring_x1 $r_south_x1($net_name)",
-                "            set ring_x2 $r_south_x2($net_name)",
-                "            if {$ring_y == 0} { continue }",
-                '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $py2 [expr {$pcx + $hw}] $ring_y "STRIPE"',
-                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py2 "STRIPE" }',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
+                "            set ring_y $r_south_y($net_name); if {$ring_y == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_vert [expr {$tx - $hw}] [expr {$ty - $_vh}] [expr {$tx + $hw}] [expr {$ring_y + $_vh}] "STRIPE"',
+                '            if {$pin_ly eq "met3" && $via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $tx $ty "STRIPE" }',
+                '            if {$pin_ly eq "met5" && $via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ring_y "STRIPE" }',
                 '        } elseif {$pad_side eq "NORTH"} {',
-                "            set ring_y  $r_north_y($net_name)",
-                "            set ring_x1 $r_north_x1($net_name)",
-                "            set ring_x2 $r_north_x2($net_name)",
-                "            if {$ring_y == 0} { continue }",
-                '            odb::dbSBox_create $swire $m_vert [expr {$pcx - $hw}] $ring_y [expr {$pcx + $hw}] $py1 "STRIPE"',
-                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $pcx $py1 "STRIPE" }',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $pcx $ring_y "STRIPE" }',
+                "            set ring_y $r_north_y($net_name); if {$ring_y == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_vert [expr {$tx - $hw}] [expr {$ring_y - $_vh}] [expr {$tx + $hw}] [expr {$ty + $_vh}] "STRIPE"',
+                '            if {$pin_ly eq "met3" && $via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $tx $ty "STRIPE" }',
+                '            if {$pin_ly eq "met5" && $via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE" }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ring_y "STRIPE" }',
                 '        } elseif {$pad_side eq "WEST"} {',
-                "            set ring_x  $r_west_x($net_name)",
-                "            if {$ring_x == 0} { continue }",
-                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px2 $pcy "STRIPE" }',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px2 $pcy "STRIPE" }',
-                '            odb::dbSBox_create $swire $m_horiz $px2 [expr {$pcy - $hw}] $ring_x [expr {$pcy + $hw}] "STRIPE"',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
+                "            set ring_x $r_west_x($net_name); if {$ring_x == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_horiz [expr {$tx - $_vh}] [expr {$ty - $hw}] [expr {$ring_x + $_vh}] [expr {$ty + $hw}] "STRIPE"',
+                '            if {$pin_ly eq "met3"} {',
+                '                if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $tx $ty "STRIPE" }',
+                '                if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE" }',
+                '            } elseif {$pin_ly eq "met4" && $via4_5 ne "NULL"} {',
+                '                odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE"',
+                '            }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $ty "STRIPE" }',
                 '        } elseif {$pad_side eq "EAST"} {',
-                "            set ring_x  $r_east_x($net_name)",
-                "            if {$ring_x == 0} { continue }",
-                '            if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $px1 $pcy "STRIPE" }',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $px1 $pcy "STRIPE" }',
-                '            odb::dbSBox_create $swire $m_horiz $ring_x [expr {$pcy - $hw}] $px1 [expr {$pcy + $hw}] "STRIPE"',
-                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $pcy "STRIPE" }',
+                "            set ring_x $r_east_x($net_name); if {$ring_x == 0} { continue }",
+                '            odb::dbSBox_create $swire $m_horiz [expr {$ring_x - $_vh}] [expr {$ty - $hw}] [expr {$tx + $_vh}] [expr {$ty + $hw}] "STRIPE"',
+                '            if {$pin_ly eq "met3"} {',
+                '                if {$via3_4 ne "NULL"} { odb::dbSBox_create $swire $via3_4 $tx $ty "STRIPE" }',
+                '                if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE" }',
+                '            } elseif {$pin_ly eq "met4" && $via4_5 ne "NULL"} {',
+                '                odb::dbSBox_create $swire $via4_5 $tx $ty "STRIPE"',
+                '            }',
+                '            if {$via4_5 ne "NULL"} { odb::dbSBox_create $swire $via4_5 $ring_x $ty "STRIPE" }',
                 "        }",
                 "    }",
                 "}",
@@ -1943,7 +2595,6 @@ class Pipeline:
             "",
             f'write_def "{def_path}"',
             f'write_def "{stage_def}"',
-            'puts "SILIS_FLOORPLAN_DONE"',
         ])
 
         tcl_script = "\n".join(lines) + "\n"
@@ -3028,7 +3679,8 @@ class Pipeline:
             pin_target: 'pad_inner' to place pins directly at the inner terminal of pad cells (210um inset),
                         or 'core_boundary' to place pins on core perimeter.
         """
-        if not tcl and mode.lower() == "chip":
+        norm_mode = self._normalize_iopins_mode(mode) if not tcl else mode.lower()
+        if not tcl and norm_mode == "chip":
             tcl = self._build_padring_tcl(
                 pad_strategy=pad_strategy,
                 pad_ring_margin=pad_ring_margin,
@@ -3105,333 +3757,59 @@ class Pipeline:
         edge_assignments: Optional[Dict[str, List[str]]] = None,
         pin_target: str = "pad_inner"
     ) -> str:
-        """Constructs SiliconCompiler/Silis FPS-compliant zero-DRC Sky130 Pad Ring OpenROAD TCL."""
+        """Constructs FPS-compliant zero-DRC Sky130 Pad Ring OpenROAD TCL using shared builder."""
         def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
-        lines = [
-            "# Silis SDK Auto-Generated Pad Ring Placement (FPS Architecture)",
-            "set tech [::ord::get_db_tech]",
-            "set io_hor \"met3\"",
-            "set io_ver \"met2\"",
-            "make_tracks",
-            "",
-            "proc _resolve_pin_net {pname} {",
-            "    set blk [ord::get_db_block]",
-            "    set bterm [$blk findBTerm $pname]",
-            "    if {$bterm ne \"NULL\" && [$bterm getNet] ne \"NULL\"} {",
-            "        return [[$bterm getNet] getName]",
-            "    }",
-            "    return $pname",
-            "}",
-            "",
-            "# Read Sky130 IO LEF files",
-            "set _pdk_base [file normalize [file join $::env(HOME) \".silis\" \"pdks\"]]",
-            "foreach _lef [list [file join $_pdk_base \"sky130A\" \"libs.ref\" \"sky130_fd_io\" \"lef\" \"sky130_ef_io.lef\"] [file join $_pdk_base \"sky130A\" \"libs.ref\" \"sky130_fd_io\" \"lef\" \"sky130_fd_io.lef\"]] {",
-            "    if {[file exists $_lef]} { read_lef $_lef }",
-            "}",
-            "",
-            "# Create IO Sites",
-            "set _db [::ord::get_db]",
-            "set _has_site 0",
-            "foreach _lib [$_db getLibs] { if {[$_lib findSite \"IO_SITE\"] != \"NULL\"} { set _has_site 1; break } }",
-            "if {!$_has_site} { make_fake_io_site -name IO_SITE -width 1 -height 200 }",
-            "set _has_csite 0",
-            "foreach _lib [$_db getLibs] { if {[$_lib findSite \"IO_CSITE\"] != \"NULL\"} { set _has_csite 1; break } }",
-            "if {!$_has_csite} { make_fake_io_site -name IO_CSITE -width 200 -height 204 }",
-            "make_io_sites -horizontal_site IO_SITE -vertical_site IO_SITE -corner_site IO_CSITE -offset 0 -rotation_horizontal R180 -rotation_vertical R180 -rotation_corner R180",
-            "place_corners sky130_ef_io__corner_pad",
-            ""
-        ]
-
-        # Handle UPF power domain proximity-aware supply pads
-        if upf_aware:
-            domains = self.project.get_power_domains()
-            for d in domains:
-                # Only provision dedicated external pads if the domain is NOT internally gated with a power switch!
-                is_gated = getattr(d, "gated", False) or getattr(d, "power_switch_master", None) is not None
-                if is_gated:
-                    continue
-                d_area = d.area
-                if not d_area and d.elements:
-                    # Discover area from block's regions if available
-                    pass
-                if not d.is_top:
-                    cx, cy = 1500.0, 1500.0
-                    if d_area and len(d_area) == 4:
-                        x1, y1, x2, y2 = d_area
-                        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                    dists = {"bottom": cy, "top": 3000.0 - cy, "left": cx, "right": 3000.0 - cx}
-                    closest_edge = min(dists, key=dists.get)
-                    row_name = f"IO_{closest_edge.upper()}"
-                    d_clean = d.name.lower()
-                    lines.append(f"# Dedicated UPF Island Supply Pads for {d.name} ({closest_edge} edge)")
-                    lines.append(f"place_pad -master sky130_ef_io__vccd_lvc_clamped_pad -row {row_name} -location 300.0 pad_vdd_{d_clean}")
-                    lines.append(f"place_pad -master sky130_ef_io__vssd_lvc_clamped_pad -row {row_name} -location 385.0 pad_vss_{d_clean}")
-
-        # Global Power Connections
+        fp_spec = getattr(self, "_spec_fps", {}).get("floorplan", {})
+        die_area = fp_spec.get("die_area") or [0.0, 0.0, 2400.0, 2400.0]
+        if isinstance(die_area, str):
+            die_area = [float(x) for x in die_area.replace('"', '').replace(',', ' ').split()]
+        die_w = float(die_area[2]) - float(die_area[0])
+        die_h = float(die_area[3]) - float(die_area[1])
+        io_spec = {
+            "pad_strategy": pad_strategy,
+            "pad_ring_margin": pad_ring_margin,
+            "upf_aware": upf_aware,
+            "supply_pairs_per_edge": supply_pairs_per_edge,
+            "pin_order_file": pin_order_file,
+            "edge_assignments": edge_assignments,
+            "pin_target": pin_target,
+        }
+        lines = self._build_sky130_padring_lines(io_spec, die_w, die_h, include_io_lefs=True)
         lines.extend([
-            "",
-            "# Dedicated Core & IO Supply Pads (Outer Corners clearance, VDD/VSS + VDDIO/VSSIO on each edge)",
-            "foreach _row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
-            "    place_pad -master sky130_ef_io__vccd_lvc_clamped_pad  -row $_row -location 250.0 pad_vccd_${_row}",
-            "    place_pad -master sky130_ef_io__vssd_lvc_clamped_pad  -row $_row -location 370.0 pad_vssd_${_row}",
-            "    place_pad -master sky130_ef_io__vddio_hvc_clamped_pad -row $_row -location 490.0 pad_vddio_${_row}",
-            "    place_pad -master sky130_ef_io__vssio_hvc_clamped_pad -row $_row -location 610.0 pad_vssio_${_row}",
-            "}",
-            "",
-            "# Global Power Connections",
-            "add_global_connection -net {VDD} -inst_pattern {.*pad_vdd_core.*} -pin_pattern {^P_CORE$|^VCCD$} -power",
-            "add_global_connection -net {VSS} -inst_pattern {.*pad_vss_core.*} -pin_pattern {^G_CORE$|^VSSD$} -ground",
+            "set _blk [ord::get_db_block]",
+            'if {[$_blk findNet "VDD"] eq "NULL"} { odb::dbNet_create $_blk "VDD" }',
+            'if {[$_blk findNet "VSS"] eq "NULL"} { odb::dbNet_create $_blk "VSS" }',
+            'if {[$_blk findNet "VDDIO"] eq "NULL"} { odb::dbNet_create $_blk "VDDIO" }',
+            'if {[$_blk findNet "VSSIO"] eq "NULL"} { odb::dbNet_create $_blk "VSSIO" }',
+            "add_global_connection -net {VDD} -inst_pattern {.*pad_vccd.*|.*pad_vdd_.*|.*IO_CORNER.*} -pin_pattern {^P_CORE$|^VCCD$} -power",
+            "add_global_connection -net {VSS} -inst_pattern {.*pad_vssd.*|.*pad_vss_.*|.*IO_CORNER.*} -pin_pattern {^G_CORE$|^VSSD$} -ground",
             "add_global_connection -net {VDDIO} -inst_pattern {.*pad_vddio.*} -pin_pattern {^VDDIO$|^VDDIO_Q$} -power",
             "add_global_connection -net {VSSIO} -inst_pattern {.*pad_vssio.*} -pin_pattern {^VSSIO$|^VSSIO_Q$} -ground",
-            ""
-        ])
-
-        # Architectural Pin/Pad Placement with Collinear Core Pin Generation (Pure FPS style)
-        lines.extend([
-            "set _block [ord::get_db_block]",
-            "set _dbu [[::ord::get_db_tech] getDbUnitsPerMicron]",
-            "set _die_box [$_block getDieArea]",
-            "set _die_w [expr {[$_die_box xMax] / double($_dbu)}]",
-            "set _die_h [expr {[$_die_box yMax] / double($_dbu)}]",
-            "set _core_box [$_block getCoreArea]",
-            "set _core_x1 [expr {[$_core_box xMin] / double($_dbu)}]",
-            "set _core_y1 [expr {[$_core_box yMin] / double($_dbu)}]",
-            "set _core_x2 [expr {[$_core_box xMax] / double($_dbu)}]",
-            "set _core_y2 [expr {[$_core_box yMax] / double($_dbu)}]",
-            "set _all_bterms [$_block getBTerms]"
-        ])
-
-        # If edge_assignments provided, emit deterministic FPS placement per edge
-        if edge_assignments:
-            import json
-            lines.append(f"# User-defined / Architecture-aware Edge Pad Assignments")
-            edge_map_tcl = {
-                "bottom": "IO_SOUTH",
-                "top": "IO_NORTH",
-                "left": "IO_WEST",
-                "right": "IO_EAST"
-            }
-            for edge, sig_patterns in edge_assignments.items():
-                row_name = edge_map_tcl.get(edge.lower(), "IO_SOUTH")
-                edge_clean = edge.lower()
-                lines.append(f"# --- Edge: {edge} ({row_name}) ---")
-                lines.append(f"set _edge_sigs [list {' '.join([f'\"{s}\"' for s in sig_patterns])}]")
-                tcl_edge_code = f"""
-set _matched_bterms [list]
-foreach _pat $_edge_sigs {{
-    foreach _b [$_block getBTerms] {{
-        set _bname [$_b getName]
-        if {{($_pat eq $_bname || [string match $_pat $_bname]) && [lsearch -exact $_matched_bterms $_b] == -1}} {{
-            lappend _matched_bterms $_b
-        }}
-    }}
-}}
-
-set _n [llength $_matched_bterms]
-if {{$_n > 0}} {{
-    set _edge_len [expr {{("{edge_clean}" eq "bottom" || "{edge_clean}" eq "top") ? $_die_w : $_die_h}}]
-    set _row_min [expr {{("{edge_clean}" eq "bottom" || "{edge_clean}" eq "top") ? 385.0 : 250.0}}]
-    set _row_max [expr {{$_edge_len - 250.0 - 80.0}}]
-    set _span [expr {{max(0.0, $_row_max - $_row_min)}}]
-    set _step [expr {{$_n > 1 ? ($_span / double($_n - 1)) : 0.0}}]
-
-    set _idx 0
-    foreach _b $_matched_bterms {{
-        set _bname [$_b getName]
-        set _safe_name [regsub -all {{[^A-Za-z0-9_]}} $_bname "_"]
-        set _pad_inst "pad_${{_safe_name}}"
-        set _loc [expr {{round(($_row_min + $_idx * $_step) / 0.005) * 0.005}}]
-        if {{$_loc > $_row_max}} {{ set _loc $_row_max }}
-
-        place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row {row_name} -location $_loc $_pad_inst
-        
-        # Pin Placement matching user preference ('pad_inner' for exact FPS button behavior or 'core_boundary')
-        set _pnet [$_b getNet]
-        set _pnet_name [expr {{$_pnet ne "NULL" ? [$_pnet getName] : $_bname}}]
-        set _pdir [$_b getIoType]
-
-        if {{"{pin_target}" eq "pad_inner"}} {{
-            # Stamped at the inner edge of the pad facing into core cavity (exact FPS button behavior)
-            if {{("{edge_clean}" eq "bottom")}} {{
-                set _pin_x [expr {{$_loc + 40.0}}]
-                set _pin_y 210.0
-                set _player "met2"
-            }} elseif {{("{edge_clean}" eq "top")}} {{
-                set _pin_x [expr {{$_loc + 40.0}}]
-                set _pin_y [expr {{$_die_h - 210.0}}]
-                set _player "met2"
-            }} elseif {{("{edge_clean}" eq "left")}} {{
-                set _pin_x 210.0
-                set _pin_y [expr {{$_loc + 40.0}}]
-                set _player "met3"
-            }} else {{
-                set _pin_x [expr {{$_die_w - 210.0}}]
-                set _pin_y [expr {{$_loc + 40.0}}]
-                set _player "met3"
-            }}
-        }} else {{
-            # Core boundary collinear pin placement
-            if {{("{edge_clean}" eq "bottom")}} {{
-                set _pin_x [expr {{$_loc + 40.0}}]
-                set _pin_y $_core_y1
-                set _player "met2"
-            }} elseif {{("{edge_clean}" eq "top")}} {{
-                set _pin_x [expr {{$_loc + 40.0}}]
-                set _pin_y $_core_y2
-                set _player "met2"
-            }} elseif {{("{edge_clean}" eq "left")}} {{
-                set _pin_x $_core_x1
-                set _pin_y [expr {{$_loc + 40.0}}]
-                set _player "met3"
-            }} else {{
-                set _pin_x $_core_x2
-                set _pin_y [expr {{$_loc + 40.0}}]
-                set _player "met3"
-            }}
-        }}
-
-        place_pin -pin_name "$_bname" -layer $_player -location "$_pin_x $_pin_y"
-
-        # Direct ODB Net Connection to Pad Cell Terminals
-        set _pad_obj [$_block findInst "$_pad_inst"]
-        if {{[info exists _pad_obj] && $_pad_obj ne "NULL" && [info exists _pnet] && $_pnet ne "NULL"}} {{
-            set _iterm_pad [$_pad_obj findITerm "PAD"]
-            if {{[info exists _iterm_pad] && $_iterm_pad ne "NULL" && [$_iterm_pad getNet] eq "NULL"}} {{
-                $_iterm_pad connect $_pnet
-            }}
-            set _port_pin [expr {{$_pdir eq "OUTPUT" ? "OUT" : "IN"}}]
-            set _iterm_sig [$_pad_obj findITerm $_port_pin]
-            if {{[info exists _iterm_sig] && $_iterm_sig ne "NULL" && [$_iterm_sig getNet] eq "NULL"}} {{
-                $_iterm_sig connect $_pnet
-            }}
-        }}
-
-        incr _idx
-    }}
-}}
-"""
-                lines.append(tcl_edge_code)
-        else:
-            # Fallback dynamic FPS-style bus-aware grouping
-            lines.extend([
-                "set _bcount [llength $_all_bterms]",
-                "set _quarter [expr {int(ceil($_bcount / 4.0))}]",
-                "set _idx 0",
-                "foreach _bterm $_all_bterms {",
-                "    set _bname [$_bterm getName]",
-                "    set _safe_name [regsub -all {[^A-Za-z0-9_]} $_bname \"_\"]",
-                "    set _side_idx [expr {$_idx / $_quarter}]",
-                "    set _pos_in_side [expr {$_idx % $_quarter}]",
-                "    set _row [lindex {IO_SOUTH IO_EAST IO_NORTH IO_WEST} $_side_idx]",
-                "    if {$_row eq \"\"} { set _row \"IO_WEST\" }",
-                "    set _side_len [expr {$_die_w - 400.0}]",
-                "    set _avail_span [expr {$_side_len - 540.0}]",
-                "    set _pitch [expr {$_quarter > 1 ? ($_avail_span / double($_quarter)) : 85.0}]",
-                "    if {$_pitch > 135.0} { set _pitch 135.0 }",
-                "    if {$_pitch < 85.0} { set _pitch 85.0 }",
-                "    set _loc [expr {720.0 + $_pos_in_side * $_pitch}]",
-                "    set _pad_inst \"pad_${_safe_name}\"",
-                "    place_pad -master sky130_ef_io__gpiov2_pad_wrapped -row $_row -location $_loc $_pad_inst",
-                "    set _pnet [$_bterm getNet]",
-                "    set _pnet_name [expr {$_pnet ne \"NULL\" ? [$_pnet getName] : $_bname}]",
-                "    set _dir [$_bterm getIoType]",
-                "    if {$_row eq \"IO_SOUTH\"} {",
-                "        place_pin -pin_name \"$_bname\" -layer met2 -location \"[expr {$_loc + 40.0}] 210.0\"",
-                "    } elseif {$_row eq \"IO_NORTH\"} {",
-                "        place_pin -pin_name \"$_bname\" -layer met2 -location \"[expr {$_loc + 40.0}] [expr {$_die_h - 210.0}]\"",
-                "    } elseif {$_row eq \"IO_WEST\"} {",
-                "        place_pin -pin_name \"$_bname\" -layer met3 -location \"210.0 [expr {$_loc + 40.0}]\"",
-                "    } else {",
-                "        place_pin -pin_name \"$_bname\" -layer met3 -location \"[expr {$_die_w - 210.0}] [expr {$_loc + 40.0}]\"",
-                "    }",
-                "    if {$_dir eq \"OUTPUT\"} {",
-                "        connect_pin $_pnet_name \"$_pad_inst/OUT\"",
-                "    } else {",
-                "        connect_pin $_pnet_name \"$_pad_inst/IN\"",
-                "    }",
-                "    incr _idx",
-                "}"
-            ])
-
-        # Pad Fillers and Abutment
-        lines.extend([
-            "",
-            "# --- Pad Ring Fillers and Abutment ---",
-            "set pad_fill {sky130_ef_io__com_bus_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um}",
-            "foreach row {IO_NORTH IO_SOUTH IO_WEST IO_EAST} {",
-            "    place_io_fill -row $row {*}$pad_fill",
-            "}",
-            "connect_by_abutment",
-            "",
-            "# --- Synthesize Physical Routed Wire Segments Between Core Pins and Pads ---",
-            "proc _route_pad_to_pin_bridges {} {",
-            "    set blk [ord::get_db_block]",
-            "    if {$blk eq \"NULL\"} { return }",
-            "    set tech [ord::get_db_tech]",
-            "    set dbu [$tech getDbUnitsPerMicron]",
-            "    set m2 [$tech findLayer \"met2\"]",
-            "    if {$m2 eq \"NULL\"} { set m2 [$tech findRoutingLayer 3] }",
-            "    set m3 [$tech findLayer \"met3\"]",
-            "    if {$m3 eq \"NULL\"} { set m3 [$tech findRoutingLayer 4] }",
-            "    set wired_count 0",
-            "    foreach bterm [$blk getBTerms] {",
-            "        set bname [$bterm getName]",
-            "        set safe_name [regsub -all {[^A-Za-z0-9_]} $bname \"_\"]",
-            "        set pad_inst \"pad_${safe_name}\"",
-            "        set inst [$blk findInst $pad_inst]",
-            "        if {$inst eq \"NULL\"} { continue }",
-            "        set bpins [$bterm getBPins]",
-            "        if {[llength $bpins] == 0} { continue }",
-            "        set bpin [lindex $bpins 0]",
-            "        set bboxes [$bpin getBoxes]",
-            "        if {[llength $bboxes] == 0} { continue }",
-            "        set bbox [lindex $bboxes 0]",
-            "        set pin_x [expr {([$bbox xMin] + [$bbox xMax]) / 2}]",
-            "        set pin_y [expr {([$bbox yMin] + [$bbox yMax]) / 2}]",
-            "        set pad_bbox [$inst getBBox]",
-            "        set pad_x1 [$pad_bbox xMin]",
-            "        set pad_y1 [$pad_bbox yMin]",
-            "        set pad_x2 [$pad_bbox xMax]",
-            "        set pad_y2 [$pad_bbox yMax]",
-            "        set pad_cx [expr {($pad_x1 + $pad_x2) / 2}]",
-            "        set pad_cy [expr {($pad_y1 + $pad_y2) / 2}]",
-            "        set net [$bterm getNet]",
-            "        if {$net eq \"NULL\"} { continue }",
-            "        set wire [$net getWire]",
-            "        if {$wire eq \"NULL\"} {",
-            "            set wire [odb::dbWire_create $net]",
-            "        }",
-            "        if {$wire eq \"NULL\"} { continue }",
-            "        # Determine connection segment based on pad placement edge relative to die center",
-            "        set die_box [$blk getDieArea]",
-            "        set die_cx [expr {([$die_box xMin] + [$die_box xMax]) / 2}]",
-            "        set die_cy [expr {([$die_box yMin] + [$die_box yMax]) / 2}]",
-            "        set dx [expr {$pad_cx - $die_cx}]",
-            "        set dy [expr {$pad_cy - $die_cy}]",
-            "        set enc [odb::dbWireEncoder]",
-            "        $enc begin $wire",
-            "        if {[expr {abs($dy) >= abs($dx)}]} {",
-            "            # Bottom or Top edge: pad inner interface wire runs along met2 (vertical)",
-            "            set pad_inner_y [expr {$dy < 0 ? $pad_y2 : $pad_y1}]",
-            "            $enc newPath $m2 ROUTED",
-            "            $enc addPoint $pad_cx $pad_inner_y",
-            "            $enc addPoint $pin_x $pin_y",
-            "        } else {",
-            "            # Left or Right edge: pad inner interface wire runs along met3 (horizontal)",
-            "            set pad_inner_x [expr {$dx < 0 ? $pad_x2 : $pad_x1}]",
-            "            $enc newPath $m3 ROUTED",
-            "            $enc addPoint $pad_inner_x $pad_cy",
-            "            $enc addPoint $pin_x $pin_y",
-            "        }",
-            "        $enc end",
-            "        incr wired_count",
-            "    }",
-            "    puts \"[SILIS] Connected and synthesized physical routes for $wired_count pad-to-port wire bridges.\"",
-            "}",
-            "_route_pad_to_pin_bridges",
-            f'write_def "{def_path}"'
+            f'write_def "{def_path}"',
         ])
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _tcl_safe_detailed_placement(max_displacement: Optional[str] = "50 50") -> List[str]:
+        """Wraps detailed_placement with temporary region-group detach/restore to avoid OpenDP shiftMove crashes."""
+        disp_arg = f" -max_displacement {{{max_displacement}}}" if max_displacement else ""
+        return [
+            "set _blk_dp [::ord::get_db_block]",
+            "set _saved_reg_grps {}",
+            "foreach _r [$_blk_dp getRegions] {",
+            "    set _rname [$_r getName]",
+            "    foreach _g [$_r getGroups] {",
+            "        lappend _saved_reg_grps [list $_rname [$_g getName]]",
+            "        $_r removeGroup $_g",
+            "    }",
+            "}",
+            f"detailed_placement{disp_arg}",
+            "foreach _pair $_saved_reg_grps {",
+            "    set _r [$_blk_dp findRegion [lindex $_pair 0]]",
+            "    set _g [$_blk_dp findGroup [lindex $_pair 1]]",
+            '    if {$_r ne "NULL" && $_g ne "NULL"} { catch { $_r addGroup $_g } }',
+            "}",
+        ]
 
     def place(
         self,
@@ -3441,29 +3819,48 @@ if {{$_n > 0}} {{
         pad_right: int = 2,
         timing_driven: bool = True,
         init_density_penalty: float = 0.00002,
+        adaptive_density: bool = True,
     ) -> bool:
-        """Executes global placement, timing-driven optimization, and detailed placement.
+        """Executes global placement, placement-guided power switch & level shifter refinement, and detailed placement.
 
-        Applies FENCE→INCLUSIVE group reattachment prior to global_placement to prevent
-        GPL-0305 (Inf/NaN gradient divergence) in regions with predominantly FIXED instances
-        (POWER_SWITCH cells, tapcells, SRAM macros). See place.tcl for full architecture notes.
+        Runs global_placement so all stdcells have real physical coordinates, then executes:
+          1. Adaptive power switch refinement (if adaptive_placement=True) onto active placed stdcell clusters.
+          2. Placement-driven cross-domain level shifter insertion on actual placed domain crossings.
+          3. Legal detailed_placement + check_placement verification.
         """
         if not tcl:
             def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
+            placed_def = os.path.join(self.project.results_dir, f"{self.project.top_module}_placed.def").replace("\\", "/")
             idp = f"{init_density_penalty:.5e}"
-            tcl = f"""# Test-FPS-SoC Battle-Tested Placement Script
+            resolved = self._load_fps_power_spec()
+            pdk_name = getattr(self.project, "pdk", "sky130") or "sky130"
+
+            post_gpl_lines = self._tcl_site_snap_helpers()
+            # Re-synthesize power switches on real placed stdcell coordinates if adaptive_placement is enabled
+            has_adaptive = any(d.get("adaptive_placement") for d in resolved.get("active_pds", [])) or resolved.get("psw_spec", {}).get("adaptive_placement", False)
+            if has_adaptive:
+                post_gpl_lines.extend(self._build_power_switch_tcl(resolved, replace_existing=True))
+                post_gpl_lines.extend(self._build_power_switch_pdn_feeders_tcl(resolved, pdk_name=pdk_name))
+            # Synthesize placement-guided boundary level shifters on actual cross-domain nets
+            post_gpl_lines.extend(self._build_level_shifter_tcl(resolved))
+            post_gpl_lines.extend(self._build_global_connect_tcl(resolved))
+            post_gpl_tcl = "\n".join(post_gpl_lines)
+
+            safe_dpl_tcl = "\n".join(self._tcl_safe_detailed_placement("50 50"))
+
+            tcl = f"""# Silis Placement Pipeline (Global + Adaptive UPF Cells + Detailed)
 set _block [::ord::get_db_block]
 set _tech  [::ord::get_db_tech]
 set _dbu   [$_tech getDbUnitsPerMicron]
 set _saved_blk {{}}
 
-foreach _blk [$_block getBlockages] {{
-    set _bb [$_blk getBBox]
-    lappend _saved_blk [list [expr {{[$_bb xMin]/$_dbu}}] [expr {{[$_bb yMin]/$_dbu}}] [expr {{[$_bb xMax]/$_dbu}}] [expr {{[$_bb yMax]/$_dbu}}]]
-    odb::dbBlockage_destroy $_blk
+foreach _b [$_block getBlockages] {{
+    set _bb [$_b getBBox]
+    lappend _saved_blk [list [expr {{[$_bb xMin] / double($_dbu)}}] [expr {{[$_bb yMin] / double($_dbu)}}] [expr {{[$_bb xMax] / double($_dbu)}}] [expr {{[$_bb yMax] / double($_dbu)}}]]
+    odb::dbBlockage_destroy $_b
 }}
 
-# Reattach any FENCE-type region groups to INCLUSIVE regions to prevent GPL-0305 Inf/NaN divergence
+# Reattach FENCE-type region groups to INCLUSIVE regions during global_placement to prevent GPL-0305 divergence
 foreach _r [$_block getRegions] {{
     catch {{
         if {{[$_r getRegionType] eq "EXCLUSIVE"}} {{
@@ -3472,37 +3869,84 @@ foreach _r [$_block getRegions] {{
     }}
 }}
 
-# Add placement padding to spread cells evenly and prevent routability congestion
 set_placement_padding -global -left {pad_left} -right {pad_right}
 
-# Run global_placement with adaptive bin_grid_count for large die cavities
 set _core_box [$_block getCoreArea]
-set _core_w [expr {{([$_core_box xMax] - [$_core_box xMin]) / double($_dbu)}}]
-set _core_h [expr {{([$_core_box yMax] - [$_core_box yMin]) / double($_dbu)}}]
+set _core_x1 [expr {{[$_core_box xMin] / double($_dbu)}}]
+set _core_y1 [expr {{[$_core_box yMin] / double($_dbu)}}]
+set _core_x2 [expr {{[$_core_box xMax] / double($_dbu)}}]
+set _core_y2 [expr {{[$_core_box yMax] / double($_dbu)}}]
+set _core_w [expr {{$_core_x2 - $_core_x1}}]
+set _core_h [expr {{$_core_y2 - $_core_y1}}]
+set _macro_area 0.0
+set _top_mov_area 0.0
+foreach _i [$_block getInsts] {{
+    set _m [$_i getMaster]
+    set _mt [$_m getType]
+    if {{$_mt eq "BLOCK"}} {{
+        set _bb [$_i getBBox]
+        set _ix1 [expr {{max($_core_x1, [$_bb xMin] / double($_dbu))}}]
+        set _iy1 [expr {{max($_core_y1, [$_bb yMin] / double($_dbu))}}]
+        set _ix2 [expr {{min($_core_x2, [$_bb xMax] / double($_dbu))}}]
+        set _iy2 [expr {{min($_core_y2, [$_bb yMax] / double($_dbu))}}]
+        if {{$_ix2 > $_ix1 && $_iy2 > $_iy1}} {{
+            set _macro_area [expr {{$_macro_area + ($_ix2 - $_ix1) * ($_iy2 - $_iy1)}}]
+        }}
+    }} elseif {{$_mt eq "CORE" && ![$_i isFixed] && [$_i getGroup] eq "NULL"}} {{
+        set _top_mov_area [expr {{$_top_mov_area + (([$_m getWidth] / double($_dbu)) * ([$_m getHeight] / double($_dbu)))}}]
+    }}
+}}
+set _free_core_area [expr {{max(1.0, ($_core_w * $_core_h) - $_macro_area)}}]
+set _top_util [expr {{$_top_mov_area / $_free_core_area}}]
+set _max_reg_util 0.0
+foreach _r [$_block getRegions] {{
+    set _r_area 0.0
+    foreach _rb [$_r getBoundaries] {{
+        set _r_area [expr {{$_r_area + (([$_rb xMax] - [$_rb xMin]) / double($_dbu)) * (([$_rb yMax] - [$_rb yMin]) / double($_dbu))}}]
+    }}
+    if {{$_r_area > 0.0}} {{
+        set _r_mov 0.0
+        foreach _g [$_r getGroups] {{
+            foreach _gi [$_g getInsts] {{
+                set _gm [$_gi getMaster]
+                if {{![$_gi isFixed]}} {{
+                    set _r_mov [expr {{$_r_mov + (([$_gm getWidth] / double($_dbu)) * ([$_gm getHeight] / double($_dbu)))}}]
+                }}
+            }}
+        }}
+        set _ru [expr {{$_r_mov / $_r_area}}]
+        if {{$_ru > $_max_reg_util}} {{ set _max_reg_util $_ru }}
+    }}
+}}
+set _req_density {density}
+set _eff_density $_req_density
+if {{{1 if adaptive_density else 0}}} {{
+    set _max_util [expr {{max($_top_util, $_max_reg_util)}}]
+    set _safe_floor [expr {{$_max_util + 0.06}}]
+    if {{$_max_util < 0.25}} {{
+        set _spread_target [expr {{max($_safe_floor, max(0.22, 1.6 * $_max_util))}}]
+        set _eff_density [expr {{min($_req_density, $_spread_target)}}]
+    }} else {{
+        set _eff_density [expr {{max($_safe_floor, $_req_density)}}]
+    }}
+    set _eff_density [expr {{min(0.90, $_eff_density)}}]
+    puts [format "\\[SILIS UTIL\\] Free-core util=%.2f%%, Max region util=%.2f%% -> GPL target density=%.3f (requested %.3f)" [expr {{$_top_util * 100.0}}] [expr {{$_max_reg_util * 100.0}}] $_eff_density $_req_density]
+}}
 if {{ $_core_w > 800.0 && $_core_h > 800.0 }} {{
-    global_placement -density {density} -init_density_penalty {idp} -bin_grid_count 32 -routability_driven
+    global_placement -density $_eff_density -init_density_penalty {idp} -bin_grid_count 32 -routability_driven
 }} else {{
-    global_placement -density {density} -init_density_penalty {idp} -routability_driven
+    global_placement -density $_eff_density -init_density_penalty {idp} -routability_driven
 }}
 
-# Clear placement padding before running detailed_placement to avoid DPL site mismatch
 set_placement_padding -global -left 0 -right 0
 
-# Unlink non-voltage-domain module groups from regions, but preserve UPF power domain bindings
-foreach _r [$_block getRegions] {{
-    set _rname [$_r getName]
-    if {{[string match "*PD_*" $_rname] || [string match "*pd_*" $_rname]}} {{
-        continue
-    }}
-    foreach _g [$_r getGroups] {{
-        $_r removeGroup $_g
-    }}
-}}
+# Placement-guided power switches and cross-domain level shifters now that real stdcell coordinates exist
+{post_gpl_tcl}
 
 # Purge any orphaned tapcells placed in deleted row channels
 foreach _inst [$_block getInsts] {{
     set _mname [[$_inst getMaster] getName]
-    if {{[string match "*tap*" $_mname]}} {{
+    if {{[string match "*tap*" $_mname] && ![string match "*lsbuf*" $_mname]}} {{
         set _y [lindex [$_inst getLocation] 1]
         set _has_row 0
         foreach _row [$_block getRows] {{
@@ -3517,21 +3961,13 @@ foreach _inst [$_block getInsts] {{
     }}
 }}
 
-detailed_placement -max_displacement {{50 50}}
-check_placement
+{safe_dpl_tcl}
 
-# Re-link non-voltage-domain module groups back to regions so DEF/ODB preserves full containment
-foreach _r [$_block getRegions] {{
-    set _rname [$_r getName]
-    set _g [$_block findGroup "group_${{_rname}}"]
-    if {{ $_g ne "NULL" && [$_g getRegion] eq "NULL" }} {{
-        catch {{ $_r addGroup $_g }}
-    }}
-}}
+check_placement -verbose
 
 foreach _b $_saved_blk {{ create_blockage -soft -region $_b }}
 write_def "{def_path}"
-puts "SILIS_PLACE_DONE"
+write_def "{placed_def}"
 """
         # Pre-condition: verify temp.def exists from floorplan/pdn
         def_path = os.path.join(self.project.results_dir, "temp.def")
@@ -3565,21 +4001,32 @@ puts "SILIS_PLACE_DONE"
         """Synthesizes balanced clock tree network with clock buffer insertion."""
         if not tcl and (root_buf or buf_list or sink_clustering):
             def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
+            cts_def = os.path.join(self.project.results_dir, f"{self.project.top_module}_cts.def").replace("\\", "/")
+            postpnr_v = os.path.join(self.project.netlist_dir, f"{self.project.top_module}_postpnr.v").replace("\\", "/")
             bufs = " ".join(buf_list) if isinstance(buf_list, (list, tuple)) else (buf_list or "")
             b_flag = f'-buf_list "{bufs}" ' if bufs else ""
             r_flag = f'-root_buf "{root_buf}" ' if root_buf else ""
             c_flag = "-sink_clustering_enable " if sink_clustering else ""
+            safe_dpl_tcl = "\n".join(self._tcl_safe_detailed_placement("50 50"))
+            resolved_gc = self._load_fps_power_spec()
+            gc_tcl = "\n".join(self._build_global_connect_tcl(resolved_gc))
+            pdk_name = getattr(self.project, "pdk", "sky130") or "sky130"
+            ic_cfg = SSAForge.get_interconnect(pdk_name)
+            rc_layer = "met2" if ic_cfg.get("min_layer") == "met1" else ic_cfg.get("min_layer", "met2")
             tcl = f"""set tech [::ord::get_db_tech]
-if {{[$tech findLayer "met2"] ne "NULL"}} {{
-    set_wire_rc -layer met2
+if {{[$tech findLayer "{rc_layer}"] ne "NULL"}} {{
+    set_wire_rc -layer {rc_layer}
     estimate_parasitics -placement
 }}
 clock_tree_synthesis {b_flag}{r_flag}{c_flag}
 repair_clock_nets
 repair_timing -setup -hold
-detailed_placement
-check_placement
+{safe_dpl_tcl}
+{gc_tcl}
+check_placement -verbose
+write_verilog "{postpnr_v}"
 write_def "{def_path}"
+write_def "{cts_def}"
 """
         # Pre-condition: verify temp.def exists from placement
         def_path = os.path.join(self.project.results_dir, "temp.def")
@@ -3613,6 +4060,7 @@ write_def "{def_path}"
         layer_adjustments: Optional[Dict[str, float]] = None,
     ) -> bool:
         """Runs global routing (FastRoute) and detailed routing (TritonRoute)."""
+        auto_tcl = (tcl is None)
         if not tcl:
             def_path = os.path.join(self.project.results_dir, "temp.def").replace("\\", "/")
             fix_path = os.path.join(self.project.root_dir, "fix.tcl").replace("\\", "/")
@@ -3653,7 +4101,12 @@ write_def "{def_path}"
             lines.append(
                 f'detailed_route -output_drc "{drc_path}"'
             )
+            lines.extend(self._build_global_connect_tcl(self._load_fps_power_spec()))
+            routed_def = os.path.join(self.project.results_dir, f"{self.project.top_module}_routed.def").replace("\\", "/")
+            postpnr_v = os.path.join(self.project.netlist_dir, f"{self.project.top_module}_postpnr.v").replace("\\", "/")
+            lines.append(f'write_verilog "{postpnr_v}"')
             lines.append(f'write_def "{def_path}"')
+            lines.append(f'write_def "{routed_def}"')
             tcl = "\n".join(lines) + "\n"
 
         # Pre-condition: verify temp.def exists from CTS
@@ -3661,6 +4114,12 @@ write_def "{def_path}"
         if not os.path.isfile(def_path):
             from sdk.exceptions import PipelineStateError
             raise PipelineStateError(f"Route pre-condition failed: DEF file not found at {def_path}. Run cts() first.")
+
+        # Reload DEF into fresh OpenROAD/STA session so FastRoute Slack does not hit stale STA vertices after ODB mutations
+        if auto_tcl:
+            if hasattr(self.backend, "reset_backend"):
+                self.backend.reset_backend()
+            self.runner._design_loaded = False
 
         res = self.runner.run_step("route", tcl_arg=tcl)
         self.process_events()
@@ -3694,10 +4153,18 @@ write_def "{def_path}"
             raise PipelineStateError(f"Fill pre-condition failed: Output DEF {def_path} not found. Run route() or place() first.")
 
         if not tcl:
-            # Universal Decap & Standard Cell Gap Filler Synthesis Script
-            fill_masters = "sky130_fd_sc_hd__fill_8 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_1"
-            if insert_decap:
-                fill_masters = "sky130_fd_sc_hd__decap_8 sky130_fd_sc_hd__decap_4 " + fill_masters
+            # Universal Decap & Standard Cell Gap Filler Synthesis Script resolved from SSAForge
+            pdk_name = getattr(self.project, "pdk", "sky130") or "sky130"
+            fill_dict = SSAForge.get_alias_category(pdk_name, "fillers")
+            decap_dict = SSAForge.get_alias_category(pdk_name, "decaps")
+            f_list = list(fill_dict.values()) if fill_dict else [
+                "sky130_fd_sc_hd__fill_8", "sky130_fd_sc_hd__fill_4",
+                "sky130_fd_sc_hd__fill_2", "sky130_fd_sc_hd__fill_1",
+            ]
+            d_list = [v for k, v in decap_dict.items() if k != "default" and "kapwr" not in v] if decap_dict else [
+                "sky130_fd_sc_hd__decap_8", "sky130_fd_sc_hd__decap_4"
+            ]
+            fill_masters = " ".join((d_list + f_list) if insert_decap else f_list)
 
             tcl = f"""# Universal Decap & Standard Cell Gap Filler Synthesis
 set fill_masters "{fill_masters}"

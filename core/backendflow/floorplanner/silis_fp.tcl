@@ -55,6 +55,7 @@ proc create_fence {args} {
 # ------------------------------------------------------------------------------
 proc create_region {args} {
     set mod ""
+    set reg_override ""
     set box {}
     set boxes {}
     set rtype "inclusive"
@@ -66,6 +67,8 @@ proc create_region {args} {
         set opt [lindex $args $i]
         if {$opt eq "-module"} {
             incr i; set mod [lindex $args $i]
+        } elseif {$opt eq "-name"} {
+            incr i; set reg_override [lindex $args $i]
         } elseif {$opt eq "-box"} {
             incr i; set box [lindex $args $i]
         } elseif {$opt eq "-boxes"} {
@@ -82,13 +85,17 @@ proc create_region {args} {
 
     if {$boxes ne ""} {
         foreach b $boxes {
-            create_region -module $mod -box $b -type $rtype -density $density -halo $halo
+            if {$reg_override ne ""} {
+                create_region -name $reg_override -module $mod -box $b -type $rtype -density $density -halo $halo
+            } else {
+                create_region -module $mod -box $b -type $rtype -density $density -halo $halo
+            }
         }
         return
     }
 
     if {$mod eq "" || [llength $box] != 4} {
-        puts "\[ERR\] create_region usage: create_region -module <name> -box {x1 y1 x2 y2} \[-type inclusive|exclusive\] \[-density <float>\] \[-halo {l r b t}\]"
+        puts "\[ERR\] create_region usage: create_region -module <name> \[-name <region>\] -box {x1 y1 x2 y2} \[-type inclusive|exclusive\] \[-density <float>\] \[-halo {l r b t}\]"
         return
     }
 
@@ -105,14 +112,13 @@ proc create_region {args} {
     }
 
     set clean_mod [string map {"/" "_"} $mod]
-    # If the module name already begins with 'region_' or is a UPF power domain name like 'PD_*', preserve it
-    # so OpenROAD set_voltage_domain -region matches the exact region name.
-    if {[string match "region_*" $clean_mod]} {
-        set reg_name $clean_mod
+    # Preserve explicit -name override (e.g. PD_LOWPWR_ALU) while matching instances by -module (e.g. u_lowp_alu)
+    if {$reg_override ne ""} {
+        set reg_name [string map {"/" "_"} $reg_override]
     } else {
         set reg_name $clean_mod
     }
-    set grp_name "group_${clean_mod}"
+    set grp_name "group_${reg_name}"
 
     set odb_rtype [expr {$rtype eq "exclusive" ? "EXCLUSIVE" : "INCLUSIVE"}]
 
@@ -138,14 +144,20 @@ proc create_region {args} {
         catch { odb::dbBox_create $r $x1_dbu $y1_dbu $x2_dbu $y2_dbu }
     }
 
-    set g [$block findGroup $grp_name]
-    if {$g eq "NULL" || $g eq ""} {
-        set g [odb::dbGroup_create $block $grp_name]
-        # Only attach group to region if region is EXCLUSIVE (fence).
-        # For INCLUSIVE regions, attaching group directly causes GPL to enforce strict local fence density
-        # leading to GPL-0301 utilization overflow when fixed tapcells and std cells occupy the box.
-        if {$odb_rtype eq "EXCLUSIVE"} {
-            $r addGroup $g
+    set existing_groups [$r getGroups]
+    if {[llength $existing_groups] > 0} {
+        set g [lindex $existing_groups 0]
+        set grp_name [$g getName]
+    } else {
+        set g [$block findGroup $grp_name]
+        if {$g eq "NULL" || $g eq ""} {
+            set g [odb::dbGroup_create $block $grp_name]
+            # Only attach group to region if region is EXCLUSIVE (fence).
+            # For INCLUSIVE regions, attaching group directly causes GPL to enforce strict local fence density
+            # leading to GPL-0301 utilization overflow when fixed tapcells and std cells occupy the box.
+            if {$odb_rtype eq "EXCLUSIVE"} {
+                $r addGroup $g
+            }
         }
     }
 
@@ -164,18 +176,18 @@ proc create_region {args} {
         }
     }
 
-    if {$is_new} {
+    if {$is_new || [llength [$g getInsts]] == 0} {
         set inst_count 0
         foreach inst [$block getInsts] {
             set iname [$inst getName]
             if {[string match "${mod}/*" $iname] || $iname eq $mod} {
-                $g addInst $inst
+                catch { $g addInst $inst }
                 incr inst_count
             }
         }
-        puts "\[SILIS\] Created $rtype region '$reg_name' ($x1, $y1) to ($x2, $y2) with $inst_count instances."
+        puts "\[SILIS\] Region '$reg_name' ($x1, $y1) to ($x2, $y2) group '$grp_name' bound ($inst_count instances)."
     } else {
-        puts "\[SILIS\] Appended rectilinear box ($x1, $y1) to ($x2, $y2) to region '$reg_name'."
+        puts "\[SILIS\] Appended rectilinear box ($x1, $y1) to ($x2, $y2) to region '$reg_name' (group '$grp_name': [llength [$g getInsts]] instances)."
     }
 
     # 4-strip perimeter blockage for halo keepout around region (preserving interior)

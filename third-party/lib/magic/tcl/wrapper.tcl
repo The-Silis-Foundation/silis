@@ -15,7 +15,10 @@ global Glyph
 global Opts
 global Winopts
 
-set tk_version $::tk_version
+# Don't source this file in a non-graphics (no Tk) environment
+
+if {[catch {set tk_version $::tk_version}]} {return}
+
 # Simple console commands (like TkCon, but much simpler)
 
 if {[lsearch [namespace children] ::tkshell] < 0} {
@@ -240,10 +243,14 @@ proc magic::drcupdate { option } {
 }
 
 proc magic::drcstate { status } {
+   *bypass logcommands suspend
    set winlist [*bypass windownames layout]
    foreach lwin $winlist {
       set framename [winfo parent $lwin]
-      if {$framename == "."} {return}
+      if {$framename == "."} {
+	 *bypass logcommands resume
+	 return
+      }
       switch $status {
          idle {
 		set dct [*bypass drc list count total]
@@ -257,6 +264,7 @@ proc magic::drcstate { status } {
          busy { ${framename}.titlebar.drcbutton configure -selectcolor yellow }
       }
    }
+   *bypass logcommands resume
 }
 
 # Create the menu of windows.  This is kept separate from the cell manager,
@@ -380,6 +388,14 @@ proc magic::maketechmanager { mgrpath } {
 
 catch {source ${CAD_ROOT}/magic/tcl/cellmgr.tcl}
 
+# Generate the toolbar for the wrapper
+
+catch {source ${CAD_ROOT}/magic/tcl/toolbar.tcl}
+
+# Include the reorder toolbar script
+
+catch {source ${CAD_ROOT}/magic/tcl/reorderLayers.tcl}
+
 # Generate the library manager
 
 catch {source ${CAD_ROOT}/magic/tcl/libmgr.tcl}
@@ -465,6 +481,28 @@ proc magic::techmanager {{option "update"}} {
 		"magic::tech load $j ; \
 		 magic::techmanager update"
       }
+
+      # Open PDK support:  If environment variable $PDK_ROOT exists
+      # then search in that directory using the standard open PDK
+      # path <tech_name>/libs.tech/magic/<tech_name>.tech.  NOTE:
+      # This can be done by sourcing the .magicrc file instead of
+      # loading the .tech file, but the window menus will not be
+      # updated until the next window is opened.
+
+      set dirtop {}
+      if {[catch {set dirtop $PDK_ROOT}]} {
+	 catch {set dirtop $::env(PDK_ROOT)}
+      }
+      if {$dirtop != {}} {
+         set tlist [glob -nocomplain ${dirtop}/*]
+         foreach i [join $tlist] {
+	    set j [file tail ${i}]
+	    set rcfile ${i}/libs.tech/magic/${j}.magicrc
+	    .techmgr.title.tname.menu add command -label ${j} -command \
+		"source ${rcfile} ; \
+		 magic::techmanager update"
+	 }
+      }
    }
 
    set techlambda [magic::tech lambda]
@@ -495,9 +533,11 @@ proc magic::techmanager {{option "update"}} {
 proc magic::captions {{subcommand {}}} {
    global Opts
 
+   if {[magic::display] == "NULL"} {return}
    if {$subcommand != {} && $subcommand != "writeable" && $subcommand != "load"} {
       return
    }
+   *bypass logcommands suspend
    set winlist [magic::windownames layout]
    foreach winpath $winlist {
       set framename [winfo parent $winpath]
@@ -517,29 +557,30 @@ proc magic::captions {{subcommand {}}} {
 	   "Loaded: ${subcaption1} Editing: ${subcaption2} Tool: $Opts(tool) \
 	   Technology: ${techname}"
    }
+   *bypass logcommands resume
 }
 
 # Allow captioning in the title window by tagging the "load" and "edit" commands
 # Note that the "box" tag doesn't apply to mouse-button events, so this function
 # is duplicated by Tk binding of mouse events in the layout window.
 
-magic::tag load "[magic::tag load]; magic::captions"
-magic::tag edit "magic::captions"
-magic::tag save "magic::captions"
-magic::tag down "magic::captions"
-magic::tag box "magic::boxview %W %1"
-magic::tag move "magic::boxview %W"
-magic::tag scroll "magic::scrollupdate %W"
-magic::tag view "magic::scrollupdate %W"
-magic::tag zoom "magic::scrollupdate %W"
-magic::tag findbox "magic::scrollupdate %W"
-magic::tag see "magic::toolupdate %W %1 %2"
-magic::tag tech "magic::techrebuild %W %1; magic::captions %1"
-magic::tag drc "magic::drcupdate %1"
-magic::tag path "[magic::tag path]; magic::techmanager update"
-magic::tag cellname "magic::mgrupdate %W %1"
-magic::tag cif      "magic::mgrupdate %W %1"
-magic::tag gds      "magic::mgrupdate %W %1"
+magic::tag add load "magic::captions"
+magic::tag add edit "magic::captions"
+magic::tag add save "magic::captions"
+magic::tag add down "magic::captions"
+magic::tag add box "magic::boxview %W %1"
+magic::tag add move "magic::boxview %W"
+magic::tag add scroll "magic::scrollupdate %W"
+magic::tag add view "magic::scrollupdate %W"
+magic::tag add zoom "magic::scrollupdate %W"
+magic::tag add findbox "magic::scrollupdate %W"
+magic::tag add see "magic::toolupdate %W %1 %2"
+magic::tag add tech "magic::techrebuild %W %1; magic::captions %1"
+magic::tag add drc "magic::drcupdate %1"
+magic::tag add path "magic::techmanager update"
+magic::tag add cellname "magic::mgrupdate %W %1"
+magic::tag add cif      "magic::mgrupdate %W %1"
+magic::tag add gds      "magic::mgrupdate %W %1"
 
 # This should be a list. . . do be done later
 set lwindow 0
@@ -554,10 +595,10 @@ set Opts(crosshair) 0
 set Opts(hidelocked) 0
 set Opts(hidespecial) 0
 set Opts(toolbar) 0
-set Opts(scale) 1.0
 set Opts(toolscale) 1.0
 set Opts(drc) 1
 set Opts(autobuttontext) 1
+set Opts(cmdentry) 0
 
 # Update cell and tech managers in response to a cif or gds read command
 
@@ -612,6 +653,7 @@ proc magic::repaintwrapper { win } {
 # infinite recursion.
 
 proc magic::boxview {win {cmdstr ""}} {
+   if {[magic::display] == "NULL"} {return}
    if {${cmdstr} == "exists" || ${cmdstr} == "help" || ${cmdstr} == ""} {
       # do nothing. . . informational only, no change to the box
    } elseif {${cmdstr} == "remove"} {
@@ -630,18 +672,20 @@ proc magic::boxview {win {cmdstr ""}} {
 
       set framename [winfo parent $win]
       if {$framename == "."} {return}
-      if {[catch {set cr [cif scale out]}]} {return}
+      set curunits [units list]
+      units microns noprint
       set bval [${win} box values]
-      set bllx [expr {[lindex $bval 0] * $cr }]
-      set blly [expr {[lindex $bval 1] * $cr }]
-      set burx [expr {[lindex $bval 2] * $cr }]
-      set bury [expr {[lindex $bval 3] * $cr }]
+      set bllx [lindex $bval 0]
+      set blly [lindex $bval 1]
+      set burx [lindex $bval 2]
+      set bury [lindex $bval 3]
       if {[expr {$bllx == int($bllx)}]} {set bllx [expr {int($bllx)}]}
       if {[expr {$blly == int($blly)}]} {set blly [expr {int($blly)}]}
       if {[expr {$burx == int($burx)}]} {set burx [expr {int($burx)}]}
       if {[expr {$bury == int($bury)}]} {set bury [expr {int($bury)}]}
       set titletext [format "box (%+g %+g) to (%+g %+g) microns" \
 			$bllx $blly $burx $bury]
+      units {*}$curunits
       ${framename}.titlebar.pos configure -text $titletext
    }
 }
@@ -651,49 +695,54 @@ proc magic::cursorview {win} {
    if {$win == {}} {
       return
    }
+   *bypass logcommands suspend
    set framename [winfo parent $win]
-   if {[catch {set cr [*bypass cif scale out]}]} {return}
-   if {$cr == 0} {return}
-   set olst [${win} cursor internal]
+   set olst [${win} cursor microns]
 
    set olstx [lindex $olst 0]
    set olsty [lindex $olst 1]
 
    if {$Opts(crosshair)} {
-      *bypass crosshair ${olstx}i ${olsty}i
+      *bypass crosshair ${olstx}um ${olsty}um
    }
 
-   # Use catch, because occasionally this fails on startup
-   if {[catch {
-      set olstx [expr {$olstx * $cr}]
-      set olsty [expr {$olsty * $cr}]
-   }]} {return}
-
-   if {[${win} box exists]} {
+   # I do not know why the T/F result gets lost or overridden sometimes
+   set gotbox [${win} box exists]
+   if {$gotbox == {}} {set gotbox false}
+   if {$gotbox} {
+      set curunits [${win} units list]
+      ${win} units microns noprint
       set dlst [${win} box position]
-      set dx [expr {$olstx - ([lindex $dlst 0]) * $cr }]
-      set dy [expr {$olsty - ([lindex $dlst 1]) * $cr }]
+
+      set dx [expr {$olstx - [lindex $dlst 0]}]
+      set dy [expr {$olsty - [lindex $dlst 1]}]
       if {[expr {$dx == int($dx)}]} {set dx [expr {int($dx)}]}
       if {[expr {$dy == int($dy)}]} {set dy [expr {int($dy)}]}
       set titletext [format "(%+g %+g) %+g %+g microns" $olstx $olsty $dx $dy]
       ${framename}.titlebar.pos configure -text $titletext
+      ${win} units {*}$curunits
    } else {
       set titletext [format "(%+g %+g) microns" $olstx $olsty]
       ${framename}.titlebar.pos configure -text $titletext
    }
+   *bypass logcommands resume
 }
 
-proc magic::toolupdate {win {yesno "yes"} {layerlist "none"}} {
+proc magic::toolupdate {win {yesno "yes"} {layerlist ""}} {
    global Winopts
 
+   if {[magic::display] == "NULL"} {return}
+   *bypass logcommands suspend
    if {$win == {}} {
       set win [magic::windownames]
    }
 
    # Wind3d has a "see" function, so make sure this is not a 3d window
    if {$win == [magic::windownames wind3d]} {
+      *bypass logcommands resume
       return
    }
+   *bypass logcommands resume
 
    set topname [winfo toplevel $win]
    set framename [winfo parent $win]
@@ -701,7 +750,9 @@ proc magic::toolupdate {win {yesno "yes"} {layerlist "none"}} {
    # Don't do anything if toolbar is not present
    if { $Winopts(${topname},toolbar) == 0 } { return }
 
-   if {$layerlist == "none"} {
+   # To ensure backwards compatibility, we check if the 
+   # layer is called none, so avoid naming a layer none.
+   if {$layerlist == "" || $layerlist == "none"} {
 	set layerlist $yesno
 	set yesno "yes"
    }
@@ -729,12 +780,16 @@ proc magic::toolupdate {win {yesno "yes"} {layerlist "none"}} {
       # "hidespecial" is used, so catch each configure command.
 
       if {$canon != ""} {
-         if {$yesno == "yes"} {
-	    catch {${framename}.toolbar.b$canon configure -image img_$canon}
-	    catch {${framename}.toolbar.p$canon configure -image pale_$canon}
-         } else {
-	    catch {${framename}.toolbar.b$canon configure -image img_space}
-	    catch {${framename}.toolbar.p$canon configure -image img_space}
+         # Layer aliases like "allm1" expand into multiple layers
+         foreach clayer $canon {
+	    set toolframe ${framename}.toolbar.canvas.frame.f${clayer}
+            if {$yesno == "yes"} {
+	       catch {${toolframe}.b configure -image img_$clayer}
+	       catch {${toolframe}.p configure -image pale_$clayer}
+            } else {
+	       catch {${toolframe}.b configure -image img_space}
+	       catch {${toolframe}.p configure -image img_space}
+	    }
 	 }
       }
    }
@@ -762,142 +817,13 @@ proc magic::maketoolimages {} {
     }
 }
 
-# Generate the toolbar for the wrapper
-
-proc magic::maketoolbar { framename } {
-   global Opts
-   global Winopts
-
-   # Don't do anything if in suspend mode
-   set topname [winfo toplevel $framename]
-   if {[info exists Winopts(${topname},suspend)]} {
-      if { $Winopts(${topname},suspend) > 0} { return }
-   }
-
-   if {$Opts(toolbar) == 0} {
-      magic::maketoolimages
-      set Opts(toolbar) 1
-   }
-
-   # Destroy any existing toolbar before starting
-   set alltools [winfo children ${framename}.toolbar]
-   foreach i $alltools {
-      destroy $i
-   }
-
-   # All toolbar commands will be passed to the appropriate window
-   set win ${framename}.magic
-
-   # Generate layer images and buttons for toolbar
-   if {$Opts(hidespecial) == 0} {
-       set special_layers {errors labels subcell}
-   } else {
-       set special_layers {}
-   }
-
-   if {$Opts(hidelocked) == 0} {
-       set all_layers [concat $special_layers [magic::tech layer "*"]]
-   } else {
-       set all_layers [concat $special_layers [magic::tech unlocked]]
-   }
-   foreach layername $all_layers {
-      button ${framename}.toolbar.b$layername -image img_$layername -command \
-		"$win see $layername"
-
-      # Bindings:  Entering the button puts the canonical layer name in the
-      # message window.
-      bind ${framename}.toolbar.b$layername <Enter> \
-		[subst {focus %W ; ${framename}.titlebar.message configure \
-		 -text "$layername"}]
-      bind ${framename}.toolbar.b$layername <Leave> \
-		[subst {${framename}.titlebar.message configure -text ""}]
-
-      # 3rd mouse button makes layer invisible; 1st mouse button restores it.
-      # 2nd mouse button paints the layer color.  Key "p" also does paint, esp.
-      # for users with 2-button mice.  Key "e" erases, as does Shift-Button-2.
-
-      bind ${framename}.toolbar.b$layername <ButtonPress-2> \
-		"$win paint $layername"
-      bind ${framename}.toolbar.b$layername <KeyPress-p> \
-		"$win paint $layername"
-      bind ${framename}.toolbar.b$layername <Shift-ButtonPress-2> \
-		"$win erase $layername"
-      bind ${framename}.toolbar.b$layername <KeyPress-e> \
-		"$win erase $layername"
-      bind ${framename}.toolbar.b$layername <ButtonPress-3> \
-		"$win see no $layername"
-      bind ${framename}.toolbar.b$layername <KeyPress-s> \
-		"$win select more area $layername"
-      bind ${framename}.toolbar.b$layername <KeyPress-S> \
-		"$win select less area $layername"
-   }
-
-   # Create an additional set of layers and buttons in the "disabled" style
-   # These buttons can be swapped in place of the regular buttons when the
-   # layer is locked.  They define no bindings except "u" for "unlock",
-   # and the button bindings (see, see no)
-
-   foreach layername $all_layers {
-      button ${framename}.toolbar.p$layername -image pale_$layername -command \
-		"$win see $layername"
-      bind ${framename}.toolbar.p$layername <ButtonPress-3> \
-		"$win see no $layername"
-      bind ${framename}.toolbar.p$layername <Enter> \
-		[subst {focus %W ; ${framename}.titlebar.message configure \
-		 -text "$layername (locked)"}]
-      bind ${framename}.toolbar.p$layername <Leave> \
-		[subst {${framename}.titlebar.message configure -text ""}]
-   }
-
-   # Figure out how many columns we need to fit all the layer buttons inside
-   # the toolbar without going outside the window area.
-
-   set locklist [tech locked]
-   set ncols 0
-   while {1} {
-      incr ncols
-      set i 0
-      set j 0
-      foreach layername $all_layers {
-	 if {[lsearch $locklist $layername] >= 0} {
-            grid ${framename}.toolbar.p$layername -row $i -column $j -sticky news
-	 } else {
-            grid ${framename}.toolbar.b$layername -row $i -column $j -sticky news
-	 }
-	 bind ${framename}.toolbar.p$layername <KeyPress-u> \
-		"$win tech unlock $layername ; \
-		grid forget ${framename}.toolbar.p$layername ; \
-		grid ${framename}.toolbar.b$layername \
-		-row $i -column $j -sticky news"
-	 bind ${framename}.toolbar.b$layername <KeyPress-l> \
-		"$win tech lock $layername ; \
-		grid forget ${framename}.toolbar.b$layername ; \
-		grid ${framename}.toolbar.p$layername \
-		-row $i -column $j -sticky news"
-         incr j
-         if {$j == $ncols} {
-	    set j 0
-	    incr i
-         }
-      }
-
-      # Make sure that window has been created so we will get the correct
-      # height value.
-
-      update idletasks
-      set winheight [expr {[winfo height ${framename}] - \
-		[winfo height ${framename}.titlebar]}]
-      set toolheight [lindex [grid bbox ${framename}.toolbar] 3]
-      if {$toolheight <= $winheight} {break}
-   }
-}
-
 # Delete and rebuild the toolbar buttons in response to a "tech load"
 # command.
 
 proc magic::techrebuild {winpath {cmdstr ""}} {
    global Opts
 
+   if {[magic::display] == "NULL"} {return}
    # For NULL window, find all layout windows and apply update to each.
    if {$winpath == {}} {
       set winlist [magic::windownames layout]
@@ -925,11 +851,18 @@ proc magic::techrebuild {winpath {cmdstr ""}} {
 proc magic::setscrollvalues {win} {
    global Opts
 
+   *bypass logcommands suspend
+   set curunits [units list]
+   units internal noprint
    set svalues [${win} view get]
    set bvalues [${win} view bbox]
+   units {*}$curunits
 
    set framename [winfo parent ${win}]
-   if {$framename == "."} {return}
+   if {$framename == "."} {
+      *bypass logcommands resume
+      return
+   }
 
    set bwidth [expr {[lindex $bvalues 2] - [lindex $bvalues 0]}]
    set bheight [expr {[lindex $bvalues 3] - [lindex $bvalues 1]}]
@@ -971,6 +904,8 @@ proc magic::setscrollvalues {win} {
 
 proc magic::scrollupdate {win} {
 
+   *bypass logcommands suspend
+   if {[magic::display] == "NULL"} {return}
    if {[info level] <= 1} {
 
       # For NULL window, find current window
@@ -986,6 +921,7 @@ proc magic::scrollupdate {win} {
  	 magic::setscrollvalues $win
       }
    }
+   *bypass logcommands resume
 }
 
 # scrollview:  update the magic display to match the
@@ -997,8 +933,11 @@ proc magic::scrollview { w win orient } {
    set v2 $scale($orient,update)
    set delta [expr {$v2 - $v1}]
 
+   set curunits [units list]
+   units internal noprint
    set bvalues [${win} view bbox]
    set wvalues [${win} windowpositions]
+   units {*}$curunits
 
    # Note that adding 0.000 in expression forces floating-point
 
@@ -1135,6 +1074,16 @@ proc magic::openwrapper {{cell ""} {framename ""}} {
    toplevel $framename
    tkwait visibility $framename
 
+   # Get scale from the TkDefaultFont size, unless Opts(scale) is already
+   # set.  On standard displays, an "M" in the Sans font is usually 10
+   # pixels wide, and 22 on high resolution displays, so this maps to
+   # a scale of 1 on standard displays and a scale of 2 on high resolution
+   # displays.  Make sure scale doesn't go to zero or bad things happen.
+ 
+   if [catch {set Opts(scale)}] {
+	set Opts(scale) [expr {max(1, int([font measure TkDefaultFont M] / 10))}]
+   }
+
    # Resize the window
    if {[catch {wm geometry ${framename} $Winopts(${framename},geometry)}]} {
       catch {wm geometry ${framename} $Opts(geometry)}
@@ -1264,8 +1213,12 @@ proc magic::openwrapper {{cell ""} {framename ""}} {
    bind ${winname} <Motion> "*bypass setpoint %x %y ${winname}; \
 	magic::cursorview ${winname}"
 
-   set Winopts(${framename},toolbar) 1
-   set Winopts(${framename},cmdentry) 0
+   if {[catch {set Winopts(${framename},toolbar)}]} {
+      set Winopts(${framename},toolbar) 1
+   }
+   if {[catch {set Winopts(${framename},cmdentry)}]} {
+      set Winopts(${framename},cmdentry) $Opts(cmdentry)
+   }
 
 # #################################
 # File
@@ -1371,7 +1324,17 @@ proc magic::openwrapper {{cell ""} {framename ""}} {
    $m add command -label "Grid off" -command {magic::grid off}
    $m add command -label "Snap-to-grid on" -command {magic::snap on}
    $m add command -label "Snap-to-grid off" -command {magic::snap off}
-   $m add command -label "Measure box" -command {magic::box }
+   $m add command -label "Measure box" -command {magic::box}
+   $m add separator
+   $m add command -label "Report internal units" -command {magic::units internal}
+   $m add command -label "Report lambda units" -command {magic::units lambda}
+   $m add command -label "Report micron units" -command {magic::units microns}
+   $m add command -label "Report grid units" -command {magic::units grid}
+   $m add check -label "Display units" -variable Opts(printunits) \
+		-command [subst {if { \$Opts(printunits) } { \
+		magic::units print } else { magic::units noprint } }]
+
+
    $m add separator
    $m add command -label "Set grid 0.05um" -command {magic::grid 0.05um}
    $m add command -label "Set grid 0.10um" -command {magic::grid 0.10um}
@@ -1390,6 +1353,7 @@ proc magic::openwrapper {{cell ""} {framename ""}} {
    $m add separator
    $m add command -label "Clear Feedback" -command {magic::feedback clear}
    $m add separator
+   $m add command -label "Reorder layers" -command "magic::reorderToolbar ${layoutframe}"
 
 # #################################
 # DRC
@@ -1499,6 +1463,11 @@ proc magic::openwrapper {{cell ""} {framename ""}} {
    if { $Winopts(${framename},toolbar) == 1} {
       magic::maketoolbar ${layoutframe}
       grid ${layoutframe}.toolbar -row 1 -column 2 -rowspan 2 -sticky new
+   }
+
+   # If the command entry window is enabled, create it now
+   if { $Winopts(${framename},cmdentry) == 1} {
+      addcommandentry $framename
    }
 
    # Remove "open" and "close" macros so they don't generate non-GUI

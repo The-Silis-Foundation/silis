@@ -514,11 +514,21 @@ class LayerViewerPanel(QWidget):
         if os.path.basename(proj_dir) == "results":
             proj_dir = os.path.dirname(proj_dir)
 
-        odb_path = os.path.join(proj_dir, "results", "temp.odb")
-        if not os.path.isfile(odb_path):
-            cand_odb = os.path.join(os.path.dirname(os.path.abspath(def_path)), "temp.odb")
-            if os.path.isfile(cand_odb):
-                odb_path = cand_odb
+        # Only read an OpenDB checkpoint directly if an .odb was requested,
+        # or if viewing temp.def and sibling temp.odb is at least as fresh.
+        odb_path = ""
+        abs_def = os.path.abspath(def_path)
+        if abs_def.lower().endswith(".odb"):
+            odb_path = abs_def
+        elif os.path.basename(abs_def) == "temp.def":
+            for cand_odb in [
+                os.path.join(proj_dir, "results", "temp.odb"),
+                os.path.join(os.path.dirname(abs_def), "temp.odb"),
+            ]:
+                if os.path.isfile(cand_odb) and os.path.getsize(cand_odb) > 0:
+                    if os.path.getmtime(cand_odb) >= mtime:
+                        odb_path = cand_odb
+                    break
 
         # Show non-blocking status message in IDE status bar
         if self.ide and hasattr(self.ide, 'statusBar'):

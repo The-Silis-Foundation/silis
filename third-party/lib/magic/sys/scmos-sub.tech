@@ -2571,7 +2571,7 @@ style	lambda=0.4
 	sideoverlap	(poly,pc)/a	 ~(poly,pc)/a	 (m2,m2c,m3c,pad)/m2	 5	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1
 	sideoverlap	(poly,pc)/a	 ~(poly,pc)/a	 (m3,m3c,pad)/m3	 3	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1,(m2,m2c,m3c,pad)/m2
 
-	sidewall (poly,pc)/a ~(poly,pc)/a ~(poly,pc)/a (poly,pc)/a	9
+	sidewall (poly,pc)/a ~(poly,pc)/a ~(poly,pc)/a (poly,pc)/a	18
 	
 
 
@@ -2588,7 +2588,7 @@ style	lambda=0.4
 	sideoverlap	(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 (m2,m2c,m3c,pad)/m2	 10	  
 	sideoverlap	(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 (m3,m3c,pad)/m3	 6	 (m2,m2c,m3c,pad)/m2
 
-	sidewall (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	22
+	sidewall (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	44
 	
 
 
@@ -2606,7 +2606,7 @@ style	lambda=0.4
 	sideoverlap	(m2,m2c,m3c,pad)/m2	 ~(m2,m2c,m3c,pad)/m2	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	   18	  
 	sideoverlap	(m2,m2c,m3c,pad)/m2	 ~(m2,m2c,m3c,pad)/m2	 (m3,m3c,pad)/m3	   8	  
 
-	sidewall (m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   (m2,m2c,m3c,pad)/m2	26
+	sidewall (m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   (m2,m2c,m3c,pad)/m2	52
 	
 
 
@@ -2625,7 +2625,7 @@ style	lambda=0.4
 	sideoverlap	(m3,m3c,pad)/m3	 ~(m3,m3c,pad)/m3	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	   16	 (m2,m2c,m3c,pad)/m2
 	sideoverlap	(m3,m3c,pad)/m3	 ~(m3,m3c,pad)/m3	 (m2,m2c,m3c,pad)/m2	   20	  
 
-	sidewall (m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   (m3,m3c,pad)/m3	40
+	sidewall (m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   (m3,m3c,pad)/m3	80
 	
 
 
@@ -2696,7 +2696,7 @@ style	lambda=0.30
 	sideoverlap	(poly,pc)/a	 ~(poly,pc)/a	 (m2,m2c,m3c,pad)/m2	 2.7	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1
 	sideoverlap	(poly,pc)/a	 ~(poly,pc)/a	 (m3,m3c,pad)/m3	 1.8	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1,(m2,m2c,m3c,pad)/m2
 
-	sidewall (poly,pc)/a ~(poly,pc)/a ~(poly,pc)/a (poly,pc)/a	7.2
+	sidewall (poly,pc)/a ~(poly,pc)/a ~(poly,pc)/a (poly,pc)/a	14.4
 	
 
 
@@ -2713,7 +2713,7 @@ style	lambda=0.30
 	sideoverlap	(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 (m2,m2c,m3c,pad)/m2	 8.7	  
 	sideoverlap	(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	 (m3,m3c,pad)/m3	 4.8	 (m2,m2c,m3c,pad)/m2
 
-	sidewall (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	19.2
+	sidewall (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   ~(m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1   (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	38.4
 	
 
 
@@ -2731,7 +2731,7 @@ style	lambda=0.30
 	sideoverlap	(m2,m2c,m3c,pad)/m2	 ~(m2,m2c,m3c,pad)/m2	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	   15	  
 	sideoverlap	(m2,m2c,m3c,pad)/m2	 ~(m2,m2c,m3c,pad)/m2	 (m3,m3c,pad)/m3	   10.8	  
 
-	sidewall (m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   (m2,m2c,m3c,pad)/m2	21.6
+	sidewall (m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   ~(m2,m2c,m3c,pad)/m2   (m2,m2c,m3c,pad)/m2	43.2
 	
 
 
@@ -2750,7 +2750,7 @@ style	lambda=0.30
 	sideoverlap	(m3,m3c,pad)/m3	 ~(m3,m3c,pad)/m3	 (m1,ndc,pdc,nwc,pwc,nbdc,capc,ec,clc,emc,pbc,pc,via)/m1	   15.3	 (m2,m2c,m3c,pad)/m2
 	sideoverlap	(m3,m3c,pad)/m3	 ~(m3,m3c,pad)/m3	 (m2,m2c,m3c,pad)/m2	   19.2	  
 
-	sidewall (m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   (m3,m3c,pad)/m3	34.3
+	sidewall (m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   ~(m3,m3c,pad)/m3   (m3,m3c,pad)/m3	68.6
 	
 
 	

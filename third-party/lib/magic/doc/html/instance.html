@@ -1,4 +1,3 @@
-
 <HTML>
 <HEAD>
   <STYLE type="text/css">
@@ -14,9 +13,9 @@
     A.red:active {color: yellow }
   </STYLE>
 </HEAD>
-<TITLE>Magic-7.3 Command Reference</TITLE>
+<TITLE>Magic-8.3 Command Reference</TITLE>
 <BODY BACKGROUND=graphics/blpaper.gif>
-<H1> <IMG SRC=graphics/magic_title2.gif ALT="Magic VLSI Layout Tool Version 7.3">
+<H1> <IMG SRC=graphics/magic_title8_3.png ALT="Magic VLSI Layout Tool Version 8.3">
      <IMG SRC=graphics/magic_OGL_sm.gif ALIGN="top" ALT="*"> </H1>
 
 <H2>instance</H2>
@@ -31,12 +30,14 @@ Operations on cell instances (uses).
          where <I>option</I> is one of the following:
 	 <DL>
 	   <DT> [<B>list</B>] <B>children</B> [<I>name</I>]
-	   <DD> List all of the children definitions of cell use <I>name</I>,
+	   <DD> List all of the children instances of cell use <I>name</I>,
 		or the children of the currently selected cell instance.
-	   <DT> [<B>list</B>] <B>parent</B> [<I>name</I>]
+	   <DT> [<B>list</B>] <B>parent</B> <I>name</I>
 	   <DD> List the parent cell definition of cell use <I>name</I>,
 		or the parent of the currently selected cell instance.
-	   <DT> [<B>list</B>] <B>exists</B>|<B>self</B> [<I>name</I>]
+	   <DT> [<B>list</B>] <B>celldef</B> [<I>name</I>]
+	   <DD> List the cell definition of cell use <I>name</I>.
+	   <DT> [<B>list</B>] <B>exists</B>|<B>self</B>|<B>instances</B> [<I>name</I>]
 	   <DD> Returns the name of the instance if the cell exists, or false
 		(0) if the instance does not exist (is not loaded into the
 		database; the cell may still exist on disk).  If <I>name</I>
@@ -46,6 +47,58 @@ Operations on cell instances (uses).
 	   <DD> List all of the cell instances in the database.  Note that
 		expansion is not automatic, so cells that are not expanded
 		are not searched.
+	   <DT> <B>orientation</B> [<I>name</I>] [<B>-def</B>]
+	   <DD> Returns the orientation of the instance.  By default, returns
+		the orientation in the naming convention used by the
+		"<B>getcell</B>" command.  If the option "<B>-def</B>" is
+		specified, then the orientation is given in the naming
+		convention used by the DEF format for component placement.
+		if <I>name</I> is given, then return the orientation of the
+		named instance.  Otherwise, the orientation of all selected
+		instances is returned as an unordered list.
+	   <DT> <B>position</B> [<I>name</I>]
+	   <DD> Returns the position of the instance as "<I>x y</I>":  the
+		point in the parent cell where the origin (0, 0) of the
+		instance's cell is placed.  This is the translation part of
+		the instance's transform, and together with the
+		<B>orientation</B> (above) it describes the placement of
+		the instance.  Note that the position is generally not the
+		lower left corner of the instance's bounding box (the corner
+		that "<B>getcell</B>" places at the cursor box), unless the
+		cell's layout begins at its origin and the instance is not
+		rotated or flipped.  Values are given in the current units
+		(see the <B>units</B> command).  If <I>name</I> is given, then
+		return the position of the named instance.  Otherwise, the
+		position of the selected instance is returned, or a list of
+		{<I>x y</I>} pairs if more than one instance is selected.
+		For an array, the position is that of one element:  the
+		element given by the array indices in <I>name</I> (for
+		example, <B>mycell[1]</B> or <B>mycell[2][1]</B>), or the
+		element that was selected with "<B>select cell</B>"
+		even though the whole array is selected.  Otherwise (for
+		example, if the array was selected with "<B>select area</B>"),
+		it is the position of the first element.
+	   <DT> [<B>list</B>] <B>abutment</B> [<I>name</I>]
+	   <DD> Returns the coordinates of the instance's abutment box
+		(the bounding box formed by the coordinates saved in the
+		FIXED_BBOX property in the cell), translated into the
+		coordinate system of the parent cell (which must be the
+		edit cell).  This should be used, for example, when
+		replacing an instance of a standard cell with another
+		standard cell, to move the cursor box to the abutment box
+		position so that the new cell has the same alignment as
+		the old cell (see also <B>orientation</B>, above).
+	   <DT> <B>lock</B>|<B>unlock</B> [<I>name</I>]
+	   <DD> Locking an instance prevents it from being moved, rotated,
+		flipped, deleted, or copied.  This is useful, for example,
+		when part of a layout is declared "final" and changes to
+		that area are prohibited.  The cell instance's lock status
+		can be saved to and read from the layout file, so the lock
+		will remain in effect until the instance is unlocked.
+		Cells that are locked have the character "<B>*</B>" prepended
+		to the instance name in the display.  With no <I>name</I>
+		given to the command, the lock will be applied to all
+		selected cell instances.
 	 </DL>
       </BLOCKQUOTE>
    </BLOCKQUOTE>
@@ -60,6 +113,12 @@ Operations on cell instances (uses).
       returns the result as a list.  In particular, in the Tcl
       version of magic, this list is a Tcl result that may be
       operated on by Tcl procedures. <P>
+
+      For the options <B>orientation</B>, <B>position</B>,
+      <B>abutment</B>, <B>lock</B>, and <B>unlock</B>, the instance
+      must be a child of the edit cell, and an instance <I>name</I>
+      is looked up in the edit cell.  Instances of the same name in
+      other cells are ignored. <P>
    </BLOCKQUOTE>
 
 <H3>Implementation Notes:</H3>
@@ -71,6 +130,13 @@ Operations on cell instances (uses).
       references are to cell instances rather that cell definitions
       (q.v.).  A number of options to <B>cellname</B> are meaningless
       for instances. <P>
+
+      <I>Warning:</I> Because instance names are arbitrary, looking up
+      an instance name is computationally intensive compared to looking
+      up a cell name.  When used inside a loop, such as to search the
+      cell name hierarchy, use command <B>cellname</B> on cell definitions
+      instead of command <B>instance</B> on cell instance names whenever
+      possible. <P>
 
       The command option <B>instance list exists</B> is nonsensical from
       the standpoint of the end-user (if the cell is selected, of course
@@ -89,6 +155,7 @@ Operations on cell instances (uses).
    <BLOCKQUOTE>
       <A HREF=cellname.html><B>cellname</B></A> <BR>
       <A HREF=load.html><B>load</B></A> <BR>
+      <A HREF=getcell.html><B>getcell</B></A> <BR>
       <A HREF=tk_path_name.html><I>tk_path_name</I></A> <BR>
    </BLOCKQUOTE>
 
@@ -98,6 +165,6 @@ Operations on cell instances (uses).
     <TD> <A HREF=commands.html>Return to command index</A>
   </TR>
 </TABLE>
-<P><I>Last updated:</I> October 8, 2004 at 8:06am <P>
+<P><I>Last updated:</I> October 28, 2026 at 11:54am <P>
 </BODY>
 </HTML>

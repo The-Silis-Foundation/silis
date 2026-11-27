@@ -11,7 +11,25 @@
       "libs.ref/sky130_fd_io/lef/*.lef",
       "libs.ref/sky130_sram_macros/lef/*.lef",
       "libs.ref/sky130_power_switch/lef/*.lef"
-    ]
+    ],
+    "magic_tech": "libs.tech/magic/sky130A.tech",
+    "netgen_setup": "libs.tech/netgen/sky130A_setup.tcl",
+    "gds_dirs": [
+      "libs.ref/sky130_fd_sc_hd/gds",
+      "libs.ref/sky130_fd_io/gds",
+      "libs.ref/sky130_sram_macros/gds",
+      "libs.ref/sky130_fd_sc_hvl/gds"
+    ],
+    "verilog_models": [
+      "libs.ref/sky130_fd_sc_hd/verilog/primitives.v",
+      "libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd.v",
+      "libs.ref/sky130_sram_macros/verilog/*.v"
+    ],
+    "corners": {
+      "nominal": "libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "slow": "libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ss_100C_1v60.lib",
+      "fast": "libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__ff_n40C_1v95.lib"
+    }
   },
   "site": {
     "name": "unithd",

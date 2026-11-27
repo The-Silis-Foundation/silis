@@ -315,9 +315,13 @@ class SignoffRunnerWorker(QThread):
             tcl_lines.append(f'read_lef "{i_l}"')
         for m_l in macro_lefs:
             tcl_lines.append(f'read_lef "{m_l}"')
+        from pdkmanagers.pdk.manager import SSAForge
+        site_cfg = SSAForge.get_site_config(pdk_name)
+        io_site = site_cfg.get("io_site", "IO_SITE")
+        io_csite = site_cfg.get("io_corner_site", "IO_CSITE")
         tcl_lines.extend([
-            "catch { make_fake_io_site -name IO_SITE -width 1 -height 200 }",
-            "catch { make_fake_io_site -name IO_CSITE -width 200 -height 204 }",
+            f"catch {{ make_fake_io_site -name {io_site} -width 1 -height 200 }}",
+            f"catch {{ make_fake_io_site -name {io_csite} -width 200 -height 204 }}",
             f'read_def "{def_file}"'
         ])
 
@@ -447,24 +451,50 @@ class SignoffRunnerWorker(QThread):
             from lvs.lvs_engine import LVSEngine
             lvs_eng = LVSEngine(self.project_root, self.top_module, pdk_name)
             lvs_res = lvs_eng.run_lvs()
-            # In topological matching, if matched devices exist, mark PASS
+            is_lvs_clean = bool(lvs_res.get("is_clean", False))
             gate_results["LVS"] = {
-                "status": "PASS",
-                "matched_devices": lvs_res.get("matched_devices", 301),
-                "matched_nets": lvs_res.get("matched_nets", 322)
+                "status": "PASS" if is_lvs_clean else "FAIL",
+                "matched_devices": lvs_res.get("matched_devices", 0),
+                "unmatched_devices": lvs_res.get("unmatched_devices", 0),
+                "matched_nets": lvs_res.get("matched_nets", 0),
+                "engine": lvs_res.get("engine", "LVS"),
             }
             lvs_metrics = lvs_res
-            self.step_finished.emit("Layout Versus Schematic (LVS)", True, f"{lvs_res.get('matched_devices', 301)} Devices Matched")
+            if not is_lvs_clean:
+                rep_path = os.path.join(self.reports_dir, "signoff_report.md")
+                SignoffAuditReport.generate(self.top_module, pdk_name, os.path.expanduser(f"~/.silis/designs/{self.top_module}"), gate_results, out_path=rep_path)
+                self.pipeline_failed.emit("Layout Versus Schematic (LVS)", f"LVS detected {lvs_res.get('unmatched_devices', 1)} mismatching cell/device classes.", "\n".join(lvs_res.get("mismatches", [])), rep_path)
+                return
+            self.step_finished.emit("Layout Versus Schematic (LVS)", True, f"{lvs_res.get('matched_devices', 0)} Devices Matched")
         except Exception as e_lvs:
-            gate_results["LVS"] = {"status": "PASS", "matched_devices": 301, "matched_nets": 322}
-            self.step_finished.emit("Layout Versus Schematic (LVS)", True, "301 Devices Matched")
+            rep_path = os.path.join(self.reports_dir, "signoff_report.md")
+            self.pipeline_failed.emit("Layout Versus Schematic (LVS)", f"LVS Engine failed: {e_lvs}", str(e_lvs), rep_path)
+            return
 
         # -------------------------------------------------------------
         # Gate 7: Gate-Level Simulation (GLS)
         # -------------------------------------------------------------
         self.step_started.emit("Gate-Level Simulation (GLS)")
-        gate_results["GLS"] = {"status": "PASS", "cycles": 1000}
-        self.step_finished.emit("Gate-Level Simulation (GLS)", True, "1000 Timing Cycles Verified")
+        try:
+            from simulation.gls_engine import GLSEngine
+            gls_eng = GLSEngine(self.project_root, self.top_module, pdk_name)
+            gls_res = gls_eng.run_gls()
+            gls_ok = gls_res.get("status") == "PASS"
+            gate_results["GLS"] = {
+                "status": gls_res.get("status", "FAIL"),
+                "cycles": gls_res.get("cycles_evaluated", 0),
+                "timing_violations": gls_res.get("timing_violations_count", 0),
+            }
+            if not gls_ok:
+                rep_path = os.path.join(self.reports_dir, "signoff_report.md")
+                SignoffAuditReport.generate(self.top_module, pdk_name, os.path.expanduser(f"~/.silis/designs/{self.top_module}"), gate_results, out_path=rep_path)
+                self.pipeline_failed.emit("Gate-Level Simulation (GLS)", f"GLS failed ({gls_res.get('stage', gls_res.get('status'))}).", "\n".join(gls_res.get("errors", [])) or gls_res.get("sim_stdout", ""), rep_path)
+                return
+            self.step_finished.emit("Gate-Level Simulation (GLS)", True, f"{gls_res.get('cycles_evaluated', 0)} Cycles Verified")
+        except Exception as e_gls:
+            rep_path = os.path.join(self.reports_dir, "signoff_report.md")
+            self.pipeline_failed.emit("Gate-Level Simulation (GLS)", f"GLS Engine failed: {e_gls}", str(e_gls), rep_path)
+            return
 
         # -------------------------------------------------------------
         # Full Success: Package & Export Design to ~/.silis/designs/<top>/

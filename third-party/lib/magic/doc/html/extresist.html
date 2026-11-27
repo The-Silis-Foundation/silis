@@ -13,9 +13,9 @@
     A.red:active {color: yellow }
   </STYLE>
 </HEAD>
-<TITLE>Magic-7.3 Command Reference</TITLE>
+<TITLE>Magic-8.3 Command Reference</TITLE>
 <BODY BACKGROUND=graphics/blpaper.gif>
-<H1> <IMG SRC=graphics/magic_title2.gif ALT="Magic VLSI Layout Tool Version 7.3">
+<H1> <IMG SRC=graphics/magic_title8_3.png ALT="Magic VLSI Layout Tool Version 8.3">
      <IMG SRC=graphics/magic_OGL_sm.gif ALIGN="top" ALT="*"> </H1>
 
 <H2>extresist</H2>
@@ -30,11 +30,41 @@ information.
       <BLOCKQUOTE>
          where <I>option</I> may be one of the following:
 	 <DL>
-	   <DT> <B>tolerance</B> <I>value</I>
-	   <DD> Set the ratio between resistor and transistor tolerance
-		for determining when to insert resistance into a network route.
 	   <DT> <B>all</B>
 	   <DD> Extract all the nets.
+	   <DT> <B>threshold</B> [<I>value</I>]
+	   <DD> With no value given, returns the current lumped resistance
+		threshold used to determine if a network will or will not be
+		analyzed for resistance extraction, in milliohms.  The default
+		<B>threshold</B> value is 10000 milliohms (10 ohms).  If
+		<I>value</I> is given, then set the lumped resistance threshold
+		to <I>value</I> milliohms.  A value of zero means that no
+		resistance cutoff is applied.
+	   <DT> <B>mindelay</B> [<I>value</I>]
+	   <DD> With no value given, returns the current delay time threshold
+		used to determine if a network will or will not be analyzed for
+		resistance extraction, in picoseconds.  The default
+		<B>mindelay</B> value is 1ps.  If <I>value</I> is given,
+		then set the delay threshold to <I>value</I> picoseconds.
+		A value of zero means that no delay cutoff is applied.
+	   <DT> <B>minres</B> [<I>value</I>]
+	   <DD> With no value given, returns the current absolute resistance
+		threshold used to prune small resistances from a network when
+		simplifying, in milliohms.  The default <B>minres</B> value
+		is 1000 milliohms (1 ohm).  If <I>value</I> is given, then set
+		the absolute resistance threshold to <I>value</I> milliohms.
+		Note that resistances smaller than <I>value</I> may still
+		appear in the output netlist if the algorithm is unable to
+		simplify the network around the resistor, and a resistor
+		between two ports is never removed.  A value of zero means
+		that no resistors are pruned.
+	   <DT> <B>prune</B> [<I>value</I>]
+	   <DD> With no value given, returns the current tolerance used to
+		remove negligible resistors from a network when simplifying.
+		The default <B>prune</B> value is 0.01.  If <I>value</I> is
+		given, then set the tolerance to <I>value</I>, which must be
+		at least zero and less than one.  A value of zero means that
+		no resistors are removed this way.
 	   <DT> <B>simplify</B> [<B>on</B>|<B>off</B>]
 	   <DD> Turn on/off simplification of resistor nets.
 	   <DT> <B>extout</B> [<B>on</B>|<B>off</B>]
@@ -42,9 +72,23 @@ information.
 	   <DT> <B>lumped</B> [<B>on</B>|<B>off</B>]
 	   <DD> Turn on/off writing of updated lumped resistances.
 	   <DT> <B>silent</B> [<B>on</B>|<B>off</B>]
-	   <DD> Turn off/on printing of net statistics.
+	   <DD> Turn off/on printing of nets being processed.
+	   <DT> <B>debug</B> [<B>on</B>|<B>off</B>]
+	   <DD> Turn off/on additional diagnostic information.
 	   <DT> <B>skip</B> <I>mask</I>
 	   <DD> Don't extract types indicated in the comma-separated list <I>mask</I>
+	   <DT> <B>ignore</B> [<I>netname</I>|<B>none</B>]
+	   <DD> Don't extract the net named <I>netname</I>.  The list of ignored
+		nets is global, cumulative, and persistent;  it will only be cleared
+		when the <B>extresist ignore none</B> command is issued
+		(option available from version 8.3.207).
+	   <DT> <B>include</B> [<I>netname</I>|<B>all</B>]
+	   <DD> Extract the net named <I>netname</I>.  When this option is called
+		at least once, the behavior of the extraction changes to extract
+		only the nets that have been specified by <B>extresist include</B>
+		commands.  The list of included nets is global, cumulative, and
+		persistent;  it will only be cleared when the <B>extresist include
+		all</B> command is issued (option available from version 8.3.213).
 	   <DT> <B>box</B> <I>type</I>
 	   <DD> Extract the signal under the cursor box on layer <I>type</I>
 	   <DT> <B>cell</B> <I>cellname</I>
@@ -57,6 +101,8 @@ information.
 		<TT>.fh</TT> file.  If <I>freq</I> is specified, the file will
 		be customized for <B>fasthenry</B> analysis at the indicated
 		frequency (in Hz).
+	   <DT> <B>tolerance</B> <I>value</I>
+	   <DD> <I>Deprecated!</I>  This option is no longer used by extresist.
 	   <DT> <B>help</B>
 	   <DD> Print help information
 	 </DL>
@@ -67,9 +113,9 @@ information.
    <BLOCKQUOTE>
       The normal flow through layout extraction into a simulation file
       treats routes as nonphysical entities, that is, with infinitesimal
-      impedence through the wires.  Extraction for digital simulation
-      using <B>irsim</B> generates "lumped resistances", a single
-      resistance per network node that, along with the node capacitance
+      impedence through the wires.  Standard extraction generates "lumped
+      resistance" values, a single resistance per network node that, along
+      with the node capacitance
       to substrate, provides an <I>RC</I> time constant to approximately
       model the delay from point to point in the network node.  The
       lumped resistance model is inappropriate for analog (i.e., SPICE)
@@ -80,17 +126,99 @@ information.
       The <B>extresist</B> command provides a method for generating
       a more detailed model of resistance, in which long network
       routes and branching routes are replaced with resistor devices
-      and device networks. <P>
+      and device networks.  This is known as "full R-C extraction". <P>
 
-      Using <B>extresist</B> is a multi-step process.  It is first
-      necessary to run both <B>extract</B> and <B>ext2sim</B> to get
-      the initial netlist (with lumped, not detailed, resistances).
-      After a <TT>.sim</TT> file has been generated, the
-      <B>extresist all</B> command may be run.  The output is
-      a file <TT>.res.ext</TT> for each cell in the hierarchy.
-      Finally, with the option <B>extresist on</B> set,
-      <B>ext2sim</B> or <B>ext2spice</B> will generate the final,
-      detailed simulation file. <P>
+      Using <B>extresist</B> as a standalone command is a multi-step
+      process.  It is first necessary to run <B>extract</B> to get
+      the initial netlist.  After a <TT>.ext</TT> file has been generated,
+      the <B>extresist</B> command may be run.  The output is a file
+      <TT>.res.ext</TT> for each cell in the hierarchy.
+      Finally, with the option <B>extresist on</B> set, <B>ext2spice</B>
+      will generate the final, detailed simulation file. <P>
+
+      Capacitance to substrate is distributed over the nodes of the
+      resistor network.  Coupling capacitance remains between the two
+      nets, but is not distributed:  Each coupling capacitor connects to
+      one node on each net, regardless of where along the nets the
+      coupling occurs.  Coupling capacitance is counted as if to ground
+      when computing the delay that is compared against
+      <B>extresist mindelay</B>. <P>
+
+      Prior to magic version 8.3.597, it was also necessary to run
+      <B>ext2sim labels on</B> and <B>ext2sim</B> to write out a
+      <TT>.sim</TT> and a <TT>.node</TT> file before running
+      <B>extresist</B>.  This is no longer necessary.  There is since
+      magic version 8.3.597 an option <B>extract do resistance</B>
+      that runs the resistance extraction in sequence with the regular
+      extraction, producing both the <TT>.ext</TT> and <TT>.res.ext</TT>
+      files.  When <B>extract do resistance</B> is used, there is no need
+      to run <B>extresist</B> as a separate command.  However,
+      <B>extresist</B> may be run prior to <B>extract</B> to set the
+      options that affect resistance network extraction, such as
+      <B>extresist threshold</B>, <B>extresist minres</B>, etc. <P>
+
+      As of magic version 8.3.653, the <B>extresist tolerance</B> option
+      is deprecated and has no effect on network resistance extraction.
+      Instead, extraction is controlled by three main options: <P>
+     
+      <B>extresist threshold</B> (value in milliohms) sets a cutoff for
+      considering a network for detailed resistance extraction based on
+      the lumped resistance estimate (see above).  For point-to-point
+      wires, the lumped resistance is approximately equal to the actual
+      wire resistance.  For branching networks, it will generally be an
+      over-estimate.  The lumped resistance estimate is in whole ohms
+      and does not include contact resistance, so a network such as a
+      short via chain may have an estimate of zero.  Once the network
+      has been extracted, the <B>threshold</B> value is again evaluated
+      against the largest resistance from the start of the network to
+      any point in it, to determine if the extracted detailed network
+      should be output.  The default <B>threshold</B> value is set to
+      10 ohms.  A <B>threshold</B> of zero applies no resistance cutoff. <P>
+
+      <B>extresist minres</B> (value in milliohms) sets a cutoff for
+      individual resistors in the detailed resistor network.  Resistors
+      below this threshold will get pruned out of the network if the
+      simplification algorithm is able to remove them.  A resistor
+      connecting two ports is never removed, since that would merge the
+      ports.  The default <B>minres</B> value is set to 1 ohm. <P>
+
+      After the network has been simplified, internal nodes of the
+      network (nodes that are not device terminals or ports) are
+      eliminated wherever this does not increase the number of
+      resistors.  This does not change the resistance between any of
+      the remaining nodes, and it removes, for example, the internal
+      nodes of via arrays that are drawn as individual contact cuts.
+      Eliminating nodes may create resistors that carry a negligible
+      part of the current between their two nodes.  <B>extresist
+      prune</B> sets the tolerance for removing them:  A resistor is
+      removed if there is another path between its two nodes, through
+      at most one other node, with less than the tolerance times its
+      resistance.  Removing such a resistor increases the resistance
+      between any two nodes of the network by at most about that
+      fraction.  A resistor that is the only connection between two
+      parts of the network is never removed.  The default <B>prune</B>
+      value is 0.01 (1%). <P>
+
+      <B>extresist mindelay</B> (value in picoseconds) sets a cutoff for
+      considering a network for detailed resistance extraction based on
+      the end-to-end delay calculated from the lumped resistance
+      estimate.  Once the network has been extracted, the <B>mindelay</B>
+      value is again evaluated against a revised calculation of the
+      delay to determine if the extracted detailed network should be
+      output.  The default <B>mindelay</B> value is set to 1ps.  A
+      <B>mindelay</B> of zero applies no delay cutoff, so that only the
+      resistance threshold is used for determining when to extract a
+      detailed resistance network.  <B>mindelay</B> may be used in place
+      of <B>threshold</B> (by setting <B>threshold</B> to zero), or both
+      may be used together, in which case a network is only extracted
+      if both <B>threshold</B> and <B>mindelay</B> are exceeded.  If
+      both are zero, then every net is extracted. <P>
+
+      A net that is not extracted as a resistor network is written to
+      the netlist as a single node, exactly as it would be without
+      <B>extresist</B>.  In particular, if the net has more than one
+      port, the ports are merged as they would be without
+      <B>extresist</B>. <P>
 
       More details on using <B>extresist</B> can be found in
       <B>magic</B> Tutorial number 8.
@@ -105,6 +233,7 @@ information.
    <BLOCKQUOTE>
       <A HREF=extract.html><B>extract</B></A> <BR>
       <A HREF=ext2sim.html><B>ext2sim</B></A> <BR>
+      <A HREF=ext2spice.html><B>ext2spice</B></A> <BR>
    </BLOCKQUOTE>
 
 <P><IMG SRC=graphics/line1.gif><P>
@@ -113,6 +242,6 @@ information.
     <TD> <A HREF=commands.html>Return to command index</A>
   </TR>
 </TABLE>
-<P><I>Last updated:</I> October 21, 2004 at 10:48am <P>
+<P><I>Last updated:</I> May 29, 2026 at 11:33am <P>
 </BODY>
 </HTML>

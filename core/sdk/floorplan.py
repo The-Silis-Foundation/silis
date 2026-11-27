@@ -1175,11 +1175,11 @@ class Floorplan:
 
         return True
 
-    def check_drc(self, def_path: Optional[str] = None) -> Any:
+    def check_drc(self, def_path: Optional[str] = None, allow_unplaced: bool = False) -> Any:
         """
-        Runs comprehensive physical design rule checking (DRC) on the floorplan.
+        Runs comprehensive physical design rule checking (DRC) on the layout/floorplan.
         1. Executes strict internal geometric & mathematical pre-flight checks.
-        2. If DEF exists (or is generated) and OpenROAD is installed, executes OpenROAD detailed placement DRC (check_placement).
+        2. If DEF exists and OpenROAD is installed, executes OpenROAD detailed placement DRC (check_placement).
         Returns a DRCReport instance (clean=True if 0 violations, raises DRCViolationError if violations are found).
         """
         import os, shutil, subprocess
@@ -1188,7 +1188,7 @@ class Floorplan:
 
         target_def = def_path
         if not target_def and self.project:
-            target_def = self.project.get_def(stage="floorplan")
+            target_def = self.project.get_def()
         if not target_def or not os.path.isfile(target_def):
             return DRCReport(violations_count=0, tool="Floorplan Geometric DRC")
 
@@ -1210,21 +1210,27 @@ class Floorplan:
                     mf = os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_sram_macros", "lef", f"{m}.lef")
                     if os.path.isfile(mf):
                         tcl_cmds.append(f'read_lef "{mf}"')
+            if os.path.isfile(fd_io_lef) or os.path.isfile(ef_io_lef):
+                tcl_cmds.append("make_fake_io_site -name IO_SITE -width 1 -height 200")
+                tcl_cmds.append("make_fake_io_site -name IO_CSITE -width 200 -height 204")
             tcl_cmds.append(f'read_def "{target_def}"')
             tcl_cmds.append("check_placement -verbose")
 
             cmd = ["openroad", "-exit"]
             res = subprocess.run(cmd, input="\n".join(tcl_cmds), text=True, capture_output=True)
+            combined_lines = (res.stdout or "").splitlines() + (res.stderr or "").splitlines()
             viols = []
-            for line in res.stdout.splitlines():
-                if "check failed" in line.lower() or "error:" in line.lower():
-                    # For floorplan stage DEF before standard cell detailed placement,
-                    # unplaced standard cell logic warnings are filtered so we focus on macro physical overlaps & halos
-                    if any(c in line for c in ["DPL-0003", "DPL-0004", "DPL-0006"]):
+            for line in combined_lines:
+                low = line.lower()
+                if "check failed" in low or "[error" in low or "error:" in low or "dpl-0033" in low:
+                    if allow_unplaced and any(c in line for c in ["DPL-0003", "DPL-0004", "DPL-0006", "DPL-0033"]):
                         continue
                     viols.append(line.strip())
+            if res.returncode != 0 and not viols and not allow_unplaced:
+                tail = "\n".join(l.strip() for l in combined_lines[-5:] if l.strip())
+                viols.append(f"OpenROAD check_placement exited with code {res.returncode}: {tail}")
             if viols:
-                raise DRCViolationError(len(viols), f"OpenROAD placement DRC check failed: {'; '.join(viols[:3])}")
+                raise DRCViolationError(len(viols), f"OpenROAD placement DRC check failed: {'; '.join(viols[:4])}")
             return DRCReport(file_path=target_def, violations_count=0, tool="OpenROAD Detailed Placement DRC")
 
         return DRCReport(file_path=target_def, violations_count=0, tool="Floorplan Geometric DRC")

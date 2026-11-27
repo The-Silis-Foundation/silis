@@ -3,14 +3,19 @@ import sys
 import json
 import glob
 from typing import Optional, List, Dict, Any
-from PyQt6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox,
-    QVBoxLayout, QHBoxLayout, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QLabel, QGroupBox, QComboBox, QCheckBox, QScrollArea, QWidget,
-    QHeaderView, QAbstractItemView, QFrame, QPlainTextEdit
-)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QBrush
+try:
+    from PyQt6.QtWidgets import (
+        QDialog, QFormLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox,
+        QVBoxLayout, QHBoxLayout, QSplitter, QTreeWidget, QTreeWidgetItem,
+        QLabel, QGroupBox, QComboBox, QCheckBox, QScrollArea, QWidget,
+        QHeaderView, QAbstractItemView, QFrame, QPlainTextEdit
+    )
+    from PyQt6.QtCore import Qt, pyqtSignal
+    from PyQt6.QtGui import QFont, QColor, QBrush
+except ImportError:
+    QDialog = QWidget = object
+    def pyqtSignal(*args, **kwargs):
+        return None
 
 
 class SSAForge:
@@ -279,55 +284,195 @@ class SSAForge:
         return dict(cfg.get("cells", {}).get(category, {}))
 
     @classmethod
+    def resolve_tool_bin(cls, tool_name: str) -> Optional[str]:
+        """Resolves a bundled EDA binary from third-party/bin or APPDIR before system PATH."""
+        import shutil
+        curr_dir = os.path.dirname(os.path.abspath(__file__))
+        silis_root = os.path.abspath(os.path.join(curr_dir, "..", "..", ".."))
+        appdir = os.environ.get("APPDIR", "")
+        candidates = [
+            os.path.join(silis_root, "third-party", "bin", tool_name),
+            os.path.join(silis_root, "third-party", "OpenSTA", "build", tool_name),
+            os.path.join(silis_root, "third-party", "OpenROAD", "build", "src", tool_name),
+        ]
+        if appdir:
+            candidates.extend([
+                os.path.join(appdir, "third-party", "bin", tool_name),
+                os.path.join(appdir, "third-party", "OpenSTA", "build", tool_name),
+                os.path.join(appdir, "third-party", "OpenROAD", "build", "src", tool_name),
+            ])
+        for cand in candidates:
+            if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+        return shutil.which(tool_name)
+
+    @classmethod
+    def get_site_config(cls, pdk_name: Optional[str] = None) -> dict:
+        """Returns normalized site geometry and standard/IO site names for the PDK."""
+        cls._ensure_initialized()
+        family = cls.resolve_pdk_key(pdk_name)
+        cfg = cls._CONFIGS.get(family, {})
+        site = dict(cfg.get("site", {}))
+        return {
+            "name": site.get("name") or cls.get(pdk_name, "site", default="unithd"),
+            "height_um": float(site.get("height_um", 2.72)),
+            "width_um": float(site.get("width_um", 0.46)),
+            "double_height_site": site.get("double_height_site") or cls.get(pdk_name, "site_double", default="unithddbl"),
+            "double_height_um": float(site.get("double_height_um", float(site.get("height_um", 2.72)) * 2.0)),
+            "io_site": site.get("io_site", "IO_SITE"),
+            "io_corner_site": site.get("io_corner_site", "IO_CSITE"),
+        }
+
+    @classmethod
+    def get_interconnect(cls, pdk_name: Optional[str] = None) -> dict:
+        """Returns normalized routing and PDN metal layer names for the PDK."""
+        cls._ensure_initialized()
+        family = cls.resolve_pdk_key(pdk_name)
+        cfg = cls._CONFIGS.get(family, {})
+        ic = dict(cfg.get("interconnect", {}))
+        min_l = ic.get("min_layer") or cls.get(pdk_name, "min_layer", default="met1")
+        max_l = ic.get("max_layer") or cls.get(pdk_name, "max_layer", default="met5")
+        return {
+            "min_layer": min_l,
+            "max_layer": max_l,
+            "rail_layer": ic.get("rail_layer", min_l),
+            "trunk_layer": ic.get("trunk_layer", "met4" if min_l == "met1" else min_l),
+            "top_mesh_layer": ic.get("top_mesh_layer", max_l),
+        }
+
+    @classmethod
+    def get_exempt_cell_keywords(cls, pdk_name: Optional[str] = None) -> tuple:
+        """Returns physical-only/timing cell masters and prefixes from SSAForge for LVS filtering."""
+        cls._ensure_initialized()
+        family = cls.resolve_pdk_key(pdk_name)
+        cfg = cls._CONFIGS.get(family, {})
+        cells = cfg.get("cells", {})
+        kws = []
+        for cat in ("power_switches", "multi_voltage", "io", "tapcells", "decaps", "fillers", "ties", "antenna", "clock_tree"):
+            cat_dict = cells.get(cat, {})
+            if isinstance(cat_dict, dict):
+                for val in cat_dict.values():
+                    if isinstance(val, str) and val.strip():
+                        kws.append(val.strip().lower())
+        return tuple(dict.fromkeys(kws))
+
+    @classmethod
     def get_pdk_paths(cls, pdk_name: Optional[str] = None, pdk_base: Optional[str] = None) -> dict:
         """
-        Returns resolved absolute file paths for tech_lef, std_cell_lef, liberty, and extra_lefs.
+        Returns resolved absolute file paths for tech_lef, std_cell_lef, liberty, extra_lefs,
+        magic_tech, netgen_setup, gds_files, verilog_models, and corners.
         Expands environment variables, user tilde, and glob patterns deterministically.
         """
         cls._ensure_initialized()
         import glob
+        req_lower = str(pdk_name or "").strip().lower()
         family = cls.resolve_pdk_key(pdk_name)
         cfg = cls._CONFIGS.get(family, {})
         paths_cfg = cfg.get("paths", {})
-        
-        # Base directory resolution
+
+        # Base directory resolution (preserve sky130B if explicitly requested)
         cfg_root = paths_cfg.get("pdk_root", "")
+        if "sky130b" in req_lower:
+            cand_b = os.path.expanduser("~/.silis/pdks/sky130B")
+            if os.path.isdir(cand_b):
+                cfg_root = cand_b
         if cfg_root:
             cfg_root = os.path.expanduser(os.path.expandvars(cfg_root))
-        if not cfg_root or not os.path.isdir(cfg_root):
-            if pdk_base and os.path.isdir(pdk_base):
-                cfg_root = pdk_base
+        if pdk_base and os.path.isdir(pdk_base):
+            cfg_root = pdk_base
+        elif not cfg_root or not os.path.isdir(cfg_root):
+            variant_dir = "sky130B" if "sky130b" in req_lower else ("sky130A" if "sky130" in str(family).lower() else family)
+            for base_cand in [
+                os.path.expanduser(f"~/.silis/pdks/{variant_dir}"),
+                os.path.expanduser(f"~/.silis/pdks/{family}"),
+            ]:
+                if os.path.isdir(base_cand):
+                    cfg_root = base_cand
+                    break
             else:
-                # Fallback to ~/.silis/pdks/<family>
-                cand = os.path.expanduser(f"~/.silis/pdks/{family}")
-                if os.path.isdir(cand): cfg_root = cand
-                else: cfg_root = os.path.expanduser("~/.silis/pdks")
+                cfg_root = os.path.expanduser("~/.silis/pdks")
 
         def _resolve_path(rel_or_abs):
-            if not rel_or_abs: return ""
+            if not rel_or_abs:
+                return ""
             p = os.path.expanduser(os.path.expandvars(rel_or_abs))
-            if os.path.isabs(p): return p
+            if os.path.isabs(p):
+                return p
             return os.path.normpath(os.path.join(cfg_root, p))
+
+        def _expand_patterns(entries, ext_filter=None):
+            out = []
+            for pat in entries or []:
+                full_pat = _resolve_path(pat)
+                if any(ch in full_pat for ch in ["*", "?", "["]):
+                    for m in sorted(glob.glob(full_pat)):
+                        if os.path.isfile(m) and m not in out:
+                            out.append(m)
+                elif os.path.isdir(full_pat):
+                    if ext_filter:
+                        for m in sorted(glob.glob(os.path.join(full_pat, f"*{ext_filter}"))):
+                            if os.path.isfile(m) and m not in out:
+                                out.append(m)
+                elif os.path.isfile(full_pat) and full_pat not in out:
+                    out.append(full_pat)
+            return out
 
         tech_lef = _resolve_path(paths_cfg.get("tech_lef", ""))
         std_cell_lef = _resolve_path(paths_cfg.get("std_cell_lef", ""))
         liberty = _resolve_path(paths_cfg.get("liberty", ""))
+        magic_tech = _resolve_path(paths_cfg.get("magic_tech", ""))
+        netgen_setup = _resolve_path(paths_cfg.get("netgen_setup", ""))
 
-        extra_lefs = []
-        for pat in paths_cfg.get("extra_lefs", []):
-            full_pat = _resolve_path(pat)
-            if any(ch in full_pat for ch in ["*", "?", "["]):
-                matched = sorted(glob.glob(full_pat))
-                extra_lefs.extend([m for m in matched if os.path.isfile(m)])
-            elif os.path.isfile(full_pat):
-                extra_lefs.append(full_pat)
+        # Infer variant-matched magic_tech / netgen_setup if config was for sky130a while sky130B was requested
+        if "sky130b" in req_lower and magic_tech and not os.path.isfile(magic_tech):
+            alt_mt = _resolve_path("libs.tech/magic/sky130B.tech")
+            if os.path.isfile(alt_mt):
+                magic_tech = alt_mt
+        if "sky130b" in req_lower and netgen_setup and not os.path.isfile(netgen_setup):
+            alt_ng = _resolve_path("libs.tech/netgen/sky130B_setup.tcl")
+            if os.path.isfile(alt_ng):
+                netgen_setup = alt_ng
+
+        extra_lefs = _expand_patterns(paths_cfg.get("extra_lefs", []))
+        gds_dirs = []
+        for gd in paths_cfg.get("gds_dirs", []):
+            rp = _resolve_path(gd)
+            if rp and os.path.isdir(rp) and rp not in gds_dirs:
+                gds_dirs.append(rp)
+        gds_files = _expand_patterns(paths_cfg.get("gds_dirs", []), ext_filter=".gds")
+        std_cell_gds = ""
+        std_cell_stem = os.path.splitext(os.path.basename(std_cell_lef))[0] if std_cell_lef else ""
+        for gf in gds_files:
+            if std_cell_stem and os.path.splitext(os.path.basename(gf))[0] == std_cell_stem:
+                std_cell_gds = gf
+                break
+        if not std_cell_gds and gds_files:
+            std_cell_gds = gds_files[0]
+
+        verilog_models = _expand_patterns(paths_cfg.get("verilog_models", []))
+
+        corners = {}
+        for c_key, c_rel in (paths_cfg.get("corners", {}) or {}).items():
+            c_abs = _resolve_path(c_rel)
+            if c_abs and os.path.isfile(c_abs):
+                corners[c_key] = c_abs
+        if liberty and os.path.isfile(liberty) and "nominal" not in corners:
+            corners["nominal"] = liberty
 
         return {
+            "family": family,
             "pdk_root": cfg_root,
             "tech_lef": tech_lef if os.path.isfile(tech_lef) else "",
             "std_cell_lef": std_cell_lef if os.path.isfile(std_cell_lef) else "",
             "liberty": liberty if os.path.isfile(liberty) else "",
             "extra_lefs": extra_lefs,
+            "magic_tech": magic_tech if os.path.isfile(magic_tech) else "",
+            "netgen_setup": netgen_setup if os.path.isfile(netgen_setup) else "",
+            "gds_dirs": gds_dirs,
+            "gds_files": gds_files,
+            "std_cell_gds": std_cell_gds,
+            "verilog_models": verilog_models,
+            "corners": corners,
         }
 
     @staticmethod
@@ -388,20 +533,33 @@ class PDKManager:
                         tlef = pdk_paths.get("tech_lef", "")
                         lef = pdk_paths.get("std_cell_lef", "")
                         lib = pdk_paths.get("liberty", "")
+                        corners_map = dict(pdk_paths.get("corners", {}))
+                        if not corners_map and lib:
+                            corners_map = {"tt": lib}
                         entry = {
                             "name": pdk_key,
+                            "root": pdk_paths.get("pdk_root", ""),
                             "display_name": data.get("display_name", pdk_key),
                             "family": pdk_key,
                             "tlef": tlef,
                             "lef": lef,
                             "lib": lib,
-                            "gds": "",
-                            "tech": "",
-                            "corners": {"tt": lib} if lib else {},
+                            "extra_lefs": pdk_paths.get("extra_lefs", []),
+                            "gds": pdk_paths.get("std_cell_gds", ""),
+                            "gds_files": pdk_paths.get("gds_files", []),
+                            "tech": pdk_paths.get("magic_tech", ""),
+                            "netgen_setup": pdk_paths.get("netgen_setup", ""),
+                            "verilog_models": pdk_paths.get("verilog_models", []),
+                            "corners": corners_map,
                             "rc_corners": {"nom": "default"}
                         }
-                        if not any(c.get("name", "").lower() == pdk_key.lower() for c in self.configs):
+                        existing = next((c for c in self.configs if c.get("name", "").lower() == pdk_key.lower()), None)
+                        if existing is None:
                             self.configs.append(entry)
+                        else:
+                            for k_fill in ("root", "extra_lefs", "gds", "gds_files", "tech", "netgen_setup", "verilog_models"):
+                                if not existing.get(k_fill) and entry.get(k_fill):
+                                    existing[k_fill] = entry[k_fill]
                     except Exception:
                         pass
 

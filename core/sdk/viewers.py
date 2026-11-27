@@ -14,23 +14,28 @@ import os
 import sys
 from typing import Optional, Any, Union, Dict
 
-from PyQt6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QPushButton,
-    QLineEdit,
-    QLabel,
-    QToolBar,
-    QFileDialog,
-    QMessageBox,
-    QDialog,
-    QComboBox,
-)
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QAction, QIcon
+try:
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QMainWindow,
+        QWidget,
+        QVBoxLayout,
+        QHBoxLayout,
+        QPushButton,
+        QLineEdit,
+        QLabel,
+        QToolBar,
+        QFileDialog,
+        QMessageBox,
+        QDialog,
+        QComboBox,
+    )
+    from PyQt6.QtCore import Qt, QSize
+    from PyQt6.QtGui import QAction, QIcon
+except ImportError:
+    QApplication = QMainWindow = QWidget = QVBoxLayout = QHBoxLayout = object
+    QPushButton = QLineEdit = QLabel = QToolBar = QFileDialog = QMessageBox = QDialog = QComboBox = object
+    Qt = QSize = QAction = QIcon = None
 
 try:
     from cli.flow import find_project_file
@@ -121,6 +126,8 @@ def _resolve_viewer_def(target: Any = None) -> str:
         raise FileNotFoundError("Could not resolve any valid layout DEF file or active project.")
 
     abs_path = os.path.abspath(str(target))
+    if os.path.isfile(abs_path) and abs_path.endswith(".silisproj"):
+        abs_path = os.path.dirname(abs_path)
     if os.path.isdir(abs_path):
         resolved = None
         try:
@@ -396,18 +403,77 @@ def view_layout(
 # 2. 3D GDS Viewer
 # ------------------------------------------------------------------------------
 def view_gds3d(
-    gds_path: str,
+    gds_path: Optional[Any] = None,
     tech_path: Optional[str] = None,
     parent: Optional[QWidget] = None,
     title: Optional[str] = None,
     show: bool = True,
-) -> QMainWindow:
+    detach: Optional[bool] = None,
+) -> Any:
     """
-    Opens a standalone QMainWindow showing the hardware-accelerated GDS3D viewer.
+    Opens a standalone QMainWindow showing the hardware-accelerated native 3D GDSII viewer.
     """
-    _ensure_app()
-    abs_gds = os.path.abspath(gds_path)
+    _ensure_desktop_env()
+    if gds_path is None:
+        from .project import Project
+        proj = Project()
+        resolved = proj.get_gds() or proj.get_def()
+        if not resolved or not os.path.isfile(resolved):
+            raise FileNotFoundError("Could not find GDS or DEF layout file in active project.")
+        abs_gds = os.path.abspath(resolved)
+    elif hasattr(gds_path, "get_gds"):
+        resolved = gds_path.get_gds() or (gds_path.get_def() if hasattr(gds_path, "get_def") else None)
+        if not resolved or not os.path.isfile(resolved):
+            raise FileNotFoundError("Could not find GDS or DEF layout file in Project object.")
+        abs_gds = os.path.abspath(resolved)
+    else:
+        cand_path = os.path.abspath(str(gds_path))
+        if os.path.isfile(cand_path) and cand_path.endswith(".silisproj"):
+            cand_path = os.path.dirname(cand_path)
+        if os.path.isdir(cand_path):
+            from .project import Project
+            proj_cand = Project(cand_path)
+            resolved_gds = proj_cand.get_gds() or proj_cand.get_def()
+            if not resolved_gds or not os.path.isfile(resolved_gds):
+                raise FileNotFoundError(
+                    f"No GDS or DEF layout file found in project {cand_path}."
+                )
+            abs_gds = os.path.abspath(resolved_gds)
+        else:
+            abs_gds = cand_path
+
+    if not os.path.isfile(abs_gds):
+        raise FileNotFoundError(f"3D layout file not found: {abs_gds}")
+
     win_title = title or f"Silis GDS3D Viewer — {os.path.basename(abs_gds)}"
+
+    if detach is None:
+        detach = (show and parent is None and os.environ.get("SILIS_HEADLESS_TEST") != "1")
+
+    if detach:
+        silis_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        repo_root = os.path.dirname(silis_dir)
+        launcher_script = (
+            "import sys; "
+            "repo_root = sys.argv[1]; silis_dir = sys.argv[2]; abs_gds = sys.argv[3]; win_title = sys.argv[4]; "
+            "sys.path.insert(0, silis_dir); sys.path.insert(0, repo_root); import silis; "
+            "from PyQt6.QtWidgets import QApplication; "
+            "app = QApplication(sys.argv); "
+            "win = silis.view_gds3d(abs_gds, title=win_title, show=True, detach=False); "
+            "win.resize(1150, 800); win.show(); win.raise_(); win.activateWindow(); "
+            "sys.exit(app.exec())"
+        )
+        cmd = [sys.executable, "-c", launcher_script, repo_root, silis_dir, abs_gds, win_title]
+        env = os.environ.copy()
+        env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+        if "XAUTHORITY" in os.environ:
+            env["XAUTHORITY"] = os.environ["XAUTHORITY"]
+        env["QT_QPA_PLATFORM"] = "xcb"
+        proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+        print(f"[SILIS] Desktop 3D Silicon Viewer window launched (PID: {proc.pid})")
+        return proc
+
+    _ensure_app()
 
     win = QMainWindow(parent)
     win.setWindowFlags(
@@ -629,6 +695,19 @@ def open_gui(
     return window
 
 
+def _resolve_viewer_project_config(project_path: Optional[str] = None) -> Dict[str, Any]:
+    """Resolves project configuration dictionary from explicit path or active/most-recent project."""
+    from .project import Project
+    if project_path:
+        proj = Project.load(project_path)
+        return proj.config if proj else {}
+    proj_file = find_project_file(None)
+    if proj_file:
+        proj = Project.load(proj_file)
+        return proj.config if proj else {}
+    return {}
+
+
 def open_floorplanner(
     project_path: Optional[str] = None,
     exec_loop: bool = True,
@@ -640,20 +719,11 @@ def open_floorplanner(
     halo margin adjustments, and blockage creation.
     """
     app = _ensure_app()
-    from sdk.project import Project, find_project_file
     from pdkmanagers.pdk.manager import SSAForge
     from backendflow.floorplanner.floorplanner import InteractiveFloorplannerWidget
 
     pdk_mgr = SSAForge()
-    proj = None
-    if project_path:
-        proj = Project.load(project_path)
-    else:
-        proj_file = find_project_file(os.getcwd())
-        if proj_file:
-            proj = Project.load(proj_file)
-
-    p_cfg = proj.config if proj else {}
+    p_cfg = _resolve_viewer_project_config(project_path)
     dialog = InteractiveFloorplannerWidget(p_cfg, pdk_mgr)
     if show and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         dialog.show()
@@ -674,20 +744,11 @@ def open_ioplacer(
     wirebond pad ring generation (Single & Dual Staggered), and macro packaging.
     """
     app = _ensure_app()
-    from sdk.project import Project, find_project_file
     from pdkmanagers.pdk.manager import SSAForge
     from backendflow.floorplanner.ioplacer import IOPlacerDialog
 
     pdk_mgr = SSAForge()
-    proj = None
-    if project_path:
-        proj = Project.load(project_path)
-    else:
-        proj_file = find_project_file(os.getcwd())
-        if proj_file:
-            proj = Project.load(proj_file)
-
-    p_cfg = proj.config if proj else {}
+    p_cfg = _resolve_viewer_project_config(project_path)
     dialog = IOPlacerDialog(p_cfg, pdk_mgr)
     if show and os.environ.get("SILIS_HEADLESS_TEST") != "1":
         dialog.show()
@@ -729,12 +790,18 @@ def view_magic(gds_path: str, tech_path: Optional[str] = None, launch: bool = Tr
                 tech_file = c
                 break
 
-    cmd = ["magic", "-d", "XR"]
+    silis_pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bundled_magic = os.path.join(silis_pkg_root, "third-party", "bin", "magic")
+    magic_bin = bundled_magic if os.path.isfile(bundled_magic) and os.access(bundled_magic, os.X_OK) else "magic"
+    cmd = [magic_bin, "-d", "XR"]
     if tech_file and tech_file.endswith(".tech"):
         cmd.extend(["-T", tech_file])
     cmd.append(abs_gds)
 
     env = os.environ.copy()
+    bundled_bin_dir = os.path.join(silis_pkg_root, "third-party", "bin")
+    if os.path.isdir(bundled_bin_dir):
+        env["PATH"] = bundled_bin_dir + os.pathsep + env.get("PATH", "")
     env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
     if "XAUTHORITY" in os.environ:
         env["XAUTHORITY"] = os.environ["XAUTHORITY"]
@@ -806,7 +873,7 @@ def view_openroad_gui(def_or_odb_path: str, launch: bool = True) -> Optional[sub
             libs_ref = os.path.abspath(os.path.join(os.path.dirname(sc_lef), "..", ".."))
             io_dir = os.path.join(libs_ref, "sky130_fd_io", "lef")
             if os.path.isdir(io_dir):
-                for ef in ["sky130_ef_io.lef", "sky130_fd_io.lef"]:
+                for ef in ["sky130_fd_io.lef", "sky130_ef_io.lef"]:
                     fp = os.path.join(io_dir, ef)
                     if os.path.isfile(fp):
                         io_lefs.append(fp)

@@ -202,7 +202,11 @@ for {set i 0} {$i < $argc} {incr i 1} {
          lappend argafter [lindex $argv $i]
       }
       ^--version {
-	 puts stdout "8.3.124"
+	 puts stdout "8.3.707"
+	 exit 0
+      }
+      ^--commit {
+	 puts stdout "8fc2a3436967e14bba745854f8d1e751ec9e0720"
 	 exit 0
       }
       ^--prefix {
@@ -222,7 +226,10 @@ for {set i 0} {$i < $argc} {incr i 1} {
 
 if {$do_wrapper} {
   source ${CAD_ROOT}/magic/tcl/wrapper.tcl
-  lappend argafter "-nowindow" ;# Set no-initial-window option in magic.
+  # Set the no-initial-window option in magic.  Do *not* append it, as the
+  # arguments may have a Tcl script, for which all following arguments are
+  # considered arguments of the script.
+  set argafter [linsert $argafter 1 -nowindow]
 }
 unset x i do_wrapper
 if {[catch {eval $argafter}]}  {		;# magic::initialize ${argv}
@@ -355,10 +362,58 @@ drc off
 
 if {[info commands magic::openwrapper] != {}} {
    if {[windownames layout] == {}} {
-      set winname [magic::openwrapper]
+      if {[magic::display] == "NULL"} {
+          magic::openwindow
+          rename magic::openwrapper magic::_openwrapper
+      } else {
+          set winname [magic::openwrapper]
+          magic::scrollupdate $winname
+      }
       magic::techmanager initall
-      magic::scrollupdate $winname
 
+      foreach cellname $celllist {
+	 set fext [file extension $cellname]
+	 switch $fext {
+	    .gz {}
+	    "" {}
+	    default {
+	       puts stdout "Handling file entry $cellname extension $fext"
+	    }
+	 }
+	 switch $fext {
+	     .lef -
+	     .LEF {lef read $cellname}
+	     .def -
+	     .DEF {def read $cellname}
+	     .gds -
+	     .GDS -
+	     .gds2 -
+	     .GDS2 -
+	     .gdsii -
+	     .GDSII {gds read $cellname}
+	     .cif -
+	     .CIF {cif read $cellname}
+	     .tcl {source $cellname}
+	     .mag -
+	     "" {magic::load $cellname}
+	     .gz {
+		 set rootname [file root $cellname]
+	 	 set fext [file extension $rootname]
+		 puts stdout "Handling compressed entry $cellname extension $fext"
+		 switch $fext {
+		    .gds {gds read $cellname}
+		    .mag {magic::load $cellname}
+		    default {puts stderr "only compressed .mag and .gds are handled."}
+		 }
+	     }
+	     default {puts stderr "don't know how to load file $cellname"}
+	 }
+      }
+   }
+} elseif {[info commands wm] == {}} {
+   # Magic running with Tcl but in NULL graphics mode.
+   if {[windownames layout] == {}} {
+      magic::openwindow
       foreach cellname $celllist {
 	 set fext [file extension $cellname]
          puts stdout "handling file entry $cellname extension $fext"

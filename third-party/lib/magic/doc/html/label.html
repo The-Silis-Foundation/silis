@@ -13,12 +13,12 @@
     A.red:active {color: yellow }
   </STYLE>
 </HEAD>
-<TITLE>Magic-7.3 Command Reference</TITLE>
+<TITLE>Magic-8.3 Command Reference</TITLE>
 <BODY BACKGROUND=graphics/blpaper.gif>
-<H1> <IMG SRC=graphics/magic_title2.gif ALT="Magic VLSI Layout Tool Version 7.3">
+<H1> <IMG SRC=graphics/magic_title8_3.png ALT="Magic VLSI Layout Tool Version 8.3">
      <IMG SRC=graphics/magic_OGL_sm.gif ALIGN="top" ALT="*"> </H1>
 
-<H2>command_name</H2>
+<H2>label</H2>
 <HR>
 Place a label in the layout
 <HR>
@@ -31,6 +31,27 @@ Place a label in the layout
 	 may be any valid <A HREF=direction.html><I>direction</I></A>
 	 in <B>magic</B>, and <I>layer</I> may be any valid layer in
 	 the technology.
+      </BLOCKQUOTE>
+
+      <B>label</B> <I>string</I> [<I>font</I> [<I>size</I> [<I>rotation</I>
+		[<I>offsetx offsety</I> [<I>position</I> [<I>layer</I>]]]]] <BR><BR>
+      <BLOCKQUOTE>
+         where <I>string</I> is the text of the label,
+	 <I>font</I> is the name or number of a font, <I>size</I> is
+	 the integer size of the font, in standard <A HREF=distance.html>
+	 distance</A> units; <I>rotation</I> is the rotation
+	 (in degrees) of the font, <I>offsetx</I> and <I>offsety</I>
+	 are the distance of the printed text relative to the reference
+	 position (in quarter units of <A HREF=distance.html>distance</A>);
+	 <I>position</I> may be any valid
+	 <A HREF=direction.html>direction</A> in <B>magic</B>,
+	 and <I>layer</I> may be any valid layer in the technology.
+	 This usage is only available in <B>magic</B> version 8.0 and above.
+	 See the <A HREF=setlabel.html><B>setlabel</B></A> command for
+	 details on each of the label options.  <B>setlabel -default</B> can
+	 be used to set default values for all of the optional properties
+	 when they are not present on the <B>label</B> command line.
+
       </BLOCKQUOTE>
    </BLOCKQUOTE>
 
@@ -53,9 +74,61 @@ Place a label in the layout
       example, "<B>label text north</B>" will draw the label string
       "<TT>text</TT>" to the north (above) the marker. <P>
 
-      Labels cannot be directly modified;  modifications should be
-      handled by first erasing the label with "<B>erase label</B>"
-      and then redrawing.
+      In versions of <B>magic</B> prior to 8.0, labels cannot be
+      directly modified;  modifications should be handled by first
+      erasing the label with "<B>erase label</B>" and then redrawing.
+      Versions 8.0 and higher use the <A HREF=setlabel.html><B>setlabel</B></A>
+      command to modify selected labels. <P>
+
+      Versions of <B>magic</B> from 8.0.139 allow the <I>layer</I> name
+      to have a dash ("<B>-</B>") in front (e.g., "<B>-metal1</B>") to
+      indicate a "sticky label", that is, one that is attached to the
+      specified layer type <I>layer</I>, and which cannot be reattached
+      to another layer. <P>
+   </BLOCKQUOTE>
+
+   <BLOCKQUOTE>
+      <B>Attribute labels:</B> <P>
+      A handful of labels are referred to as "attribute" labels.  These
+      label types are placed on devices and affect how the device is
+      extracted. <P>
+
+      A label that is placed inside a device (e.g., a MOSFET gate) which
+      ends with the character "<B>^</B>" is a <I>gate attribute</I>.  A
+      gate attribute in the form of "<I>name</I><B>=</B><I>value</I><B>^</B>"
+      specifies an extra parameter to be passed to the device in addition
+      to the standard parameters calculated for that device.  This is used
+      to capture parameters which cannot easily be inferred from the layout.
+      For example, an RF device model might be distinguished from a non-RF
+      device model by a parameter such as <B>rfmode=1</B>.  Whether or not
+      a device is intended for RF use is not easily guessed from the layout,
+      and so "tagging" the gate with the parameter allows the correct model
+      parameters to be used for the device. <P>
+
+      A gate attribute that is not in the form of a parameter will be used
+      as the device's instance index in the netlist;  e.g.,  a label of
+      "<B>1^</B>" on a MOSFET gate extracted as a MOSFET device would be an
+      entry "<B>M1</B>" in the netlist.  This can be used to better track
+      device indexes between a schematic and layout. <P>
+
+      A label that is placed on the <I>edge</I> a device, specificlly  a
+      MOSFET gate, and which ends with the character "<B>$</B>", is a
+      <I>terminal attribute</I>.  The only terminal attributes recognized
+      by magic are <B>S$</B> and <B>D$</B>, which specify which side of the
+      gate is to be considered the source and which is to be considered the
+      drain.  Generally, MOSFET devices are symmetric, and their use in a
+      simulation does not depend on which side is in the position of the
+      "source" and which is in the position of the "drain".  To the extent
+      that it matters, the terminal attributes can be used to ensure that
+      the source and drain connections appear in the netlist in their
+      intended orientation. <P>
+
+      Labels ending with "<B>@</B>" are <I>node attributes</I>.  There is
+      currently no functional application for node attributes.  When one
+      is applied, it will appear in the output netlist in a SPICE comment
+      line indicating the node and attribute.  This could be used, say,
+      by a post-processing script, but as it is in a comment line, it has
+      no impact on simulation or LVS.
    </BLOCKQUOTE>
 
 <H3>Implementation Notes:</H3>
@@ -65,6 +138,7 @@ Place a label in the layout
 
 <H3>See Also:</H3>
    <BLOCKQUOTE>
+      <A HREF=setlabel.html><B>setlabel</B></A> <BR>
       <A HREF=port.html><B>port</B></A> <BR>
    </BLOCKQUOTE>
 
@@ -74,6 +148,6 @@ Place a label in the layout
     <TD> <A HREF=commands.html>Return to command index</A>
   </TR>
 </TABLE>
-<P><I>Last updated:</I> October 7, 2004 at 1:11am <P>
+<P><I>Last updated:</I> March 17, 2021 at 11:11am <P>
 </BODY>
 </HTML>

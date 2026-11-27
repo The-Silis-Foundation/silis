@@ -5,8 +5,11 @@ Synthesis dashboard, report parser, and tab widget.
 import os
 import re
 import datetime
-from PyQt6.QtWidgets import *
-from PyQt6.QtCore import *
+try:
+    from PyQt6.QtWidgets import *
+    from PyQt6.QtCore import *
+except ImportError:
+    QWidget = object
 
 
 

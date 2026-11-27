@@ -415,11 +415,13 @@ class Project:
 
         # Filter out milestones containing stale macro instances not in netlist/sizes (GEMINI.md Rule 4.3)
         valid_macros = None
+        macro_masters = set(getattr(self, "macros", []) or [])
         if hasattr(self, "get_sizes"):
             try:
                 sz = self.get_sizes()
                 if sz and "macros" in sz:
                     valid_macros = set(sz["macros"].keys())
+                    macro_masters.update(sz["macros"].values())
             except Exception:
                 pass
 
@@ -427,15 +429,23 @@ class Project:
             if valid_macros is None:
                 return True
             try:
+                in_components = False
                 with open(def_path, "r", errors="ignore") as f:
                     for line in f:
                         line_s = line.strip()
-                        if line_s.startswith("- ") and ("sky130_sram" in line_s or "sram" in line_s):
+                        if not in_components:
+                            if line_s.startswith("COMPONENTS "):
+                                in_components = True
+                            continue
+                        if line_s == "END COMPONENTS":
+                            break
+                        if line_s.startswith("- "):
                             parts = line_s.split()
-                            if len(parts) >= 2:
-                                inst_name = parts[1]
-                                if inst_name not in valid_macros:
-                                    return False
+                            if len(parts) >= 3:
+                                inst_name, master_name = parts[1], parts[2]
+                                if master_name in macro_masters or master_name.startswith("sky130_sram"):
+                                    if inst_name not in valid_macros:
+                                        return False
             except Exception:
                 pass
             return True
@@ -463,8 +473,10 @@ class Project:
         if chosen_milestone:
             return chosen_milestone
 
-        # Fallback to the latest modified DEF
-        by_mtime = sorted(defs, key=os.path.getmtime, reverse=True)
+        # Fallback to the latest modified consistent DEF
+        consistent_defs = [d for d in defs if is_def_macro_consistent(d)]
+        pool = consistent_defs if consistent_defs else defs
+        by_mtime = sorted(pool, key=os.path.getmtime, reverse=True)
         return by_mtime[0]
 
     def get_gds_files(self) -> List[str]:

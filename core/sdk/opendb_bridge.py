@@ -129,10 +129,10 @@ extra_lefs = [
     os.path.join(pdk_base, "sky130B", "libs.ref", "sky130_power_switch", "lef", "power_switch.lef"),
     os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_power_switch.lef"),
     os.path.join(pdk_base, "sky130B", "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_power_switch.lef"),
-    os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
     os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
-    os.path.join(pdk_base, "sky130B", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
+    os.path.join(pdk_base, "sky130A", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
     os.path.join(pdk_base, "sky130B", "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
+    os.path.join(pdk_base, "sky130B", "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
 ]
 for f in extra_lefs:
     if os.path.isfile(f):
@@ -339,8 +339,8 @@ except Exception:
     pass
 
 io_lefs = [
-    os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
     os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_io", "lef", "sky130_fd_io.lef"),
+    os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_io", "lef", "sky130_ef_io.lef"),
     os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_power_switch", "lef", "power_switch.lef"),
     os.path.join(pdk_base, pdk_var, "libs.ref", "sky130_fd_sc_hd", "lef", "sky130_power_switch.lef")
 ]

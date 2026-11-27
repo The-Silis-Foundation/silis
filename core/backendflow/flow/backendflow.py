@@ -397,6 +397,7 @@ class BackendWidget(QWidget):
             err_lbl = QLabel(f"Failed to load C++ ClockTreeViewer:\n{e}")
             self.viz_tabs.addTab(err_lbl, "Clock Tree")
             
+        self.viz_tabs.addTab(self.gds3d_port, "3D Silicon")
         h_lay.addWidget(self.viz_tabs)
         
         v_split.addWidget(h_widget)
@@ -606,8 +607,7 @@ class BackendWidget(QWidget):
             return
         if hasattr(self.gds3d_port, 'load_gds'):
             self.gds3d_port.load_gds(gds_path)
-            self.gds3d_port.show()
-            self.gds3d_port.raise_()
+            self.viz_tabs.setCurrentWidget(self.gds3d_port)
             self.term_log.append(f"[GDS3D] Opened {os.path.basename(gds_path)} in 3D Silicon Peeker.")
 
     def run_signoff_pipeline(self):
@@ -679,11 +679,30 @@ class BackendWidget(QWidget):
         self.btn_run_signoff.setEnabled(True)
         self.btn_run_signoff.setText("Run Signoff Checks")
 
+    def _get_active_pdk_ssa_paths(self):
+        """Resolves active PDK directories and files cleanly via SSAForge."""
+        pdk_name = "sky130"
+        pdk_base = None
+        if self.active_pdk:
+            pdk_name = self.active_pdk.get("variant") or self.active_pdk.get("name") or self.active_pdk.get("family") or "sky130"
+            pdk_base = self.active_pdk.get("root") or None
+            lib_path = self.active_pdk.get("lib", "")
+            if not pdk_base and "libs.ref" in lib_path:
+                pdk_base = lib_path.split("libs.ref")[0].rstrip(os.sep)
+        return pdk_name, SSAForge.get_pdk_paths(pdk_name, pdk_base=pdk_base)
+
     def _get_io_lefs(self):
-        """Discovers sky130 IO and corner/filler pad LEFs to support clean pad placement."""
+        """Discovers IO and pad LEFs cleanly via SSAForge."""
         io_lefs = []
-        # Search prioritized candidates; stop as soon as we find a valid IO LEF pair
-        # to avoid reading duplicate libraries (e.g. sky130A and sky130B simultaneously)
+        _, ssa_paths = self._get_active_pdk_ssa_paths()
+        for lef in ssa_paths.get("extra_lefs", []):
+            if ("_io" in os.path.basename(lef).lower() or "io" in lef.lower().split(os.sep)) and os.path.isfile(lef):
+                if lef not in io_lefs:
+                    io_lefs.append(lef)
+        if io_lefs:
+            return io_lefs
+
+        # Fallback search across standard PDK roots
         priority_roots = []
         lib_path = self.active_pdk.get('lib', '') if self.active_pdk else ''
         if 'libs.ref' in lib_path:
@@ -697,21 +716,33 @@ class BackendWidget(QWidget):
         for root in priority_roots:
             ef_lef = os.path.join(root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_ef_io.lef')
             fd_lef = os.path.join(root, 'libs.ref', 'sky130_fd_io', 'lef', 'sky130_fd_io.lef')
-            found = []
-            if os.path.isfile(ef_lef):
-                found.append(ef_lef)
-            if os.path.isfile(fd_lef):
-                found.append(fd_lef)
+            found = [p for p in (ef_lef, fd_lef) if os.path.isfile(p)]
             if found:
-                for f in found:
-                    if f not in io_lefs:
-                        io_lefs.append(f)
-                break
+                return found
         return io_lefs
 
     def _get_io_gds(self):
-        """Discovers sky130 IO GDS files to support GDS streamout and merge in pad/chip mode."""
+        """Discovers IO and PDK cell GDS files via SSAForge for full Magic GDS merge."""
         io_gds = []
+        _, ssa_paths = self._get_active_pdk_ssa_paths()
+        # Exclude std_cell_gds if already loaded by trigger_magic_merge; put compact ef_io before 112MB fd_io
+        std_gds = ssa_paths.get("std_cell_gds", "")
+        ef_list, other_list = [], []
+        for gds in ssa_paths.get("gds_files", []):
+            if std_gds and os.path.abspath(gds) == os.path.abspath(std_gds):
+                continue
+            bn = os.path.basename(gds).lower()
+            if "fd_io" in bn or "ef_io" in bn or "sram" in bn or "sc_hvl" in bn:
+                if "ef_io" in bn:
+                    ef_list.append(gds)
+                else:
+                    other_list.append(gds)
+        for g in ef_list + other_list:
+            if os.path.isfile(g) and g not in io_gds:
+                io_gds.append(g)
+        if io_gds:
+            return io_gds
+
         priority_roots = []
         lib_path = self.active_pdk.get('lib', '') if self.active_pdk else ''
         if 'libs.ref' in lib_path:
@@ -725,16 +756,9 @@ class BackendWidget(QWidget):
         for root in priority_roots:
             ef_gds = os.path.join(root, 'libs.ref', 'sky130_fd_io', 'gds', 'sky130_ef_io.gds')
             fd_gds = os.path.join(root, 'libs.ref', 'sky130_fd_io', 'gds', 'sky130_fd_io.gds')
-            found = []
-            if os.path.isfile(ef_gds):
-                found.append(ef_gds)
-            if os.path.isfile(fd_gds):
-                found.append(fd_gds)
+            found = [p for p in (ef_gds, fd_gds) if os.path.isfile(p)]
             if found:
-                for f in found:
-                    if f not in io_gds:
-                        io_gds.append(f)
-                break
+                return found
         return io_gds
 
     def _get_macro_files(self, ext):
@@ -810,10 +834,24 @@ class BackendWidget(QWidget):
             self.spinner_timer.stop()
             self.ide.statusBar().showMessage("Ready")
 
+    @staticmethod
+    def _resolve_magic_bin():
+        """Resolves bundled silis/third-party/bin/magic first, then system PATH."""
+        silis_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        bundled_bin_dir = os.path.join(silis_dir, "third-party", "bin")
+        bundled_magic = os.path.join(bundled_bin_dir, "magic")
+        env = os.environ.copy()
+        if os.path.isdir(bundled_bin_dir):
+            env["PATH"] = bundled_bin_dir + os.pathsep + env.get("PATH", "")
+        if os.path.isfile(bundled_magic) and os.access(bundled_magic, os.X_OK):
+            return bundled_magic, env
+        return shutil.which("magic"), env
+
     # === [NEW] MAGIC GUI LAUNCHER ===
     def launch_magic_gui(self):
         """Launches Magic VLSI in GUI mode with the correct Tech file."""
-        if not shutil.which("magic"):
+        magic_bin, magic_env = self._resolve_magic_bin()
+        if not magic_bin:
             self.term_log.append("[ERR] Magic not found.")
             return
 
@@ -836,7 +874,7 @@ class BackendWidget(QWidget):
         self.term_log.append(f"[SYS] Launching Magic GUI for {os.path.basename(gds_path)}...")
         # -d XR uses the X11 Cairo renderer (faster/better looking than default)
         # -T loads the tech file
-        subprocess.Popen(["magic", "-d", "XR", "-T", pdk_tech, gds_path], cwd=proj_root)
+        subprocess.Popen([magic_bin, "-d", "XR", "-T", pdk_tech, gds_path], cwd=proj_root, env=magic_env)
 
     # === KEEP ALL EXISTING HELPERS BELOW ===
     # (ask_command, reset_backend, on_tab_changed, populate_gds_layers, on_layer_toggle, 
@@ -1003,14 +1041,26 @@ class BackendWidget(QWidget):
             return
 
         if step_name == "DRC":
-            if not self.active_pdk or 'gds' not in self.active_pdk: QMessageBox.critical(self, "Error", "PDK GDS Required."); return
+            _, drc_ssa = self._get_active_pdk_ssa_paths()
+            if self.active_pdk is None:
+                self.active_pdk = {}
+            if not self.active_pdk.get("tech") and drc_ssa.get("magic_tech"):
+                self.active_pdk["tech"] = drc_ssa["magic_tech"]
+            if not self.active_pdk.get("gds") and drc_ssa.get("std_cell_gds"):
+                self.active_pdk["gds"] = drc_ssa["std_cell_gds"]
+            if not self.active_pdk.get("tech"): QMessageBox.critical(self, "Error", "PDK Magic tech file Required."); return
             gds_file = os.path.join(results_dir, "design.gds")
             if not os.path.exists(gds_file): self.term_log.append("[ERR] Generate GDS first!"); return
             self.trigger_magic_drc(proj_root, gds_file)
             return
 
         if step_name == "PAT":
-            if not self.active_pdk or 'corners' not in self.active_pdk:
+            _, pat_ssa = self._get_active_pdk_ssa_paths()
+            if self.active_pdk is None:
+                self.active_pdk = {}
+            if not self.active_pdk.get("corners") and pat_ssa.get("corners"):
+                self.active_pdk["corners"] = pat_ssa["corners"]
+            if not self.active_pdk.get("corners"):
                 QMessageBox.critical(self, "Error", "MCMM Corners not found in active PDK. Try auto-crawling Volare.")
                 return
                 
@@ -1060,16 +1110,29 @@ class BackendWidget(QWidget):
             if not target_corners and self.active_pdk.get('lib') and os.path.isfile(self.active_pdk['lib']):
                 target_corners = {self.active_pdk.get('corner', 'default'): self.active_pdk['lib']}
 
+            pdk_name_pat, ssa_paths_pat = self._get_active_pdk_ssa_paths()
+            site_cfg_pat = SSAForge.get_site_config(pdk_name_pat)
+            io_site_pat = site_cfg_pat.get("io_site", "IO_SITE")
+            io_csite_pat = site_cfg_pat.get("io_corner_site", "IO_CSITE")
+            pat_tlef = self.active_pdk.get("tlef") or ssa_paths_pat.get("tech_lef", "")
+            pat_lef = self.active_pdk.get("lef") or ssa_paths_pat.get("std_cell_lef", "")
+
             tcl_lines = [
                 "set_thread_count [exec nproc]",
-                f'read_lef "{self.active_pdk["tlef"]}"',
-                f'read_lef "{self.active_pdk["lef"]}"'
+                f'read_lef "{pat_tlef}"',
+                f'read_lef "{pat_lef}"'
             ]
             for io_lef in self._get_io_lefs():
                 tcl_lines.append(f'read_lef "{io_lef}"')
             for lef in self._get_macro_files("lef"):
-                tcl_lines.append(f'read_lef "{lef}"')
+                if lef not in self._get_io_lefs():
+                    tcl_lines.append(f'read_lef "{lef}"')
+            for extra_l in ssa_paths_pat.get("extra_lefs", []):
+                if f'read_lef "{extra_l}"' not in tcl_lines:
+                    tcl_lines.append(f'read_lef "{extra_l}"')
 
+            tcl_lines.append(f"catch {{ make_fake_io_site -name {io_site_pat} -width 1 -height 200 }}")
+            tcl_lines.append(f"catch {{ make_fake_io_site -name {io_csite_pat} -width 200 -height 204 }}")
             tcl_lines.append(f'read_def "{def_abs_path}"')
 
             corner_names = list(target_corners.keys())
@@ -1122,9 +1185,13 @@ class BackendWidget(QWidget):
                 
             def run_pat():
                 try:
-                    cmd = ["openroad", "-exit", tcl_path]
+                    cmd = [SSAForge.resolve_tool_bin("openroad") or "openroad", "-exit", tcl_path]
                     proc = subprocess.run(cmd, capture_output=True, text=True)
-                    out = proc.stdout
+                    out = proc.stdout or ""
+                    if proc.returncode != 0:
+                        tail = "\n".join(((proc.stderr or "") + "\n" + out).strip().splitlines()[-15:])
+                        self.ide.queue.put(("[BACKEND]", f"[ERR] PAT OpenROAD exited {proc.returncode}:\n{tail}"))
+                        return
                     
                     insts = "0"
                     area = "0.0"
@@ -1805,28 +1872,78 @@ foreach net [$blk getNets] {
 
 
     def trigger_magic_drc(self, root, gds_path):
-        if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' not found.")); return
-        pdk_tech = self.active_pdk.get('tech', '')
-        if not os.path.exists(pdk_tech): self.ide.queue.put(("[BACKEND]", "[ERR] Missing Tech file.")); return
-        script_content = f"drc off\ngds read {gds_path}\ndrc style drc(fast)\ndrc on\ndrc check\ndrc catchup\nset count [drc list count]\nputs \"SILIS_DRC_VIOLATIONS: $count\"\nif {{$count > 0}} {{ drc list all }}\nquit"
+        magic_bin, magic_env = self._resolve_magic_bin()
+        if not magic_bin:
+            self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' not found."))
+            return
+        _, ssa_paths = self._get_active_pdk_ssa_paths()
+        pdk_tech = (self.active_pdk.get('tech', '') if self.active_pdk else '') or ssa_paths.get('magic_tech', '')
+        if not pdk_tech or not os.path.exists(pdk_tech):
+            self.ide.queue.put(("[BACKEND]", f"[ERR] Missing Magic tech file ({pdk_tech})."))
+            return
+        script_content = (
+            f"drc off\ngds read {gds_path}\n"
+            "set _tops [cellname list top]\n"
+            "set _top_cell \"\"\n"
+            "foreach _c $_tops { if {$_c ne \"(UNNAMED)\"} { set _top_cell $_c; break } }\n"
+            "if {$_top_cell ne \"\"} { load $_top_cell }\n"
+            "drc style drc(fast)\n"
+            "# Check top-level layout routing/PDN + core cells while isolating pre-waivered foundry IO/SRAM macro interiors\n"
+            "select top cell\n"
+            "foreach _sub [cellname list children] {\n"
+            "    if {![string match \"*sram*\" $_sub] && ![string match \"*openram*\" $_sub] && ![string match \"*fd_io*\" $_sub] && ![string match \"*ef_io*\" $_sub]} {\n"
+            "        catch { select cell $_sub; expand }\n"
+            "    }\n"
+            "}\n"
+            "select top cell\n"
+            "drc on\ndrc check\ndrc catchup\n"
+            "set count [drc list count total]\n"
+            "if {$count eq \"\"} { set count 0 }\n"
+            "puts \"SILIS_DRC_VIOLATIONS: $count\"\n"
+            "if {$count > 0} {\n"
+            "    puts \"SILIS_DRC_BY_CELL: [drc list count]\"\n"
+            "    for {set _di 1} {$_di <= 25} {incr _di} {\n"
+            "        if {[catch {drc find $_di}]} break\n"
+            "        puts \"DRC_ERR_$_di box=[box] why=[drc why]\"\n"
+            "    }\n"
+            "}\n"
+            "quit -noprompt"
+        )
         script_path = os.path.join(root, "run_drc.tcl")
-        with open(script_path, 'w') as f: f.write(script_content)
+        with open(script_path, 'w') as f:
+            f.write(script_content)
         self.term_log.append(f"\n[SIGNOFF] Running Magic DRC on {os.path.basename(gds_path)}...")
         def run_drc():
             try:
-                cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                cmd = [magic_bin, "-noconsole", "-dnull", "-T", pdk_tech, script_path]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=magic_env)
                 import re
+                log_lines = []
+                drc_count = None
                 for line in iter(proc.stdout.readline, ''):
                     line = line.strip()
+                    if line:
+                        log_lines.append(line)
                     if "SILIS_DRC_VIOLATIONS" in line:
-                        m = re.search(r'(\d+)\s*\}?$', line); count = m.group(1) if m else "Unknown"
-                        if count == "0": self.ide.queue.put(("[BACKEND]", "[OK] DRC CLEAN (0 Violations)"))
-                        else: self.ide.queue.put(("[BACKEND]", f"[FAIL] DRC FAILED: {count} Violations Found"))
-                    elif "Error:" in line or "error" in line.lower(): self.ide.queue.put(("[BACKEND]", f"[DRC ERR] {line}"))
+                        m = re.search(r'(\d+)\s*\}?$', line)
+                        count = m.group(1) if m else "Unknown"
+                        drc_count = count
+                        if count == "0":
+                            self.ide.queue.put(("[BACKEND]", "[OK] DRC CLEAN (0 Violations)"))
+                        else:
+                            self.ide.queue.put(("[BACKEND]", f"[FAIL] DRC FAILED: {count} Violations Found"))
+                    elif "Error:" in line or "error loading technology" in line.lower():
+                        self.ide.queue.put(("[BACKEND]", f"[DRC ERR] {line}"))
                 proc.wait()
+                reports_dir = os.path.join(root, "reports")
+                os.makedirs(reports_dir, exist_ok=True)
+                drc_rpt_path = os.path.join(reports_dir, "drc.rpt")
+                if drc_count is not None:
+                    with open(drc_rpt_path, "w") as rf:
+                        rf.write("\n".join(log_lines) + "\n")
                 self.ide.queue.put(("[BACKEND]", "DRC Run Complete."))
-            except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] DRC Execution Failed: {e}"))
+            except Exception as e:
+                self.ide.queue.put(("[BACKEND]", f"[ERR] DRC Execution Failed: {e}"))
             
         self.start_spinner()
         self.drc_worker = FlowWorker(run_drc)
@@ -1834,55 +1951,106 @@ foreach net [$blk getNets] {
         self.drc_worker.start()
 
     def trigger_magic_merge(self, root, def_path):
-        if not shutil.which("magic"): self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' executable not found.")); return
-        pdk_gds = self.active_pdk.get('gds', ''); pdk_tech = self.active_pdk.get('tech', '')
-        pdk_tlef = self.active_pdk.get('tlef', ''); pdk_lef = self.active_pdk.get('lef', '')   
+        magic_bin, magic_env = self._resolve_magic_bin()
+        if not magic_bin:
+            self.ide.queue.put(("[BACKEND]", "[ERR] 'magic' executable not found."))
+            return
+        _, ssa_paths = self._get_active_pdk_ssa_paths()
+        pdk_gds = (self.active_pdk.get('gds', '') if self.active_pdk else '') or ssa_paths.get('std_cell_gds', '')
+        pdk_tech = (self.active_pdk.get('tech', '') if self.active_pdk else '') or ssa_paths.get('magic_tech', '')
+        pdk_tlef = (self.active_pdk.get('tlef', '') if self.active_pdk else '') or ssa_paths.get('tech_lef', '')
+        pdk_lef = (self.active_pdk.get('lef', '') if self.active_pdk else '') or ssa_paths.get('std_cell_lef', '')
         output_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
-        if not all(os.path.exists(p) for p in [pdk_gds, pdk_tech, pdk_tlef, pdk_lef]): self.ide.queue.put(("[BACKEND]", f"[ERR] Missing PDK files.")); return
-        
-        script_content = f"drc off\ncatch {{ locking off }}\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\n"
-        
-        # Load I/O Pad LEFs if available
-        for io_lef in self._get_io_lefs():
-            script_content += f"lef read {io_lef}\n"
+        if not all(p and os.path.exists(p) for p in [pdk_gds, pdk_tech, pdk_tlef, pdk_lef]):
+            self.ide.queue.put(("[BACKEND]", f"[ERR] Missing PDK files (gds={pdk_gds}, tech={pdk_tech}, tlef={pdk_tlef}, lef={pdk_lef})."))
+            return
 
-        # Load macro LEFs
-        for lef in self._get_macro_files("lef"):
-            script_content += f"lef read {lef}\n"
+        script_content = f"drc off\ncatch {{ locking off }}\ngds readonly true\ngds rescale false\nlef read {pdk_tlef}\nlef read {pdk_lef}\n"
+        seen_lefs = {os.path.abspath(pdk_tlef), os.path.abspath(pdk_lef)}
+
+        # Load IO, macro, and power switch LEFs via SSAForge
+        for extra_lef in self._get_io_lefs() + self._get_macro_files("lef") + ssa_paths.get("extra_lefs", []):
+            if extra_lef and os.path.isfile(extra_lef) and os.path.abspath(extra_lef) not in seen_lefs:
+                seen_lefs.add(os.path.abspath(extra_lef))
+                script_content += f"lef read {extra_lef}\n"
         macro_gds_paths = self._get_macro_files("gds")
-        
-        script_content += f"gds read {pdk_gds}\n"
-        # Load I/O Pad GDS files if available
-        for io_gds_path in self._get_io_gds():
-            script_content += f"gds read {io_gds_path}\n"
-        for gds in macro_gds_paths:
-            script_content += f"gds read {gds}\n"
+
+        seen_gds = set()
+        for gds_p in [pdk_gds] + self._get_io_gds() + macro_gds_paths:
+            if gds_p and os.path.isfile(gds_p) and os.path.abspath(gds_p) not in seen_gds:
+                seen_gds.add(os.path.abspath(gds_p))
+                script_content += f"gds read {gds_p}\n"
+
+        # Realize LEF-only abstract cells lacking foundry GDS (e.g. POWER_SWITCH) so gds write succeeds cleanly
+        script_content += (
+            "foreach _ac [cellname list allcells] {\n"
+            "    if {[string match \"*site*\" [string tolower $_ac]] || $_ac eq \"unithd\" || $_ac eq \"unithddbl\" || $_ac eq \"(UNNAMED)\"} continue\n"
+            "    if {![catch {load $_ac -silent}]} {\n"
+            "        if {[string match \"*LEFview*\" [property]]} {\n"
+            "            property LEFview \"\"\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
             
         design_name = "design"
+        magic_def_path = def_path
         if os.path.exists(def_path):
+            clean_lines = []
+            in_blockages = False
+            saw_placement_blk = False
             with open(def_path, 'r') as f:
                 for line in f:
                     if line.startswith("DESIGN"):
                         design_name = line.split()[1]
-                        break
-                        
+                    stripped = line.strip()
+                    if stripped.startswith("BLOCKAGES "):
+                        in_blockages = True
+                        continue
+                    if in_blockages:
+                        if "PLACEMENT" in stripped:
+                            saw_placement_blk = True
+                        if stripped == "END BLOCKAGES":
+                            in_blockages = False
+                        continue
+                    clean_lines.append(line)
+            if saw_placement_blk:
+                magic_def_path = os.path.join(root, "results", "magic_merge.def").replace("\\", "/")
+                with open(magic_def_path, 'w') as mf:
+                    mf.writelines(clean_lines)
+
         output_gds = os.path.join(root, "results", f"{design_name}.gds").replace("\\", "/")
-        script_content += f"def read {def_path}\nload {design_name}\ngds write {output_gds}\nquit -noprompt"
+        script_content += f"def read {magic_def_path}\ngds write {output_gds}\nquit -noprompt"
         script_path = os.path.join(root, "merge_magic.tcl")
         with open(script_path, 'w') as f: f.write(script_content)
         self.term_log.append(f"[SYS] Magic: Merging with LEF support...")
         def run_magic():
             try:
-                cmd = ["magic", "-noconsole", "-dnull", "-T", pdk_tech, script_path]
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode == 0 and os.path.exists(output_gds):
+                cmd = [magic_bin, "-noconsole", "-dnull", "-T", pdk_tech, script_path]
+                proc = subprocess.run(cmd, capture_output=True, text=True, env=magic_env)
+                combined_magic = (proc.stderr or "") + "\n" + (proc.stdout or "")
+                gds_valid = (
+                    proc.returncode == 0
+                    and os.path.exists(output_gds)
+                    and os.path.getsize(output_gds) > 256
+                    and "cannot write GDS" not in combined_magic
+                    and "I/O error in writing" not in combined_magic
+                )
+                if gds_valid:
                     standard_gds = os.path.join(root, "results", "design.gds").replace("\\", "/")
                     if output_gds != standard_gds:
                         import shutil
                         shutil.copyfile(output_gds, standard_gds)
                     self.ide.queue.put(("[BACKEND_GDS_DONE]", output_gds))
                     self.ide.queue.put(("[BACKEND]", f"Saved: {output_gds}"))
-                else: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{proc.stderr}\n{proc.stdout}"))
+                else:
+                    if os.path.exists(output_gds) and os.path.getsize(output_gds) <= 256:
+                        try:
+                            os.remove(output_gds)
+                        except OSError:
+                            pass
+                    tail_msg = "\n".join(combined_magic.strip().splitlines()[-15:])
+                    self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Failed:\n{tail_msg}"))
             except Exception as e: self.ide.queue.put(("[BACKEND]", f"[ERR] Magic Execution Error: {e}"))
             
         self.start_spinner()
@@ -2016,7 +2184,7 @@ foreach net [$blk getNets] {
         if not os.path.isdir(io_dir):
             io_dir = os.path.abspath(os.path.join(pdk_dir, "..", "sky130_fd_io", "lef"))
         if os.path.isdir(io_dir):
-            for ef_io in ["sky130_ef_io.lef", "sky130_fd_io.lef"]:
+            for ef_io in ["sky130_fd_io.lef", "sky130_ef_io.lef"]:
                 io_lef_path = os.path.join(io_dir, ef_io)
                 if os.path.isfile(io_lef_path):
                     tcl_content += f'read_lef "{io_lef_path}"\n'

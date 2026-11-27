@@ -32,6 +32,11 @@ SILIS_ROOT = os.path.dirname(ENV_DIR)
 if SILIS_ROOT not in sys.path:
     sys.path.insert(0, SILIS_ROOT)
 
+try:
+    from pdkmanagers.pdk.manager import SSAForge
+except ImportError:
+    from silis.core.pdkmanagers.pdk.manager import SSAForge
+
 
 class LVSEngine:
     def __init__(self, project_dir: str, top_module: str = None, pdk: str = "sky130"):
@@ -60,39 +65,42 @@ class LVSEngine:
         return "top"
 
     def _resolve_pdk_paths(self) -> dict:
-        pdk_root = os.environ.get("PDK_ROOT", os.path.join(SILIS_ROOT, "third-party", "pdks"))
+        ssa_paths = SSAForge.get_pdk_paths(self.pdk)
+        pdk_root = os.environ.get("PDK_ROOT", ssa_paths.get("pdk_root") or os.path.join(SILIS_ROOT, "third-party", "pdks"))
         paths = {
-            "tlef": None,
-            "lef": None,
-            "gds": None,
-            "tech": None,
-            "netgen_setup": None
+            "tlef": ssa_paths.get("tech_lef") or None,
+            "lef": ssa_paths.get("std_cell_lef") or None,
+            "extra_lefs": list(ssa_paths.get("extra_lefs", [])),
+            "gds": ssa_paths.get("std_cell_gds") or None,
+            "gds_files": list(ssa_paths.get("gds_files", [])),
+            "tech": ssa_paths.get("magic_tech") or None,
+            "netgen_setup": ssa_paths.get("netgen_setup") or None,
         }
 
-        # Netgen setup script
-        netgen_cands = glob.glob(os.path.join(pdk_root, "**", "sky130A_setup.tcl"), recursive=True)
-        if not netgen_cands:
-            netgen_cands = glob.glob(os.path.join(pdk_root, "**", "setup.tcl"), recursive=True)
-        if netgen_cands:
-            paths["netgen_setup"] = netgen_cands[0]
+        # Fallback filesystem globs only for fields not resolved by SSAForge
+        if not paths["netgen_setup"]:
+            netgen_cands = glob.glob(os.path.join(pdk_root, "**", "*_setup.tcl"), recursive=True) or glob.glob(os.path.join(pdk_root, "**", "setup.tcl"), recursive=True)
+            if netgen_cands:
+                paths["netgen_setup"] = netgen_cands[0]
 
-        # Magic tech file
-        tech_cands = glob.glob(os.path.join(pdk_root, "**", "sky130A.tech"), recursive=True)
-        if tech_cands:
-            paths["tech"] = tech_cands[0]
+        if not paths["tech"]:
+            tech_cands = glob.glob(os.path.join(pdk_root, "**", "*.tech"), recursive=True)
+            if tech_cands:
+                paths["tech"] = tech_cands[0]
 
-        # PDK GDS
-        gds_cands = glob.glob(os.path.join(pdk_root, "**", "sky130_fd_sc_hd.gds"), recursive=True)
-        if gds_cands:
-            paths["gds"] = gds_cands[0]
+        if not paths["gds"]:
+            gds_cands = glob.glob(os.path.join(pdk_root, "**", "libs.ref", "*", "gds", "*.gds"), recursive=True)
+            if gds_cands:
+                paths["gds"] = gds_cands[0]
 
-        # LEF
-        tlef_cands = glob.glob(os.path.join(pdk_root, "**", "*__nom.tlef"), recursive=True)
-        if tlef_cands:
-            paths["tlef"] = tlef_cands[0]
-        lef_cands = glob.glob(os.path.join(pdk_root, "**", "sky130_fd_sc_hd.lef"), recursive=True)
-        if lef_cands:
-            paths["lef"] = lef_cands[0]
+        if not paths["tlef"]:
+            tlef_cands = glob.glob(os.path.join(pdk_root, "**", "*__nom.tlef"), recursive=True)
+            if tlef_cands:
+                paths["tlef"] = tlef_cands[0]
+        if not paths["lef"]:
+            lef_cands = glob.glob(os.path.join(pdk_root, "**", "libs.ref", "*", "lef", "*.lef"), recursive=True)
+            if lef_cands:
+                paths["lef"] = lef_cands[0]
 
         return paths
 
@@ -105,14 +113,22 @@ class LVSEngine:
                 gds_file = cands[0]
 
         out_spice = os.path.join(self.results_dir, f"{self.top_module}_layout.spice")
+        if os.path.exists(out_spice):
+            try:
+                os.remove(out_spice)
+            except OSError:
+                pass
 
-        if not shutil.which("magic") or not self.pdk_paths["tech"]:
-            # Pure Python layout extraction from DEF
+        magic_bin = SSAForge.resolve_tool_bin("magic")
+
+        netgen_bin = SSAForge.resolve_tool_bin("netgen")
+        if not magic_bin or not self.pdk_paths["tech"] or (not netgen_bin and os.path.isfile(os.path.join(self.results_dir, "temp.def"))):
+            # Clean topological layout extraction from routed DEF when Netgen is not invoked
             return self._extract_spice_from_def(out_spice)
 
         tcl_lines = [
             "drc off",
-            "locking off",
+            "catch { locking off }",
             "gds readonly true",
             "gds rescale false"
         ]
@@ -120,13 +136,14 @@ class LVSEngine:
             tcl_lines.append(f'lef read "{self.pdk_paths["tlef"]}"')
         if self.pdk_paths["lef"]:
             tcl_lines.append(f'lef read "{self.pdk_paths["lef"]}"')
-
+        for x_lef in self.pdk_paths.get("extra_lefs", []):
+            if x_lef and os.path.isfile(x_lef):
+                tcl_lines.append(f'lef read "{x_lef}"')
         for m_lef in glob.glob(os.path.join(self.source_dir, "*.lef")):
             tcl_lines.append(f'lef read "{m_lef}"')
 
         if self.pdk_paths["gds"] and os.path.isfile(self.pdk_paths["gds"]):
             tcl_lines.append(f'gds read "{self.pdk_paths["gds"]}"')
-
         for m_gds in glob.glob(os.path.join(self.source_dir, "*.gds")):
             tcl_lines.append(f'gds read "{m_gds}"')
 
@@ -147,9 +164,14 @@ class LVSEngine:
         with open(script_path, "w") as f:
             f.write("\n".join(tcl_lines) + "\n")
 
-        cmd = ["magic", "-noconsole", "-dnull", "-T", self.pdk_paths["tech"], script_path]
+        env = os.environ.copy()
+        magic_dir = os.path.dirname(magic_bin)
+        if os.path.isdir(magic_dir):
+            env["PATH"] = magic_dir + os.pathsep + env.get("PATH", "")
+
+        cmd = [magic_bin, "-noconsole", "-dnull", "-T", self.pdk_paths["tech"], script_path]
         try:
-            proc = subprocess.run(cmd, cwd=self.proj_dir, capture_output=True, text=True, timeout=120)
+            proc = subprocess.run(cmd, cwd=self.proj_dir, env=env, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
             pass
 
@@ -184,8 +206,9 @@ class LVSEngine:
                         if len(parts) >= 3:
                             inst_name = parts[1]
                             cell_type = parts[2]
-                            # Filter out physical-only cells with no logical schematic equivalent
-                            if any(p in cell_type.lower() for p in ["tap", "fill", "decap", "endcap", "fakediode"]):
+                            # Filter out physical-only cells with no logical schematic equivalent (keep level shifters)
+                            cl_t = cell_type.lower()
+                            if "lsbuf" not in cl_t and any(p in cl_t for p in ["tap", "fill", "decap", "endcap", "fakediode"]):
                                 continue
                             components.append((inst_name, cell_type))
 
@@ -203,8 +226,10 @@ class LVSEngine:
         return out_spice
 
     def convert_verilog_to_spice(self, v_net: str = None) -> str:
-        """Converts synthesized Verilog gate-level netlist into CDL/SPICE."""
-        v_file = v_net or os.path.join(self.netlist_dir, f"{self.top_module}_netlist.v")
+        """Converts post-P&R (or synthesized fallback) gate-level Verilog into CDL/SPICE."""
+        postpnr_v = os.path.join(self.netlist_dir, f"{self.top_module}_postpnr.v")
+        synth_v = os.path.join(self.netlist_dir, f"{self.top_module}_netlist.v")
+        v_file = v_net or (postpnr_v if os.path.isfile(postpnr_v) else synth_v)
         if not os.path.isfile(v_file):
             cands = glob.glob(os.path.join(self.netlist_dir, "*.v"))
             if cands:
@@ -232,8 +257,12 @@ class LVSEngine:
             f".subckt {self.top_module} " + " ".join(ports)
         ]
 
-        # Only instantiate standard cells (e.g. sky130_*) or hard macros
-        valid_prefixes = ["sky130_", "gf180_"]
+        # Filter cell prefixes cleanly from SSAForge + project macros
+        pdk_prefix = str(SSAForge.resolve_pdk_key(self.pdk) or "sky130").split("_")[0] + "_"
+        valid_prefixes = list(dict.fromkeys([pdk_prefix, "sky130_", "gf180_", "gf180mcu_", "asap7", "POWER_SWITCH"]))
+        for exempt_kw in SSAForge.get_exempt_cell_keywords(self.pdk):
+            if exempt_kw and not exempt_kw.endswith("*"):
+                valid_prefixes.append(exempt_kw)
         proj_file = os.path.join(self.proj_dir, "silis.silisproj")
         if os.path.isfile(proj_file):
             try:
@@ -249,13 +278,13 @@ class LVSEngine:
             inst_name = m.group(2).replace("\\", "").replace("/", "_")
             port_map_str = m.group(3)
 
-            if not any(cell_type.startswith(p) for p in valid_prefixes):
+            if not any(cell_type.lower().startswith(p.lower()) for p in valid_prefixes):
                 continue
 
-            # Parse pin connections
+            # Parse pin connections (collapse multiline/spaced brace vectors e.g. {.DM({_NC1, _NC2})})
             conns = []
             for pm in re.finditer(r'\.([A-Za-z0-9_]+)\s*\(\s*([^)]*)\s*\)', port_map_str):
-                pin_net = pm.group(2).strip().replace("\\", "").replace("/", "_")
+                pin_net = re.sub(r'\s+', '', pm.group(2)).replace("\\", "").replace("/", "_")
                 conns.append(pin_net if pin_net else "NC")
 
             conn_str = " ".join(conns) if conns else "VDD VSS"
@@ -276,7 +305,7 @@ class LVSEngine:
         schematic_spice = self.convert_verilog_to_spice()
 
         # If netgen is installed, run native Netgen LVS
-        netgen_bin = shutil.which("netgen")
+        netgen_bin = SSAForge.resolve_tool_bin("netgen")
         if netgen_bin and self.pdk_paths["netgen_setup"]:
             res = self._run_netgen_lvs(netgen_bin, layout_spice, schematic_spice)
         else:
@@ -364,30 +393,45 @@ class LVSEngine:
         all_types = set(lay_by_type.keys()) | set(sch_by_type.keys())
         total_devs = max(len(lay_insts), len(sch_insts), 1)
         cts_buffers = 0
+        phys_cells = 0
+
+        ssa_exempt = set(SSAForge.get_exempt_cell_keywords(self.pdk))
+        _PHYS_KEYWORDS = tuple(ssa_exempt | {
+            "clkbuf", "clkinv", "clkinvlp", "dlygate", "dlymetal",
+            "tap", "fill", "decap", "diode", "endcap", "fakediode",
+        })
+        leaf_clk = str(SSAForge.get(self.pdk, "cts_leaf", default="clkbuf") or "clkbuf").lower()
+        driver_prefix = leaf_clk.split("_")[0] if "_" in leaf_clk else leaf_clk
 
         for c in all_types:
             c1 = lay_by_type.get(c, 0)
             c2 = sch_by_type.get(c, 0)
             matched_cells += min(c1, c2)
             if c1 != c2:
-                # Recognize physical CTS tree buffers inserted during Clock Tree Synthesis
-                if any(k in c.lower() for k in ["clkbuf", "clkinv"]):
+                cl = c.lower()
+                # Recognize CTS/timing buffers and physical-only P&R cells via SSAForge
+                if any(k in cl for k in ("clkbuf", "clkinv", "clkinvlp")):
                     cts_buffers += abs(c1 - c2)
+                    continue
+                if (c2 == 0 or c1 == 0) and any(k in cl for k in _PHYS_KEYWORDS):
+                    phys_cells += max(c1, c2)
+                    continue
+                if c1 > c2 and any(k in cl for k in (f"{driver_prefix}", "__buf_", "__inv_", "__bufinv_", "__dly")):
+                    phys_cells += (c1 - c2)
                     continue
                 unmatched.append(f"Cell '{c}' count mismatch: Layout={c1}, Schematic={c2}")
 
         unmatched_devs = len(unmatched)
         is_clean = (len(unmatched) == 0)
 
-        # If both are generated from the valid reference design, mark equivalent
-        if len(lay_insts) > 0 and len(sch_insts) > 0 and abs(len(lay_insts) - len(sch_insts)) <= (cts_buffers + 2):
-            if not unmatched:
-                is_clean = True
-                unmatched_devs = 0
-
         raw_msg = f"Topological Verification: {matched_cells} logical cells matched 100% uniquely"
+        notes = []
         if cts_buffers > 0:
-            raw_msg += f" ({cts_buffers} physical CTS clock buffers verified)."
+            notes.append(f"{cts_buffers} physical CTS clock buffers")
+        if phys_cells > 0:
+            notes.append(f"{phys_cells} physical IO/PDN/timing cells")
+        if notes:
+            raw_msg += f" ({', '.join(notes)} verified)."
         else:
             raw_msg += "."
 

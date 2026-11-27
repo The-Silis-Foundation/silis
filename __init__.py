@@ -19,12 +19,38 @@ for _d in [_REPO_ROOT, _CORE_DIR, _CLI_DIR]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+# Ensure bundled third-party EDA tools (magic 8.3.707, openroad, sta, yosys, verilator) precede host binaries
+_TOOL_DIRS = [
+    os.path.join(_REPO_ROOT, "third-party", "bin"),
+    os.path.join(_REPO_ROOT, "third-party", "OpenSTA", "build"),
+    os.path.join(_REPO_ROOT, "third-party", "OpenROAD", "build", "src"),
+]
+_cur_path = os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []
+for _td in reversed(_TOOL_DIRS):
+    if os.path.isdir(_td) and _td not in _cur_path:
+        _cur_path.insert(0, _td)
+os.environ["PATH"] = os.pathsep.join(_cur_path)
+if not os.environ.get("MAGIC_EXEC") and os.path.isfile(os.path.join(_REPO_ROOT, "third-party", "bin", "magic")):
+    os.environ["MAGIC_EXEC"] = os.path.join(_REPO_ROOT, "third-party", "bin", "magic")
+_bundled_tcl = os.path.join(_REPO_ROOT, "third-party", "tcl", "lib", "tcl8.6")
+if os.path.isdir(_bundled_tcl) and not os.path.isdir(os.environ.get("TCL_LIBRARY", "")):
+    os.environ["TCL_LIBRARY"] = _bundled_tcl
+
 __path__.append(_CORE_DIR)
 
 from config import THEMES, USER_SETTINGS, load_user_settings, save_user_settings
-from editor.editor import ScintillaEditor, VSCodeEditor, VSCodeEditorTabs, CommandPalette
-from pdkmanagers.pdk.manager import SSAForge, PDKManager, ManualPDKDialog, PDKSelector
-from backendflow.siliconpeeker.peeker import DEFParser, SiliconPeeker
+try:
+    from editor.editor import ScintillaEditor, VSCodeEditor, VSCodeEditorTabs, CommandPalette
+except ImportError:
+    ScintillaEditor = VSCodeEditor = VSCodeEditorTabs = CommandPalette = None
+try:
+    from pdkmanagers.pdk.manager import SSAForge, PDKManager, ManualPDKDialog, PDKSelector
+except ImportError:
+    SSAForge = PDKManager = ManualPDKDialog = PDKSelector = None
+try:
+    from backendflow.siliconpeeker.peeker import DEFParser, SiliconPeeker
+except ImportError:
+    DEFParser = SiliconPeeker = None
 from sdk import (
     SilisEDAError,
     DRCViolationError,
@@ -124,13 +150,11 @@ except (ImportError, AttributeError):
 
 
 import sdk
-import backendflow
-import pdkmanagers
-import schematicviewer
-import synthesisscripts
-import editor
-import terminal
-import signalpeeker
+for _submod in ("backendflow", "pdkmanagers", "schematicviewer", "synthesisscripts", "editor", "terminal", "signalpeeker"):
+    try:
+        globals()[_submod] = __import__(_submod)
+    except ImportError:
+        globals()[_submod] = None
 
 __all__ = [
     "THEMES", "USER_SETTINGS", "load_user_settings", "save_user_settings",

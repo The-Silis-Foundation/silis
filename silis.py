@@ -597,7 +597,7 @@ class SettingsDialog(QDialog):
 
 class SynthesisConfirmDialog(QDialog):
     """Native Qt6 2-Tab Confirmation Dialog: Yosys RTL Synthesis Script & DFT Architecture."""
-    def __init__(self, parent=None, ys_script="", init_dft=False, theme_name="Catppuccin Mocha"):
+    def __init__(self, parent=None, ys_script="", init_dft=False, theme_name="Catppuccin Mocha", available_macros=None):
         super().__init__(parent)
         self.setWindowTitle("Confirm Synthesis Script & Flow Configuration")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
@@ -705,10 +705,44 @@ class SynthesisConfirmDialog(QDialog):
         self.chk_dft_clamp = QCheckBox("Clamp Macro Outputs to 0")
         self.chk_dft_clamp.setChecked(True)
 
+        self.chk_mbist_select_all = QCheckBox("Select All Macros")
+        self.chk_mbist_select_all.setChecked(True)
+        self.list_mbist_macros = QListWidget()
+        self.list_mbist_macros.setMaximumHeight(90)
+        for m_name in (available_macros or []):
+            it = QListWidgetItem(str(m_name))
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.list_mbist_macros.addItem(it)
+
+        def _on_mbist_select_all(state):
+            chk_state = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
+            self.list_mbist_macros.blockSignals(True)
+            for idx in range(self.list_mbist_macros.count()):
+                self.list_mbist_macros.item(idx).setCheckState(chk_state)
+            self.list_mbist_macros.blockSignals(False)
+
+        def _on_mbist_item_changed(_item):
+            total = self.list_mbist_macros.count()
+            if total == 0:
+                return
+            checked = sum(
+                1 for idx in range(total)
+                if self.list_mbist_macros.item(idx).checkState() == Qt.CheckState.Checked
+            )
+            self.chk_mbist_select_all.blockSignals(True)
+            self.chk_mbist_select_all.setChecked(checked == total)
+            self.chk_mbist_select_all.blockSignals(False)
+
+        self.chk_mbist_select_all.stateChanged.connect(_on_mbist_select_all)
+        self.list_mbist_macros.itemChanged.connect(_on_mbist_item_changed)
+
         mbist_grid.addWidget(self.chk_mbist_en, 0, 0, 1, 2)
         mbist_grid.addWidget(self.chk_dft_clamp, 0, 2, 1, 2)
         mbist_grid.addWidget(QLabel("Test Algorithm:"), 1, 0); mbist_grid.addWidget(self.cmb_march, 1, 1)
         mbist_grid.addWidget(self.chk_bira, 1, 2, 1, 2)
+        mbist_grid.addWidget(self.chk_mbist_select_all, 2, 0, 1, 4)
+        mbist_grid.addWidget(self.list_mbist_macros, 3, 0, 1, 4)
         dft_vbox.addWidget(grp_mbist)
 
         # 4. IEEE 1149.1 JTAG TAP & Boundary Scan
@@ -783,6 +817,11 @@ class SynthesisConfirmDialog(QDialog):
             "mbist": self.chk_mbist_en.isChecked(),
             "march_algorithm": self.cmb_march.currentText().replace(" ", "_").replace("+", "_PLUS").upper(),
             "enable_bira": self.chk_bira.isChecked(),
+            "mbist_macros": [
+                self.list_mbist_macros.item(i).text()
+                for i in range(self.list_mbist_macros.count())
+                if self.list_mbist_macros.item(i).checkState() == Qt.CheckState.Checked
+            ] if self.list_mbist_macros.count() > 0 else None,
             "clamp": self.chk_dft_clamp.isChecked(),
             "clamp_macros": self.chk_dft_clamp.isChecked(),
             "jtag": self.chk_jtag_en.isChecked(),
@@ -1440,13 +1479,38 @@ class SilisIDE(QMainWindow):
         if os.path.isfile(latch_map_path) and "sky130" in str(self.pdk_path).lower():
             latch_techmap_cmd = f"techmap -map {latch_map_path}\n        "
 
+        # Filter physical-only low-power cells (lpflow_*) from ABC/dfflibmap gate mapping
+        # while retaining the full Liberty for blackbox UPF/DFT modules and area reporting.
+        synth_lib_path = self.pdk_path
+        if self.pdk_path and os.path.isfile(self.pdk_path) and "sky130" in str(self.pdk_path).lower():
+            try:
+                cache_dir = os.path.join(root, ".silis_cache")
+                os.makedirs(cache_dir, exist_ok=True)
+                synth_cand = os.path.join(cache_dir, os.path.basename(self.pdk_path).replace(".lib", ".synth.lib"))
+                src_mtime = os.path.getmtime(self.pdk_path)
+                if not os.path.isfile(synth_cand) or os.path.getmtime(synth_cand) < src_mtime:
+                    with open(self.pdk_path, "r", errors="ignore") as lf:
+                        lib_txt = lf.read()
+                    patched_lib = re.sub(
+                        r'(cell\s*\(\s*"?[^"\)]*lpflow_[^"\)]*"?\s*\)\s*\{)',
+                        r'\1\n        dont_use : true;',
+                        lib_txt,
+                    )
+                    tmp_lib = synth_cand + ".tmp"
+                    with open(tmp_lib, "w") as tf:
+                        tf.write(patched_lib)
+                    os.replace(tmp_lib, synth_cand)
+                synth_lib_path = synth_cand
+            except Exception:
+                synth_lib_path = self.pdk_path
+
         flatten_cmd = "flatten\n        " if getattr(self, "synth_flatten", False) else "#flatten\n        "
         ys = f"""
         read_liberty -lib {self.pdk_path}
         {macro_lib_cmds_yosys}{read_cmd}
         synth -top {base}
-        {latch_techmap_cmd}dfflibmap -liberty {self.pdk_path}
-        abc -liberty {self.pdk_path}
+        {latch_techmap_cmd}dfflibmap -liberty {synth_lib_path}
+        abc -liberty {synth_lib_path}
         {flatten_cmd}tee -o {os.path.join(root, 'reports', 'area.rpt')} stat -liberty {self.pdk_path} -json
         write_verilog -noattr -noexpr -nodec {v_net}
         """
@@ -1457,7 +1521,8 @@ class SilisIDE(QMainWindow):
         if not bypass_prompt:
             theme_name = USER_SETTINGS.get("theme_name", "Catppuccin Mocha")
             init_dft = getattr(self, 'enable_dft', False) or (hasattr(self, 'tab_synth') and getattr(self.tab_synth, 'chk_dft', None) and self.tab_synth.chk_dft.isChecked())
-            dlg = SynthesisConfirmDialog(self, ys_script=ys, init_dft=init_dft, theme_name=theme_name)
+            avail_macros = list((getattr(self, "project_config", None) or {}).get("macros", []))
+            dlg = SynthesisConfirmDialog(self, ys_script=ys, init_dft=init_dft, theme_name=theme_name, available_macros=avail_macros)
             if not dlg.exec():
                 if hasattr(self, 'tab_synth') and hasattr(self.tab_synth, 'card_status'):
                     self.tab_synth.card_status.setText("CANCELLED")

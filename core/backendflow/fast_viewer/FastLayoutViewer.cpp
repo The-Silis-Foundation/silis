@@ -479,14 +479,14 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
 
     // Draw Ruler (interactive distance measurement)
     if (ruler_has_start_) {
-        QPen ruler_pen(QColor(255, 235, 59), 2.0f / zoom_factor_);
+        QPen ruler_pen(QColor(255, 235, 59), 1.0f);
         ruler_pen.setCosmetic(true);
         ruler_pen.setStyle(Qt::DashLine);
         painter.setPen(ruler_pen);
         painter.drawLine(ruler_start_, ruler_current_);
 
-        // Draw start/end ticks
-        float tick = 5.0f / zoom_factor_;
+        // Draw compact start/end ticks
+        float tick = 3.0f / zoom_factor_;
         painter.drawLine(QPointF(ruler_start_.x() - tick, ruler_start_.y() - tick), QPointF(ruler_start_.x() + tick, ruler_start_.y() + tick));
         painter.drawLine(QPointF(ruler_start_.x() - tick, ruler_start_.y() + tick), QPointF(ruler_start_.x() + tick, ruler_start_.y() - tick));
         painter.drawLine(QPointF(ruler_current_.x() - tick, ruler_current_.y() - tick), QPointF(ruler_current_.x() + tick, ruler_current_.y() + tick));
@@ -509,14 +509,13 @@ void FastLayoutViewer::paintEvent(QPaintEvent* event) {
 
         QString lbl = QString("L: %1 um (dx: %2, dy: %3)").arg(dist_um, 0, 'f', 2).arg(dx_um, 0, 'f', 2).arg(dy_um, 0, 'f', 2);
         QFont f = painter.font();
-        f.setBold(true);
-        f.setPointSize(10);
+        f.setPointSize(8);
         painter.setFont(f);
         QFontMetrics fm(f);
         int tw = fm.horizontalAdvance(lbl);
-        painter.fillRect(QRectF(sx - tw/2 - 4, sy - 18, tw + 8, 18), QColor(0, 0, 0, 200));
+        painter.fillRect(QRectF(sx - tw/2 - 2, sy - 14, tw + 4, 14), QColor(0, 0, 0, 190));
         painter.setPen(QColor(255, 235, 59));
-        painter.drawText(sx - tw/2, sy - 4, lbl);
+        painter.drawText(sx - tw/2, sy - 3, lbl);
         painter.restore();
     }
 

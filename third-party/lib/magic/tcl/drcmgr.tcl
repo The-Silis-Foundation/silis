@@ -10,8 +10,8 @@ if {$::tk_version >= 8.5} {
 
 set Opts(drcmgr) 0
 
-magic::tag addpath "magic::drcmanager"
-magic::tag path    "magic::drcmanager"
+magic::tag add addpath "magic::drcmanager"
+magic::tag add path    "magic::drcmanager"
 
 # Callback to the DRC manager
 
@@ -46,14 +46,14 @@ proc magic::drccallback {command} {
       }
       zoom {
 	 if {$value != {}} {
-	    set snaptype [snap]
-	    snap internal
+	    set curunits [units]
+	    units internal
 	    box values {*}$value
 	    magic::suspendall
 	    magic::findbox zoom
 	    magic::zoom 2
 	    magic::resumeall
-	    snap $snaptype
+	    units {*}$curunits
 	 }
       }
    }

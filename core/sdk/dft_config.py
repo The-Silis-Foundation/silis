@@ -36,6 +36,7 @@ class DFTConfig:
     march_algorithm: str = "MARCH_C_PLUS"
     enable_bira: bool = True
     clamp_macros: bool = True
+    mbist_macros: Optional[List[str]] = None
 
     # IEEE 1149.1 JTAG TAP & Boundary Scan
     jtag: bool = False

@@ -3047,16 +3047,46 @@ class InteractiveFloorplannerWidget(QDialog):
 
     def _build_tcl_tab(self):
         lay = QVBoxLayout(self.tab_tcl)
+        self._live_tcl_dirty = False
+        self._updating_live_tcl = False
+
+        self.lbl_tcl_mode = QLabel("Source: Auto-generated from Canvas (Editable)")
+        lay.addWidget(self.lbl_tcl_mode)
+
         self.live_tcl_edit = QPlainTextEdit()
-        self.live_tcl_edit.setReadOnly(True)
-        self.live_tcl_edit.setStyleSheet("font-family: Consolas; font-size: 11px;")
+        self.live_tcl_edit.setReadOnly(False)
+        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        fixed_font.setPointSize(9)
+        self.live_tcl_edit.setFont(fixed_font)
+        self.live_tcl_edit.textChanged.connect(self._on_live_tcl_text_changed)
         lay.addWidget(self.live_tcl_edit)
 
         h_b = QHBoxLayout()
+        btn_regen = QPushButton("Regenerate TCL")
+        btn_regen.clicked.connect(lambda: self.update_live_tcl(force=True))
         btn_commit = QPushButton("Commit Floorplan && Execute Flow")
         btn_commit.clicked.connect(lambda: self.generate_floorplan_tcl(apply=True))
+        h_b.addWidget(btn_regen)
         h_b.addWidget(btn_commit)
         lay.addLayout(h_b)
+
+    def _on_live_tcl_text_changed(self):
+        if not getattr(self, "_updating_live_tcl", False):
+            self._live_tcl_dirty = True
+            if hasattr(self, "lbl_tcl_mode"):
+                self.lbl_tcl_mode.setText("Source: Custom Manual Edit")
+
+    def _set_live_tcl_text(self, text: str):
+        if not hasattr(self, "live_tcl_edit"):
+            return
+        self._updating_live_tcl = True
+        try:
+            self.live_tcl_edit.setPlainText(text)
+        finally:
+            self._updating_live_tcl = False
+        self._live_tcl_dirty = False
+        if hasattr(self, "lbl_tcl_mode"):
+            self.lbl_tcl_mode.setText("Source: Auto-generated from Canvas (Editable)")
 
     def open_boundary_clamp_dialog(self):
         if self._is_headless():
@@ -3077,7 +3107,7 @@ class InteractiveFloorplannerWidget(QDialog):
 
     def synthesize_upf_flow(self):
         upf_tcl = self.pdm.export_upf_tcl()
-        self.live_tcl_edit.setPlainText(upf_tcl)
+        self._set_live_tcl_text(upf_tcl)
         self.inspector_tabs.setCurrentWidget(self.tab_tcl)
 
     def edit_upf_file(self):
@@ -3979,12 +4009,13 @@ class InteractiveFloorplannerWidget(QDialog):
         is_pad = hasattr(self, "rb_chip") and self.rb_chip.isChecked()
         span = w if edge in ("bottom", "top") else h
 
+        from PyQt6 import sip
         coord_key = "x" if edge in ("bottom", "top") else "y"
         pins_with_coords = []
         for p, d in self.pins_data.items():
             if d.get("edge") == edge:
                 item = self.pin_items.get(p)
-                cur_pos = (item.pos().x() if edge in ("bottom", "top") else item.pos().y()) if item else d.get(coord_key, 0.0)
+                cur_pos = (item.pos().x() if edge in ("bottom", "top") else item.pos().y()) if (item and not sip.isdeleted(item)) else d.get(coord_key, 0.0)
                 pins_with_coords.append((p, cur_pos))
         pins_with_coords.sort(key=lambda x: x[1])
         edge_pins = [p for p, _ in pins_with_coords]
@@ -6791,10 +6822,11 @@ class InteractiveFloorplannerWidget(QDialog):
         except RuntimeError:
             pass # Handle C++ object destruction during widget close
 
-    def update_live_tcl(self):
+    def update_live_tcl(self, force=False):
+        if not force and getattr(self, "_live_tcl_dirty", False):
+            return
         tcl = self.generate_floorplan_tcl(apply=False)
-        if hasattr(self, 'live_tcl_edit'):
-            self.live_tcl_edit.setPlainText(tcl)
+        self._set_live_tcl_text(tcl)
 
     def generate_floorplan_tcl(self, apply=True):
         if not self.floorplan_initialized: return ""
@@ -7657,22 +7689,30 @@ class InteractiveFloorplannerWidget(QDialog):
             tcl += "}\n"
             tcl += f"_build_pad_trunks \"{trunk_layer}\" {trunk_width_dbu}\n\n"
 
-        # In apply mode, save and update live script
+        # In apply mode, save and update live script unless user manually edited TCL
         if apply:
             self.save_state()
-            self.update_live_tcl()
+            if not getattr(self, "_live_tcl_dirty", False):
+                self.update_live_tcl(force=True)
             proj_root, base = self._get_project_context()
             def_abs_path = os.path.join(proj_root, "results", "temp.def").replace("\\", "/")
             
             if self.parent() and hasattr(self.parent(), 'term_log'):
                 self.parent().term_log.append("[SYS] Applying Custom Floorplan...")
-            # Use the live TCL instead so it includes everything correctly.
-            final_tcl = self.live_tcl_edit.toPlainText() + f"\nwrite_def \"{def_abs_path}\"\n"
-            final_tcl += "puts \"SILIS_FLOORPLAN_DONE\"\n"
+            # Use the live TCL (including user edits) cleanly; append write_def if absent.
+            edited_tcl = self.live_tcl_edit.toPlainText() if hasattr(self, "live_tcl_edit") else tcl
+            if f'write_def "{def_abs_path}"' not in edited_tcl:
+                final_tcl = edited_tcl.rstrip() + f'\n\nwrite_def "{def_abs_path}"\n'
+            else:
+                final_tcl = edited_tcl.rstrip() + "\n"
+            if "SILIS_FLOORPLAN_DONE" not in final_tcl:
+                final_tcl += 'puts "SILIS_FLOORPLAN_DONE"\n'
             step_script = os.path.join(proj_root, "run_floorplan.tcl").replace("\\", "/")
             try:
-                with open(step_script, 'w') as f:
+                tmp_script = f"{step_script}.tmp"
+                with open(tmp_script, 'w') as f:
                     f.write(final_tcl)
+                os.replace(tmp_script, step_script)
             except Exception:
                 pass
             if self.parent() and hasattr(self.parent(), 'send_command_internal'):

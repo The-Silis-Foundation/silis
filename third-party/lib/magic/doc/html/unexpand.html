@@ -13,9 +13,9 @@
     A.red:active {color: yellow }
   </STYLE>
 </HEAD>
-<TITLE>Magic-7.3 Command Reference</TITLE>
+<TITLE>Magic-8.3 Command Reference</TITLE>
 <BODY BACKGROUND=graphics/blpaper.gif>
-<H1> <IMG SRC=graphics/magic_title2.gif ALT="Magic VLSI Layout Tool Version 7.3">
+<H1> <IMG SRC=graphics/magic_title8_3.png ALT="Magic VLSI Layout Tool Version 8.3">
      <IMG SRC=graphics/magic_OGL_sm.gif ALIGN="top" ALT="*"> </H1>
 
 <H2>unexpand</H2>
@@ -25,7 +25,8 @@ Unexpand everything inside or touching the cursor box.
 
 <H3>Usage:</H3>
    <BLOCKQUOTE>
-      <B>unexpand</B> <BR><BR>
+      <B>unexpand</B> [<B>selection</B>|<B>surround</B>|<B>overlap</B>|<B>all</B>]
+		<BR><BR>
    </BLOCKQUOTE>
 
 <H3>Shortcuts:</H3>
@@ -37,8 +38,23 @@ Unexpand everything inside or touching the cursor box.
    <BLOCKQUOTE>
       The <B>unexpand</B> command unexpands the view of subcells to
       hide the contents of the subcells and show the bounding box
-      outline only.  The <B>unexpand</B> command unexpands all subcells
-      that touch or intersect the cursor box in the layout window. <P>
+      outline only.
+
+      Option <B>overlap</B> unexpands all expanded subcells that
+      overlap with the cursor box in the layout window. <P>
+
+      Option <B>surround</B> unexpands all expanded subcells that
+      are completely surrounded by the cursor box in the layout window. <P>
+
+      Option <B>all</B> unexpands all subcells in the layout window. <P>
+
+      Option <B>selection</B> operates on the current selection, not
+      relative to the cursor box, unexpanding all selected cells. <P>
+
+      With no arguments, the <B>unexpand</B> command behaves like
+      <B>unexpand surround</B>, for backwards-compatible behavior with
+      earlier versions of magic which did not offer the options.
+
    </BLOCKQUOTE>
 
 <H3>Implementation Notes:</H3>
@@ -57,6 +73,6 @@ Unexpand everything inside or touching the cursor box.
     <TD> <A HREF=commands.html>Return to command index</A>
   </TR>
 </TABLE>
-<P><I>Last updated:</I> October 16, 2004 at 1:58pm <P>
+<P><I>Last updated:</I> March 7, 2020 at 1:06pm <P>
 </BODY>
 </HTML>

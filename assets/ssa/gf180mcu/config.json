@@ -9,12 +9,21 @@
     "liberty": "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib",
     "extra_lefs": [
       "gf180mcu_fd_io.lef"
-    ]
+    ],
+    "magic_tech": "",
+    "netgen_setup": "",
+    "gds_dirs": [],
+    "verilog_models": [],
+    "corners": {
+      "nominal": "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib"
+    }
   },
   "site": {
     "name": "GF018hv5v_green_sc9",
     "height_um": 5.04,
-    "width_um": 0.56
+    "width_um": 0.56,
+    "io_site": "IO_SITE",
+    "io_corner_site": "IO_CSITE"
   },
   "cells": {
     "tapcells": {
@@ -31,6 +40,8 @@
   "interconnect": {
     "min_layer": "Metal1",
     "max_layer": "Metal5",
-    "rail_layer": "Metal1"
+    "rail_layer": "Metal1",
+    "trunk_layer": "Metal4",
+    "top_mesh_layer": "Metal5"
   }
 }

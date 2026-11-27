@@ -43,10 +43,10 @@ else
     PY_SITE=""
 fi
 
-# 3. Dynamic Library Paths (Include embedded Qt6 and OpenROAD shared libraries)
+# 3. Dynamic Library Paths (Prioritize bundled PyQt6/Qt6 & Python before fallback system libs)
 QT6_LIB="$PY_SITE/PyQt6/Qt6/lib"
 WEBENGINE_LIB="$PY_SITE/PyQt6_WebEngine/Qt6/lib"
-BASE_LD_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/opt/python/lib:$QT6_LIB:$WEBENGINE_LIB:$APPDIR/third-party/bin:$APPDIR/third-party/plugins:$APPDIR/third-party/ordlibs"
+BASE_LD_PATH="$QT6_LIB:$WEBENGINE_LIB:$APPDIR/opt/python/lib:$APPDIR/third-party/ordlibs:$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/third-party/bin:$APPDIR/third-party/plugins"
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
     export LD_LIBRARY_PATH="$BASE_LD_PATH:$LD_LIBRARY_PATH"
 else
@@ -92,14 +92,21 @@ elif [ -f "$APPDIR/usr/lib/qt6/libexec/QtWebEngineProcess" ]; then
     export QTWEBENGINE_LOCALES_PATH="$APPDIR/usr/share/qt6/translations/qtwebengine_locales"
 fi
 
-# 6. EDA Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Volare, silis_def_viewer)
+# 6. EDA Binaries in PATH (Verilator, OpenROAD, Yosys, OpenSTA, Magic, Volare, silis_def_viewer)
 export PATH="$APPDIR/third-party/bin:$APPDIR/third-party/OpenROAD/build/src:$APPDIR/third-party/OpenSTA/build:$PATH"
 export VERILATOR_ROOT="$APPDIR/third-party/share/verilator"
+if [ -d "$APPDIR/third-party/lib/magic/tcl" ]; then
+    export CAD_ROOT="$APPDIR/third-party/lib"
+    export MAGIC_EXEC="$APPDIR/third-party/bin/magic"
+fi
 if [ -d "$APPDIR/third-party/share/yosys" ]; then
     export YOSYS_DATDIR="$APPDIR/third-party/share/yosys"
 fi
 
-# Tcl library directory for OpenSTA and EDA scripting
+# Tcl & Perl library directories for OpenSTA, Magic, Yosys, and Verilator
+if [ -d "$APPDIR/usr/share/perl5" ]; then
+    export PERL5LIB="${PERL5LIB:+${PERL5LIB}:}$APPDIR/usr/share/perl5"
+fi
 if [ -d "$APPDIR/usr/share/tcltk/tcl8.6" ]; then
     export TCL_LIBRARY="$APPDIR/usr/share/tcltk/tcl8.6"
 elif [ -d "$APPDIR/third-party/lib/tcl8.6" ]; then
@@ -121,7 +128,7 @@ fi
 
 # 8. Dedicated CLI switches for SDK and First-Boot handling
 if [ "${1:-}" = "--install-sdk" ]; then
-    exec "$PYTHON_BIN" "$APPDIR/core/sdk_installer.py" --force "$APPIMAGE"
+    exec "$PYTHON_BIN" "$APPDIR/core/sdk_installer.py" --force "${APPIMAGE:-}"
 fi
 
 if [ "${1:-}" = "--first-boot" ]; then
@@ -146,7 +153,7 @@ esac
 
 # Direct EDA binary execution passthroughs
 case "${1:-}" in
-    openroad|yosys|verilator|sta|magic|klayout)
+    openroad|yosys|verilator|sta|magic|ext2spice|ext2sim|klayout)
         cmd="$1"
         shift
         exec "$cmd" "$@"

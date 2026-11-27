@@ -13,12 +13,21 @@ import time
 import re
 import logging
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QProcess
+try:
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QProcess
+except ImportError:
+    QApplication = QProcess = None
 
 from . import tui_editor
-from backendflow.floorplanner.floorplanner import generate_floorplan_tcl_from_data, compute_peripheral_macro_placement
-from synthesisscripts.synthesisthread import ReportEngine
+try:
+    from backendflow.floorplanner.floorplanner import generate_floorplan_tcl_from_data, compute_peripheral_macro_placement
+except ImportError:
+    generate_floorplan_tcl_from_data = compute_peripheral_macro_placement = None
+try:
+    from synthesisscripts.synthesisthread import ReportEngine
+except ImportError:
+    ReportEngine = None
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -231,7 +240,13 @@ class HeadlessASICRunner:
             self.backend.term_log.append(data.strip())
             
             # Detect fatal error patterns in stdout (excluding non-fatal repair warnings like PDN-0179)
-            error_pattern = re.compile(r'(^\[ERROR\s+(?!PDN-0179\b)\w+-\d+\]|^\[ERROR\b(?!.*PDN-0179)|^Error:\b|\[ERROR\s+(?:ORD|DRT|GPL|DPL)-\d+\]|^(?:ORD|DRT|GPL|DPL)-\d+\b)', re.MULTILINE)
+            error_pattern = re.compile(
+                r'(^\[ERROR\s+(?!PDN-0179\b)[\w-]+(?:-\d+)?\]|^\[ERROR\b(?!.*PDN-0179)|^Error:\b|'
+                r'^\[SILIS ERR\]|^\[ERR\]|'
+                r'^(?:invalid command name|can\'t read|wrong # args|couldn\'t (?:open|read)|missing operand|syntax error in expression)\b|'
+                r'\[ERROR\s+(?:ORD|DRT|GPL|DPL|PPL|PAD|PDN|IFP|CTS|RSZ|UPF)-\d+\]|^(?:ORD|DRT|GPL|DPL|PPL|PAD|PDN|IFP|CTS|RSZ|UPF)-\d+\b)',
+                re.MULTILINE,
+            )
             if error_pattern.search(data):
                 self._had_error = True
 
@@ -240,13 +255,15 @@ class HeadlessASICRunner:
                 self._marker_seen = True
                 self.backend.cmd_active = False
             elif re.search(r'(?:^|\n)openroad>\s*$', data):
-                # Prompt received at the end of output chunk.
-                # Only treat as early error abort if at least 0.5s has elapsed since command dispatch,
-                # ensuring residual prompts from prior commands are not mistaken for aborts.
+                # Prompt received at the end of output chunk (only after real output following command echo).
                 cmd_start = getattr(self, "_cmd_start_time", 0)
                 if marker and not getattr(self, "_marker_seen", False) and (time.time() - cmd_start > 0.5):
-                    self._had_error = True
-                    self.backend.cmd_active = False
+                    new_txt = ""
+                    if hasattr(self.backend.term_log, "toPlainText"):
+                        new_txt = self.backend.term_log.toPlainText()[getattr(self, "_term_len_at_start", 0):]
+                    if "source " not in data.splitlines()[-1]:
+                        self._had_error = True
+                        self.backend.cmd_active = False
         except Exception as e:
             logging.error(f"Error in _streaming_read_stdout: {e}", exc_info=True)
             self._had_error = True
@@ -279,6 +296,7 @@ class HeadlessASICRunner:
         self._marker_seen = False
         self._had_error = False
         self._cmd_start_time = time.time()
+        self._term_len_at_start = len(self.backend.term_log.toPlainText()) if hasattr(self.backend.term_log, "toPlainText") else len(str(self.backend.term_log))
         self.backend.cmd_active = True
 
         script_file = os.path.join(self.proj_dir, f"run_{step_name}.tcl").replace("\\", "/")
@@ -352,12 +370,14 @@ if {[info commands gds] eq ""} {
                 # If idle and prompt returned or error encountered
                 if getattr(self, "_current_step_marker", None) and not getattr(self, "_marker_seen", False):
                     cmd_start = getattr(self, "_cmd_start_time", 0)
-                    if time.time() - cmd_start > 0.5:
-                        term_txt = self.backend.term_log.toPlainText() if hasattr(self.backend.term_log, "toPlainText") else str(self.backend.term_log)
-                        if self._had_error or "openroad>" in term_txt[-100:]:
-                            self._had_error = True
-                            self.backend.cmd_active = False
-                            break
+                    if time.time() - cmd_start > 1.0:
+                        full_txt = self.backend.term_log.toPlainText() if hasattr(self.backend.term_log, "toPlainText") else str(self.backend.term_log)
+                        delta_txt = full_txt[getattr(self, "_term_len_at_start", 0):]
+                        if self._had_error or re.search(r'(?:^|\n)openroad>\s*$', delta_txt.lstrip() if delta_txt else ""):
+                            if delta_txt.strip() and "source " not in delta_txt.strip().splitlines()[-1]:
+                                self._had_error = True
+                                self.backend.cmd_active = False
+                                break
             if self.backend.proc.state() != QProcess.ProcessState.Running:
                 break
 
@@ -563,9 +583,13 @@ if {[info commands gds] eq ""} {
                 for lib in m_libs:
                     lib_cmd += f'read_liberty "{lib}"\n'
 
-            upf_file = os.path.join(root, "power", "design.upf").replace("\\", "/")
+            cfg_upf = self.config.get("upf_file") or self.config.get("power_intent")
+            upf_file = (cfg_upf if os.path.isabs(cfg_upf) else os.path.join(root, cfg_upf)) if cfg_upf else ""
+            if not upf_file or not os.path.isfile(upf_file):
+                upf_file = os.path.join(root, "power", "design.upf")
             if not os.path.isfile(upf_file):
-                upf_file = os.path.join(root, "design.upf").replace("\\", "/")
+                upf_file = os.path.join(root, "design.upf")
+            upf_file = upf_file.replace("\\", "/")
             shim_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backendflow", "shims", "openroad_upf_shim.tcl")).replace("\\", "/")
             upf_resume_cmd = ""
             if os.path.isfile(upf_file):
@@ -655,8 +679,10 @@ link_design {base}
 read_sdc "{sdc}"
 
 # Load UPF power intent during initial design binding if present
-set upf_file "{os.path.join(root, 'power', 'design.upf').replace('\\', '/')}"
-if {{![file exists "$upf_file"]}} {{ set upf_file "{os.path.join(root, 'design.upf').replace('\\', '/')}" }}
+set _cfg_upf "{((self.config.get('upf_file') if os.path.isabs(self.config.get('upf_file') or '') else os.path.join(root, self.config.get('upf_file') or '')) or '').replace(chr(92), '/')}"
+set upf_file "{os.path.join(root, 'power', 'design.upf').replace(chr(92), '/')}"
+if {{$_cfg_upf ne "" && [file exists "$_cfg_upf"]}} {{ set upf_file $_cfg_upf }}
+if {{![file exists "$upf_file"]}} {{ set upf_file "{os.path.join(root, 'design.upf').replace(chr(92), '/')}" }}
 set shim_file "{os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backendflow', 'shims', 'openroad_upf_shim.tcl')).replace('\\', '/')}"
 if {{[file exists "$shim_file"] && [file exists "$upf_file"]}} {{
     source "$shim_file"
@@ -967,16 +993,26 @@ close $fp
         if step_name == "drc":
             gds_file = os.path.join(results_dir, "design.gds")
             self.backend.trigger_magic_drc(root, gds_file)
+            drc_failed = False
             if hasattr(self.backend, 'drc_worker') and self.backend.drc_worker:
                 while self.backend.drc_worker.isRunning():
                     self.app.processEvents()
                     while not self.ide.queue.empty():
                         src, msg = self.ide.queue.get()
                         print(f"{src} {msg}")
+                        if "[DRC ERR]" in str(msg) or "[ERR]" in str(msg):
+                            drc_failed = True
                     time.sleep(0.05)
+                self.backend.drc_worker.wait()
                 while not self.ide.queue.empty():
                     src, msg = self.ide.queue.get()
                     print(f"{src} {msg}")
+                    if "[DRC ERR]" in str(msg) or "[ERR]" in str(msg):
+                        drc_failed = True
+            drc_rpt = os.path.join(reports_dir, "drc.rpt")
+            if drc_failed or not os.path.isfile(drc_rpt) or os.path.getsize(drc_rpt) == 0:
+                print(f"[ERR] Step {step_name} failed to produce a valid DRC report.")
+                return False
             print(f"[SUCCESS] Step {step_name} completed.")
             return True
 
@@ -984,18 +1020,26 @@ close $fp
         if step_name in ["gds", "run_gds"]:
             print(f"[SILIS] Dispatched step 'GDS' via BackendWidget...")
             self.backend.run_flow_step("GDS", bypass_prompt=True)
-            self._wait_for_backend(60)
+            gds_failed = False
             if hasattr(self.backend, 'magic_worker') and self.backend.magic_worker:
                 while self.backend.magic_worker.isRunning():
                     self.app.processEvents()
                     while not self.ide.queue.empty():
                         src, msg = self.ide.queue.get()
                         print(f"{src} {msg}")
+                        if "[ERR]" in str(msg):
+                            gds_failed = True
                     time.sleep(0.05)
                 self.backend.magic_worker.wait()
             while not self.ide.queue.empty():
                 src, msg = self.ide.queue.get()
                 print(f"{src} {msg}")
+                if "[ERR]" in str(msg):
+                    gds_failed = True
+            design_gds = os.path.join(results_dir, "design.gds")
+            if gds_failed or not os.path.isfile(design_gds) or os.path.getsize(design_gds) == 0:
+                print(f"[ERR] Step {step_name} failed to stream out GDS.")
+                return False
             print(f"[SUCCESS] Step {step_name} completed.")
             return True
 
