@@ -1,4 +1,4 @@
-# Silis v0.2.5-pre (Pre-Release)
+# Silis v0.1.2-pre (Pre-Release)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/The-Silis-Foundation/silis/main/packaging/silisicon.png" alt="Silis ASIC EDA Logo" width="128" height="128">
@@ -7,7 +7,7 @@
 <h3 align="center">Silis ASIC Design Studio</h3>
 
 <p align="center">
-  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.2.5-pre"><img src="https://img.shields.io/badge/Release-v0.2.5--pre-blue.svg" alt="Release Badge"></a>
+  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.2-pre"><img src="https://img.shields.io/badge/Release-v0.1.2--pre-blue.svg" alt="Release Badge"></a>
   <a href="https://github.com/The-Silis-Foundation/silis/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License"></a>
   <a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Codespaces-Launch%20Web%20Studio-violet.svg" alt="Launch Codespace"></a>
 </p>
@@ -29,10 +29,10 @@
 <tbody>
 <tr>
 <td><strong>Linux x86-64 (64-bit)</strong></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.2-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.2-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
 <td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.zip">zip</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.2-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.2-pre.zip">zip</a></td>
 </tr>
 </tbody>
 </table>

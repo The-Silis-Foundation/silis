@@ -40,7 +40,7 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg?style=for-the-badge&logo=linux&logoColor=white">
   <img alt="Language" src="https://img.shields.io/badge/Language-Python%203.12%20%7C%20C%2B%2B17-4169E1.svg?style=for-the-badge&logo=python&logoColor=white">
-  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.2.5-pre"><img alt="Release" src="https://img.shields.io/badge/Release-v0.2.5--pre-orange.svg?style=for-the-badge"></a>
+  <a href="https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.2-pre"><img alt="Release" src="https://img.shields.io/badge/Release-v0.1.2--pre-orange.svg?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -236,9 +236,9 @@ Downstream engines execute Silis instructions verbatim. All OpenROAD TCL scripts
 
 ---
 
-## Pre-Release Packages (v0.2.5-pre)
+## Pre-Release Packages (v0.1.2-pre)
 
-Standalone release deliverables and manifests are published on [GitHub Releases (v0.2.5-pre)](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.2.5-pre):
+Standalone release deliverables and manifests are published on [GitHub Releases (v0.1.2-pre)](https://github.com/The-Silis-Foundation/silis/releases/tag/v0.1.2-pre):
 
 <table>
 <thead>
@@ -253,10 +253,10 @@ Standalone release deliverables and manifests are published on [GitHub Releases 
 <tbody>
 <tr>
 <td><strong>Linux x86-64 (64-bit)</strong></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.2.5-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.2-pre/Silis-x86_64.AppImage">Download AppImage (1.4 GB)</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/releases/download/v0.1.2-pre/Silis-x86_64.AppImage.zsync">Zsync Manifest</a></td>
 <td><a href="https://codespaces.new/The-Silis-Foundation/silis-cs-edition" target="_blank" rel="noopener noreferrer">Launch in Codespaces</a></td>
-<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.2.5-pre.zip">zip</a></td>
+<td><a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.2-pre.tar.gz">tar.gz</a> &nbsp;|&nbsp; <a href="https://github.com/The-Silis-Foundation/silis/archive/refs/tags/v0.1.2-pre.zip">zip</a></td>
 </tr>
 </tbody>
 </table>
